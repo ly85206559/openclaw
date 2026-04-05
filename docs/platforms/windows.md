@@ -235,6 +235,43 @@ openclaw onboard
 
 Full guide: [Getting Started](/start/getting-started)
 
+## WSL2 with Windows proxy
+
+If Windows uses a system or application proxy, WSL2 may not automatically use
+the same settings. In that case, the CLI and Gateway inside WSL can fail to
+reach external APIs or the internet.
+
+You can configure `.wslconfig` in your Windows user directory, for example
+`C:\Users\<YourName>\.wslconfig`, so WSL networking follows Windows more
+closely:
+
+```ini
+[wsl2]
+networkingMode=mirrored
+autoProxy=true
+dnsTunneling=true
+```
+
+- `networkingMode=mirrored`: when supported (Windows 11 22H2 or later with WSL
+  2.0.0+), WSL2 shares the Windows network stack more directly, which can make
+  proxy and port behavior match Windows more closely. Mirrored networking is not
+  available on Windows 10.
+- `autoProxy=true`: asks WSL to use the proxy configuration from Windows
+  (Windows 11 only; not supported on Windows 10).
+- `dnsTunneling=true`: routes DNS resolution through Windows so name lookup
+  matches Windows proxy and VPN behavior more closely (Windows 11 22H2 or later;
+  not supported on Windows 10).
+
+**Windows 10:** the options above are not available in `.wslconfig`. Configure
+`http_proxy`, `https_proxy`, and `no_proxy` inside the distro instead (for
+example in `~/.bashrc`), pointed at the same proxy your Windows session uses.
+
+After saving `.wslconfig`, run `wsl --shutdown` in PowerShell, then reopen your
+WSL terminal. If Windows does not use a proxy and WSL2 already has working
+internet access, you usually do not need these settings. See [Advanced settings
+configuration in WSL](https://learn.microsoft.com/windows/wsl/wsl-config)
+(Microsoft Learn) for version details.
+
 ## Windows companion app
 
 We do not have a Windows companion app yet. Contributions are welcome if you want
