@@ -110,6 +110,33 @@ export function matchBoundaryFileOpenFailure<T>(
   }
 }
 
+/**
+ * User-facing explanation for plugin entry opens that failed boundary checks.
+ * Distinguishes missing build artifacts (ENOENT after a successful boundary resolve)
+ * from real boundary / alias violations (`validation` from {@link resolveBoundaryPathSync}).
+ */
+export function describePluginBoundaryFileOpenFailure(
+  failure: BoundaryFileOpenFailure,
+  params: { entryPath: string; moduleLabel?: string },
+): string {
+  const label = params.moduleLabel ?? "plugin entry";
+  switch (failure.reason) {
+    case "validation":
+      return `${label} path escapes plugin root or fails alias checks`;
+    case "path":
+      return `${label} file not found in build output: ${params.entryPath}`;
+    case "io": {
+      const detail =
+        failure.error instanceof Error
+          ? failure.error.message
+          : failure.error === undefined
+            ? "unknown error"
+            : String(failure.error);
+      return `${label} read failed: ${detail}`;
+    }
+  }
+}
+
 function openBoundaryFileResolved(params: {
   absolutePath: string;
   resolvedPath: string;

@@ -237,4 +237,26 @@ describe("boundary-file-read", () => {
     expect(io).toBe("io");
     expect(validation).toBe("validation");
   });
+
+  it("describePluginBoundaryFileOpenFailure labels missing files vs boundary escape", async () => {
+    const { describePluginBoundaryFileOpenFailure } = await import("./boundary-file-read.js");
+    expect(
+      describePluginBoundaryFileOpenFailure(
+        { ok: false, reason: "path", error: new Error("ENOENT") },
+        { entryPath: "./src/channel.js" },
+      ),
+    ).toContain("file not found in build output");
+    expect(
+      describePluginBoundaryFileOpenFailure(
+        { ok: false, reason: "validation", error: new Error("outside") },
+        { entryPath: "/tmp/x" },
+      ),
+    ).toContain("escapes plugin root");
+    expect(
+      describePluginBoundaryFileOpenFailure(
+        { ok: false, reason: "io", error: new Error("EACCES: denied") },
+        { entryPath: "./src/channel.js" },
+      ),
+    ).toContain("read failed");
+  });
 });
