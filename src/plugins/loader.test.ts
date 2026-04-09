@@ -2463,6 +2463,32 @@ module.exports = { id: "throws-after-import", register() {} };`,
     });
   });
 
+  it("allows the same plugin to register the same service id twice", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "service-owner-self",
+      filename: "service-owner-self.cjs",
+      body: `module.exports = { id: "service-owner-self", register(api) {
+  api.registerService({ id: "shared-service", start() {} });
+  api.registerService({ id: "shared-service", start() {} });
+} };`,
+    });
+
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: {
+        allow: ["service-owner-self"],
+      },
+    });
+
+    expect(registry.services.filter((entry) => entry.service.id === "shared-service")).toHaveLength(1);
+    expect(
+      registry.diagnostics.some((diag) =>
+        String(diag.message).includes("service already registered: shared-service"),
+      ),
+    ).toBe(false);
+  });
+
   it("rewrites removed registerHttpHandler failures into migration diagnostics", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
