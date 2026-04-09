@@ -15,6 +15,7 @@ Docs: https://docs.openclaw.ai
 - WhatsApp/auto-reply: keep inbound reply, media, and composing sends on the current socket across reconnects, wait through reconnect gaps, and retry timeout-only send failures without dropping the active socket ref. (#62892) Thanks @mcaxtr.
 - Config/plugins: let config writes keep disabled plugin entries without forcing required plugin config schemas or crashing raw plugin validation, so slot switches and similar plugin-state updates persist cleanly. (#63296) Thanks @fuller-stack-dev.
 - WhatsApp/outbound queue: drain queued WhatsApp deliveries when the listener reconnects without dropping reconnect-delayed sends after a special TTL or rewriting retry history, so disconnect-window outbound messages can recover once the channel is ready again. (#46299) Thanks @manuel-claw.
+- Tests: raise per-case timeouts for sqlite-heavy `task-flow-registry.store` cases on Windows and extend the non-isolated Vitest runner for Vitest 4 (`VitestTestRunner`) so local and CI test runs stay stable. (#59103)
 
 ## 2026.4.9
 

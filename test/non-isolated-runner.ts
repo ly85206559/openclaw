@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
-import { TestRunner, type RunnerTestSuite, vi } from "vitest";
+import { VitestTestRunner } from "vitest/runners";
+import type { RunnerTestFile, RunnerTestSuite } from "vitest";
+import { vi } from "vitest";
 
 type EvaluatedModuleNode = {
   promise?: unknown;
@@ -60,8 +62,8 @@ function restoreSharedTestHomeAfterEnvUnstub(testHomeRaw: string | undefined): v
   process.env.XDG_CACHE_HOME = path.join(testHome, ".cache");
 }
 
-export default class OpenClawNonIsolatedRunner extends TestRunner {
-  override onCollectStart(file: { filepath: string }) {
+export default class OpenClawNonIsolatedRunner extends VitestTestRunner {
+  override onCollectStart(file: RunnerTestFile) {
     super.onCollectStart(file);
     restoreSharedTestHomeAfterEnvUnstub(getSharedTestHome());
     const orderLogPath = process.env.OPENCLAW_VITEST_FILE_ORDER_LOG?.trim();

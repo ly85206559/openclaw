@@ -50,6 +50,8 @@ async function withFlowRegistryTempDir<T>(run: (root: string) => Promise<T>): Pr
 }
 
 describe("task-flow-registry store runtime", () => {
+  const sqliteCaseTimeout = process.platform === "win32" ? 60_000 : 25_000;
+
   beforeEach(() => {
     vi.useRealTimers();
   });
@@ -100,76 +102,84 @@ describe("task-flow-registry store runtime", () => {
     expect(latestSnapshot.flows.get("flow-restored")?.goal).toBe("Restored flow");
   });
 
-  it("restores persisted wait-state, revision, and cancel intent from sqlite", async () => {
-    await withFlowRegistryTempDir(async (root) => {
-      process.env.OPENCLAW_STATE_DIR = root;
-      resetTaskFlowRegistryForTests();
+  it(
+    "restores persisted wait-state, revision, and cancel intent from sqlite",
+    { timeout: sqliteCaseTimeout },
+    async () => {
+      await withFlowRegistryTempDir(async (root) => {
+        process.env.OPENCLAW_STATE_DIR = root;
+        resetTaskFlowRegistryForTests();
 
-      const created = createManagedTaskFlow({
-        ownerKey: "agent:main:main",
-        controllerId: "tests/persisted-flow",
-        goal: "Persisted flow",
-        status: "running",
-        currentStep: "spawn_task",
-        stateJson: { phase: "spawn" },
-      });
-      const waiting = setFlowWaiting({
-        flowId: created.flowId,
-        expectedRevision: created.revision,
-        currentStep: "ask_user",
-        stateJson: { phase: "ask_user" },
-        waitJson: { kind: "external_event", topic: "telegram" },
-      });
-      expect(waiting).toMatchObject({
-        applied: true,
-      });
-      const cancelRequested = requestFlowCancel({
-        flowId: created.flowId,
-        expectedRevision: waiting.applied ? waiting.flow.revision : -1,
-        cancelRequestedAt: 444,
-      });
-      expect(cancelRequested).toMatchObject({
-        applied: true,
-      });
+        const created = createManagedTaskFlow({
+          ownerKey: "agent:main:main",
+          controllerId: "tests/persisted-flow",
+          goal: "Persisted flow",
+          status: "running",
+          currentStep: "spawn_task",
+          stateJson: { phase: "spawn" },
+        });
+        const waiting = setFlowWaiting({
+          flowId: created.flowId,
+          expectedRevision: created.revision,
+          currentStep: "ask_user",
+          stateJson: { phase: "ask_user" },
+          waitJson: { kind: "external_event", topic: "telegram" },
+        });
+        expect(waiting).toMatchObject({
+          applied: true,
+        });
+        const cancelRequested = requestFlowCancel({
+          flowId: created.flowId,
+          expectedRevision: waiting.applied ? waiting.flow.revision : -1,
+          cancelRequestedAt: 444,
+        });
+        expect(cancelRequested).toMatchObject({
+          applied: true,
+        });
 
-      resetTaskFlowRegistryForTests({ persist: false });
+        resetTaskFlowRegistryForTests({ persist: false });
 
-      expect(getTaskFlowById(created.flowId)).toMatchObject({
-        flowId: created.flowId,
-        syncMode: "managed",
-        controllerId: "tests/persisted-flow",
-        revision: 2,
-        status: "waiting",
-        currentStep: "ask_user",
-        stateJson: { phase: "ask_user" },
-        waitJson: { kind: "external_event", topic: "telegram" },
-        cancelRequestedAt: 444,
+        expect(getTaskFlowById(created.flowId)).toMatchObject({
+          flowId: created.flowId,
+          syncMode: "managed",
+          controllerId: "tests/persisted-flow",
+          revision: 2,
+          status: "waiting",
+          currentStep: "ask_user",
+          stateJson: { phase: "ask_user" },
+          waitJson: { kind: "external_event", topic: "telegram" },
+          cancelRequestedAt: 444,
+        });
       });
-    });
-  });
+    },
+  );
 
-  it("round-trips explicit json null through sqlite", async () => {
-    await withFlowRegistryTempDir(async (root) => {
-      process.env.OPENCLAW_STATE_DIR = root;
-      resetTaskFlowRegistryForTests();
+  it(
+    "round-trips explicit json null through sqlite",
+    { timeout: sqliteCaseTimeout },
+    async () => {
+      await withFlowRegistryTempDir(async (root) => {
+        process.env.OPENCLAW_STATE_DIR = root;
+        resetTaskFlowRegistryForTests();
 
-      const created = createManagedTaskFlow({
-        ownerKey: "agent:main:main",
-        controllerId: "tests/null-roundtrip",
-        goal: "Persist null payloads",
-        stateJson: null,
-        waitJson: null,
+        const created = createManagedTaskFlow({
+          ownerKey: "agent:main:main",
+          controllerId: "tests/null-roundtrip",
+          goal: "Persist null payloads",
+          stateJson: null,
+          waitJson: null,
+        });
+
+        resetTaskFlowRegistryForTests({ persist: false });
+
+        expect(getTaskFlowById(created.flowId)).toMatchObject({
+          flowId: created.flowId,
+          stateJson: null,
+          waitJson: null,
+        });
       });
-
-      resetTaskFlowRegistryForTests({ persist: false });
-
-      expect(getTaskFlowById(created.flowId)).toMatchObject({
-        flowId: created.flowId,
-        stateJson: null,
-        waitJson: null,
-      });
-    });
-  });
+    },
+  );
 
   it("hardens the sqlite flow store directory and file modes", async () => {
     if (process.platform === "win32") {
