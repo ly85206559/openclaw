@@ -16,6 +16,7 @@ import {
 
 type MinimaxTtsProviderConfig = {
   apiKey?: string;
+  hasExplicitApiKey: boolean;
   baseUrl: string;
   model: string;
   voiceId: string;
@@ -32,16 +33,51 @@ type MinimaxTtsProviderOverrides = {
   pitch?: number;
 };
 
+/**
+ * Resolves `env:VAR_NAME` to `process.env.VAR_NAME` for TTS config (see #62314).
+ * Plain strings pass through unchanged.
+ */
+function resolveEnvColonSecretValue(
+  value: string | undefined,
+): { apiKey?: string; hasExplicitApiKey: boolean } {
+  if (value === undefined) {
+    return { hasExplicitApiKey: false };
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return { hasExplicitApiKey: false };
+  }
+  const match = /^env:([A-Z][A-Z0-9_]{0,127})$/.exec(trimmed);
+  if (!match) {
+    return { apiKey: trimmed, hasExplicitApiKey: true };
+  }
+  const fromEnv = process.env[match[1]];
+  return {
+    apiKey: typeof fromEnv === "string" && fromEnv.trim() ? fromEnv.trim() : undefined,
+    hasExplicitApiKey: true,
+  };
+}
+
+function resolveMinimaxApiKeyFromConfigValue(
+  value: unknown,
+  path: string,
+): { apiKey?: string; hasExplicitApiKey: boolean } {
+  const normalized = normalizeResolvedSecretInputString({ value, path });
+  return resolveEnvColonSecretValue(normalized);
+}
+
 function normalizeMinimaxProviderConfig(
   rawConfig: Record<string, unknown>,
 ): MinimaxTtsProviderConfig {
   const providers = asObject(rawConfig.providers);
   const raw = asObject(providers?.minimax) ?? asObject(rawConfig.minimax);
+  const apiKey = resolveMinimaxApiKeyFromConfigValue(
+    raw?.apiKey,
+    "messages.tts.providers.minimax.apiKey",
+  );
   return {
-    apiKey: normalizeResolvedSecretInputString({
-      value: raw?.apiKey,
-      path: "messages.tts.providers.minimax.apiKey",
-    }),
+    apiKey: apiKey.apiKey,
+    hasExplicitApiKey: apiKey.hasExplicitApiKey,
     baseUrl: normalizeMinimaxTtsBaseUrl(
       trimToUndefined(raw?.baseUrl) ??
         trimToUndefined(process.env.MINIMAX_API_HOST) ??
@@ -63,8 +99,13 @@ function normalizeMinimaxProviderConfig(
 
 function readMinimaxProviderConfig(config: SpeechProviderConfig): MinimaxTtsProviderConfig {
   const normalized = normalizeMinimaxProviderConfig({});
+  const explicitKey = resolveMinimaxApiKeyFromConfigValue(
+    trimToUndefined(config.apiKey),
+    "messages.tts.providers.minimax.apiKey",
+  );
   return {
-    apiKey: trimToUndefined(config.apiKey) ?? normalized.apiKey,
+    apiKey: explicitKey.hasExplicitApiKey ? explicitKey.apiKey : normalized.apiKey,
+    hasExplicitApiKey: explicitKey.hasExplicitApiKey || normalized.hasExplicitApiKey,
     baseUrl: trimToUndefined(config.baseUrl) ?? normalized.baseUrl,
     model: trimToUndefined(config.model) ?? normalized.model,
     voiceId: trimToUndefined(config.voiceId) ?? normalized.voiceId,
@@ -161,15 +202,20 @@ export function buildMinimaxSpeechProvider(): SpeechProviderPlugin {
     parseDirectiveToken,
     resolveTalkConfig: ({ baseTtsConfig, talkProviderConfig }) => {
       const base = normalizeMinimaxProviderConfig(baseTtsConfig);
+      const talkApiKey =
+        talkProviderConfig.apiKey === undefined
+          ? null
+          : resolveMinimaxApiKeyFromConfigValue(
+              talkProviderConfig.apiKey,
+              "talk.providers.minimax.apiKey",
+            );
       return {
         ...base,
-        ...(talkProviderConfig.apiKey === undefined
+        ...(talkApiKey === null
           ? {}
           : {
-              apiKey: normalizeResolvedSecretInputString({
-                value: talkProviderConfig.apiKey,
-                path: "talk.providers.minimax.apiKey",
-              }),
+              apiKey: talkApiKey.apiKey,
+              hasExplicitApiKey: talkApiKey.hasExplicitApiKey,
             }),
         ...(trimToUndefined(talkProviderConfig.baseUrl) == null
           ? {}
@@ -203,12 +249,18 @@ export function buildMinimaxSpeechProvider(): SpeechProviderPlugin {
       ...(asFiniteNumber(params.pitch) == null ? {} : { pitch: asFiniteNumber(params.pitch) }),
     }),
     listVoices: async () => MINIMAX_TTS_VOICES.map((voice) => ({ id: voice, name: voice })),
-    isConfigured: ({ providerConfig }) =>
-      Boolean(readMinimaxProviderConfig(providerConfig).apiKey || process.env.MINIMAX_API_KEY),
+    isConfigured: ({ providerConfig }) => {
+      const config = readMinimaxProviderConfig(providerConfig);
+      return config.hasExplicitApiKey
+        ? Boolean(config.apiKey)
+        : Boolean(config.apiKey || process.env.MINIMAX_API_KEY);
+    },
     synthesize: async (req) => {
       const config = readMinimaxProviderConfig(req.providerConfig);
       const overrides = readMinimaxOverrides(req.providerOverrides);
-      const apiKey = config.apiKey || process.env.MINIMAX_API_KEY;
+      const apiKey = config.hasExplicitApiKey
+        ? config.apiKey
+        : (config.apiKey ?? process.env.MINIMAX_API_KEY);
       if (!apiKey) {
         throw new Error("MiniMax API key missing");
       }

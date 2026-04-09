@@ -42,6 +42,17 @@ describe("buildMinimaxSpeechProvider", () => {
       process.env.MINIMAX_API_KEY = "sk-env";
       expect(provider.isConfigured({ providerConfig: {}, timeoutMs: 30000 })).toBe(true);
     });
+
+    it("does not fall back to MINIMAX_API_KEY when explicit env:VAR is unresolved", () => {
+      process.env.MINIMAX_API_KEY = "sk-default";
+      delete process.env.MINIMAX_ALT_KEY;
+      expect(
+        provider.isConfigured({
+          providerConfig: { apiKey: "env:MINIMAX_ALT_KEY" },
+          timeoutMs: 30000,
+        }),
+      ).toBe(false);
+    });
   });
 
   describe("resolveConfig", () => {
@@ -272,6 +283,70 @@ describe("buildMinimaxSpeechProvider", () => {
       expect(body.model).toBe("speech-01-240228");
       expect(body.voice_setting.voice_id).toBe("custom_voice");
       expect(body.voice_setting.speed).toBe(1.5);
+    });
+
+    it("resolves env:VAR apiKey from process.env (#62314)", async () => {
+      const hexAudio = Buffer.from("audio").toString("hex");
+      const mockFetch = vi.mocked(globalThis.fetch);
+      mockFetch.mockResolvedValueOnce(
+        new Response(JSON.stringify({ data: { audio: hexAudio } }), { status: 200 }),
+      );
+      const savedKey = process.env.MINIMAX_API_KEY;
+      process.env.MINIMAX_API_KEY = "sk-from-env-marker";
+      try {
+        await provider.synthesize({
+          text: "Test",
+          cfg: {} as never,
+          providerConfig: { apiKey: "env:MINIMAX_API_KEY" },
+          target: "audio-file",
+          timeoutMs: 30000,
+        });
+        const init = vi.mocked(globalThis.fetch).mock.calls[0][1] as RequestInit;
+        const auth =
+          typeof init.headers === "object" &&
+          init.headers !== null &&
+          !Array.isArray(init.headers) &&
+          "Authorization" in init.headers
+            ? String((init.headers as Record<string, string>).Authorization)
+            : "";
+        expect(auth).toBe("Bearer sk-from-env-marker");
+      } finally {
+        if (savedKey !== undefined) {
+          process.env.MINIMAX_API_KEY = savedKey;
+        } else {
+          delete process.env.MINIMAX_API_KEY;
+        }
+      }
+    });
+
+    it("does not fall back to MINIMAX_API_KEY when explicit env:VAR is unresolved", async () => {
+      const savedKey = process.env.MINIMAX_API_KEY;
+      const savedAltKey = process.env.MINIMAX_ALT_KEY;
+      process.env.MINIMAX_API_KEY = "sk-default";
+      delete process.env.MINIMAX_ALT_KEY;
+      try {
+        await expect(
+          provider.synthesize({
+            text: "Test",
+            cfg: {} as never,
+            providerConfig: { apiKey: "env:MINIMAX_ALT_KEY" },
+            target: "audio-file",
+            timeoutMs: 30000,
+          }),
+        ).rejects.toThrow("MiniMax API key missing");
+        expect(globalThis.fetch).not.toHaveBeenCalled();
+      } finally {
+        if (savedKey !== undefined) {
+          process.env.MINIMAX_API_KEY = savedKey;
+        } else {
+          delete process.env.MINIMAX_API_KEY;
+        }
+        if (savedAltKey !== undefined) {
+          process.env.MINIMAX_ALT_KEY = savedAltKey;
+        } else {
+          delete process.env.MINIMAX_ALT_KEY;
+        }
+      }
     });
 
     it("throws when API key is missing", async () => {
