@@ -1519,7 +1519,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
         },
       },
       onlyPluginIds: ["internal-hook-reload"],
-    } as const;
+    };
 
     loadOpenClawPlugins(loadOptions);
     loadOpenClawPlugins(loadOptions);
@@ -2481,7 +2481,9 @@ module.exports = { id: "throws-after-import", register() {} };`,
       },
     });
 
-    expect(registry.services.filter((entry) => entry.service.id === "shared-service")).toHaveLength(1);
+    expect(registry.services.filter((entry) => entry.service.id === "shared-service")).toHaveLength(
+      1,
+    );
     expect(
       registry.diagnostics.some((diag) =>
         String(diag.message).includes("service already registered: shared-service"),
