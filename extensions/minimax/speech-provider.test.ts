@@ -359,6 +359,43 @@ describe("buildMinimaxSpeechProvider", () => {
       }
     });
 
+    it("does not re-resolve apiKey values from resolveConfig-shaped payloads", async () => {
+      const hexAudio = Buffer.from("audio").toString("hex");
+      const mockFetch = vi.mocked(globalThis.fetch);
+      mockFetch.mockResolvedValueOnce(
+        new Response(JSON.stringify({ data: { audio: hexAudio } }), { status: 200 }),
+      );
+      const savedAltKey = process.env.MINIMAX_ALT_KEY;
+      process.env.MINIMAX_ALT_KEY = "sk-from-second-env";
+      try {
+        await provider.synthesize({
+          text: "Test",
+          cfg: {} as never,
+          providerConfig: {
+            apiKey: "env:MINIMAX_ALT_KEY",
+            hasExplicitApiKey: true,
+          },
+          target: "audio-file",
+          timeoutMs: 30000,
+        });
+        const init = vi.mocked(globalThis.fetch).mock.calls[0][1] as RequestInit;
+        const auth =
+          typeof init.headers === "object" &&
+          init.headers !== null &&
+          !Array.isArray(init.headers) &&
+          "Authorization" in init.headers
+            ? String((init.headers as Record<string, string>).Authorization)
+            : "";
+        expect(auth).toBe("Bearer env:MINIMAX_ALT_KEY");
+      } finally {
+        if (savedAltKey !== undefined) {
+          process.env.MINIMAX_ALT_KEY = savedAltKey;
+        } else {
+          delete process.env.MINIMAX_ALT_KEY;
+        }
+      }
+    });
+
     it("throws when API key is missing", async () => {
       const savedKey = process.env.MINIMAX_API_KEY;
       delete process.env.MINIMAX_API_KEY;

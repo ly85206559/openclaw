@@ -66,6 +66,10 @@ function resolveMinimaxApiKeyFromConfigValue(
   return resolveEnvColonSecretValue(normalized);
 }
 
+function normalizePersistedMinimaxApiKey(value: unknown, path: string): string | undefined {
+  return trimToUndefined(normalizeResolvedSecretInputString({ value, path }));
+}
+
 function normalizeMinimaxProviderConfig(
   rawConfig: Record<string, unknown>,
 ): MinimaxTtsProviderConfig {
@@ -100,10 +104,18 @@ function normalizeMinimaxProviderConfig(
 function readMinimaxProviderConfig(config: SpeechProviderConfig): MinimaxTtsProviderConfig {
   const normalized = normalizeMinimaxProviderConfig({});
   const persistedExplicitMarker = config.hasExplicitApiKey === true;
-  const explicitKey = resolveMinimaxApiKeyFromConfigValue(
-    trimToUndefined(config.apiKey),
-    "messages.tts.providers.minimax.apiKey",
-  );
+  const explicitKey = persistedExplicitMarker
+    ? {
+        apiKey: normalizePersistedMinimaxApiKey(
+          config.apiKey,
+          "messages.tts.providers.minimax.apiKey",
+        ),
+        hasExplicitApiKey: true,
+      }
+    : resolveMinimaxApiKeyFromConfigValue(
+        trimToUndefined(config.apiKey),
+        "messages.tts.providers.minimax.apiKey",
+      );
   const treatAsExplicit = explicitKey.hasExplicitApiKey || persistedExplicitMarker;
   return {
     apiKey: treatAsExplicit ? explicitKey.apiKey : normalized.apiKey,
