@@ -99,13 +99,16 @@ function normalizeMinimaxProviderConfig(
 
 function readMinimaxProviderConfig(config: SpeechProviderConfig): MinimaxTtsProviderConfig {
   const normalized = normalizeMinimaxProviderConfig({});
+  const persistedExplicitMarker = config.hasExplicitApiKey === true;
   const explicitKey = resolveMinimaxApiKeyFromConfigValue(
     trimToUndefined(config.apiKey),
     "messages.tts.providers.minimax.apiKey",
   );
+  const treatAsExplicit = explicitKey.hasExplicitApiKey || persistedExplicitMarker;
   return {
-    apiKey: explicitKey.hasExplicitApiKey ? explicitKey.apiKey : normalized.apiKey,
-    hasExplicitApiKey: explicitKey.hasExplicitApiKey || normalized.hasExplicitApiKey,
+    apiKey: treatAsExplicit ? explicitKey.apiKey : normalized.apiKey,
+    hasExplicitApiKey:
+      explicitKey.hasExplicitApiKey || persistedExplicitMarker || normalized.hasExplicitApiKey,
     baseUrl: trimToUndefined(config.baseUrl) ?? normalized.baseUrl,
     model: trimToUndefined(config.model) ?? normalized.model,
     voiceId: trimToUndefined(config.voiceId) ?? normalized.voiceId,

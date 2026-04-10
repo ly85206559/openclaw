@@ -53,6 +53,16 @@ describe("buildMinimaxSpeechProvider", () => {
         }),
       ).toBe(false);
     });
+
+    it("does not fall back when resolveConfig-shaped payload omits apiKey but sets hasExplicitApiKey", () => {
+      process.env.MINIMAX_API_KEY = "sk-default";
+      expect(
+        provider.isConfigured({
+          providerConfig: { apiKey: undefined, hasExplicitApiKey: true },
+          timeoutMs: 30000,
+        }),
+      ).toBe(false);
+    });
   });
 
   describe("resolveConfig", () => {
