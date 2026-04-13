@@ -116,6 +116,22 @@ describe("buildMinimaxSpeechProvider", () => {
       expect(config.model).toBe("speech-01-240228");
       expect(config.voiceId).toBe("Chinese (Mandarin)_Gentle_Boy");
     });
+
+    it("preserves hasExplicitApiKey when raw minimax omits resolved apiKey (lazy resolveConfig path)", () => {
+      process.env.MINIMAX_API_KEY = "sk-default";
+      const config = provider.resolveConfig!({
+        rawConfig: {
+          providers: {
+            minimax: { apiKey: undefined, hasExplicitApiKey: true },
+          },
+        },
+        cfg: {} as never,
+        timeoutMs: 30000,
+      });
+      expect(config.hasExplicitApiKey).toBe(true);
+      expect(config.apiKey).toBeUndefined();
+      expect(provider.isConfigured({ providerConfig: config, timeoutMs: 30000 })).toBe(false);
+    });
   });
 
   describe("parseDirectiveToken", () => {

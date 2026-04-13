@@ -75,10 +75,17 @@ function normalizeMinimaxProviderConfig(
 ): MinimaxTtsProviderConfig {
   const providers = asObject(rawConfig.providers);
   const raw = asObject(providers?.minimax) ?? asObject(rawConfig.minimax);
-  const apiKey = resolveMinimaxApiKeyFromConfigValue(
-    raw?.apiKey,
-    "messages.tts.providers.minimax.apiKey",
-  );
+  const path = "messages.tts.providers.minimax.apiKey";
+  // Same marker semantics as readMinimaxProviderConfig: resolveTalkConfig / lazy TTS resolution
+  // can persist { apiKey: undefined, hasExplicitApiKey: true }; re-running resolveConfig must
+  // not treat missing apiKey as "no explicit key" or env fallback will use the wrong credential.
+  const persistedExplicitMarker = raw?.hasExplicitApiKey === true;
+  const apiKey = persistedExplicitMarker
+    ? {
+        apiKey: normalizePersistedMinimaxApiKey(raw?.apiKey, path),
+        hasExplicitApiKey: true as const,
+      }
+    : resolveMinimaxApiKeyFromConfigValue(raw?.apiKey, path);
   return {
     apiKey: apiKey.apiKey,
     hasExplicitApiKey: apiKey.hasExplicitApiKey,
