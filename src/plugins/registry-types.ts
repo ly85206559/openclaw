@@ -59,6 +59,7 @@ export type PluginCliRegistration = {
   pluginId: string;
   pluginName?: string;
   register: OpenClawPluginCliRegistrar;
+  acceptsContext?: boolean;
   commands: string[];
   descriptors: OpenClawPluginCliCommandDescriptor[];
   source: string;

@@ -837,6 +837,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       pluginId: record.id,
       pluginName: record.name,
       register: registrar,
+      acceptsContext: registrar.length > 0,
       commands,
       descriptors,
       source: record.source,

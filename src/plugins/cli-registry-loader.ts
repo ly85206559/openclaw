@@ -69,16 +69,96 @@ function mergeCliRegistrars(params: {
   ];
 }
 
-function buildPluginCliLoaderParams(
+function sameCommandRoots(
+  left: readonly string[],
+  right: readonly string[],
+): boolean {
+  if (left.length !== right.length) {
+    return false;
+  }
+  const leftSorted = [...left].toSorted();
+  const rightSorted = [...right].toSorted();
+  return leftSorted.every((command, index) => command === rightSorted[index]);
+}
+
+function canPreferMetadataCliRegistrar(
+  entry: PluginRegistry["cliRegistrars"][number],
+): boolean {
+  // Command-only metadata stubs register `() => {}` placeholders so discovery can
+  // advertise a root command without materializing the real CLI implementation.
+  // Those stubs cannot satisfy the eager lazy-primary path.
+  return entry.acceptsContext !== false;
+}
+
+function preferMetadataCliRegistrarsForCommands(params: {
+  cliRegistrars: PluginRegistry["cliRegistrars"];
+  metadataRegistry: PluginRegistry;
+  preferredCommands: readonly string[];
+}): PluginRegistry["cliRegistrars"] | null {
+  const preferredCommands = new Set(params.preferredCommands);
+  if (preferredCommands.size === 0) {
+    return null;
+  }
+
+  let replacedAny = false;
+  const nextCliRegistrars = params.cliRegistrars.map((entry) => {
+    if (!entry.commands.some((command) => preferredCommands.has(command))) {
+      return entry;
+    }
+
+    const metadataEntry = params.metadataRegistry.cliRegistrars.find(
+      (candidate) =>
+        candidate.pluginId === entry.pluginId &&
+        sameCommandRoots(candidate.commands, entry.commands),
+    );
+    if (!metadataEntry || !canPreferMetadataCliRegistrar(metadataEntry)) {
+      return entry;
+    }
+
+    replacedAny = true;
+    return metadataEntry;
+  });
+
+  return replacedAny ? nextCliRegistrars : null;
+}
+
+function canPreferScopedMetadataRegistry(params: {
+  runtimeRegistry: PluginRegistry;
+  scopedPluginIds: readonly string[];
+}): boolean {
+  if (params.scopedPluginIds.length === 0) {
+    return false;
+  }
+
+  // Duplicate plugin ids append disabled "overridden by …" records after the winner.
+  // Prefer the first registry row per id so we do not misread the trailing duplicate.
+  const winningOriginsById = new Map<string, PluginRegistry["plugins"][number]["origin"]>();
+  for (const plugin of params.runtimeRegistry.plugins) {
+    if (!winningOriginsById.has(plugin.id)) {
+      winningOriginsById.set(plugin.id, plugin.origin);
+    }
+  }
+  return params.scopedPluginIds.every(
+    (pluginId) => winningOriginsById.get(pluginId) === "bundled",
+  );
+}
+
+function resolvePluginCliLoaderParams(
   context: PluginCliLoadContext,
   params?: { primaryCommand?: string },
   loaderOptions?: PluginCliLoaderOptions,
-) {
+): {
+  scopedPluginIds: string[];
+  loadOptions: ReturnType<typeof buildPluginRuntimeLoadOptions>;
+} {
   const onlyPluginIds = resolvePrimaryCommandPluginIds(context, params?.primaryCommand);
-  return buildPluginRuntimeLoadOptions(context, {
-    ...loaderOptions,
-    ...(onlyPluginIds.length > 0 ? { onlyPluginIds } : {}),
-  });
+  return {
+    scopedPluginIds: onlyPluginIds,
+    loadOptions: buildPluginRuntimeLoadOptions(context, {
+      ...loaderOptions,
+      ...(onlyPluginIds.length > 0 ? { onlyPluginIds } : {}),
+    }),
+  };
 }
 
 function resolvePrimaryCommandPluginIds(
@@ -117,11 +197,10 @@ export async function loadPluginCliMetadataRegistryWithContext(
   params?: { primaryCommand?: string },
   loaderOptions?: PluginCliLoaderOptions,
 ): Promise<PluginCliRegistryLoadResult> {
+  const { loadOptions } = resolvePluginCliLoaderParams(context, params, loaderOptions);
   return {
     ...context,
-    registry: await loadOpenClawPluginCliRegistry(
-      buildPluginCliLoaderParams(context, params, loaderOptions),
-    ),
+    registry: await loadOpenClawPluginCliRegistry(loadOptions),
   };
 }
 
@@ -130,16 +209,25 @@ export async function loadPluginCliCommandRegistryWithContext(params: {
   primaryCommand?: string;
   loaderOptions?: PluginCliLoaderOptions;
   onMetadataFallbackError: (error: unknown) => void;
+  preferMetadataCommands?: readonly string[];
 }): Promise<PluginCliRegistryLoadResult> {
-  const runtimeRegistry = loadOpenClawPlugins(
-    buildPluginCliLoaderParams(
-      params.context,
-      { primaryCommand: params.primaryCommand },
-      params.loaderOptions,
-    ),
+  const runtimeLoad = resolvePluginCliLoaderParams(
+    params.context,
+    { primaryCommand: params.primaryCommand },
+    params.loaderOptions,
   );
+  const runtimeRegistry = loadOpenClawPlugins(runtimeLoad.loadOptions);
+  const shouldPreferScopedMetadata =
+    (params.preferMetadataCommands?.length ?? 0) > 0 &&
+    canPreferScopedMetadataRegistry({
+      runtimeRegistry,
+      scopedPluginIds: runtimeLoad.scopedPluginIds,
+    });
 
-  if (!hasIgnoredAsyncPluginRegistration(runtimeRegistry)) {
+  const shouldTryMetadataRegistry =
+    hasIgnoredAsyncPluginRegistration(runtimeRegistry) || shouldPreferScopedMetadata;
+
+  if (!shouldTryMetadataRegistry) {
     return {
       ...params.context,
       registry: runtimeRegistry,
@@ -147,22 +235,29 @@ export async function loadPluginCliCommandRegistryWithContext(params: {
   }
 
   try {
-    const metadataRegistry = await loadOpenClawPluginCliRegistry(
-      buildPluginCliLoaderParams(
-        params.context,
-        { primaryCommand: params.primaryCommand },
-        params.loaderOptions,
-      ),
-    );
+    const metadataRegistry = await loadOpenClawPluginCliRegistry(runtimeLoad.loadOptions);
+    const mergedRegistry = hasIgnoredAsyncPluginRegistration(runtimeRegistry)
+      ? {
+          ...runtimeRegistry,
+          cliRegistrars: mergeCliRegistrars({
+            runtimeRegistry,
+            metadataRegistry,
+          }),
+        }
+      : runtimeRegistry;
+    const preferredCliRegistrars = preferMetadataCliRegistrarsForCommands({
+      cliRegistrars: mergedRegistry.cliRegistrars,
+      metadataRegistry,
+      preferredCommands: params.preferMetadataCommands ?? [],
+    });
     return {
       ...params.context,
-      registry: {
-        ...runtimeRegistry,
-        cliRegistrars: mergeCliRegistrars({
-          runtimeRegistry,
-          metadataRegistry,
-        }),
-      },
+      registry: preferredCliRegistrars
+        ? {
+            ...mergedRegistry,
+            cliRegistrars: preferredCliRegistrars,
+          }
+        : mergedRegistry,
     };
   } catch (error) {
     params.onMetadataFallbackError(error);
@@ -228,6 +323,7 @@ export async function loadPluginCliRegistrationEntries(params: {
   logger?: PluginLogger;
   primaryCommand?: string;
   onMetadataFallbackError: (error: unknown) => void;
+  preferMetadataCommands?: readonly string[];
 }): Promise<PluginCliCommandGroupEntry[]> {
   const resolvedLogger = resolvePluginCliLogger(params.logger);
   const context = resolvePluginCliLoadContext({
@@ -240,6 +336,7 @@ export async function loadPluginCliRegistrationEntries(params: {
     primaryCommand: params.primaryCommand,
     loaderOptions: params.loaderOptions,
     onMetadataFallbackError: params.onMetadataFallbackError,
+    preferMetadataCommands: params.preferMetadataCommands,
   });
   return buildPluginCliCommandGroupEntries({
     registry,
@@ -250,7 +347,7 @@ export async function loadPluginCliRegistrationEntries(params: {
 }
 
 export async function loadPluginCliRegistrationEntriesWithDefaults(
-  params: PluginCliPublicLoadParams,
+  params: PluginCliPublicLoadParams & { preferMetadataCommands?: readonly string[] },
 ): Promise<PluginCliCommandGroupEntry[]> {
   const logger = resolvePluginCliLogger(params.logger);
   return loadPluginCliRegistrationEntries({
