@@ -9,6 +9,7 @@ import {
   resolveChatModelOverrideValue,
   resolveChatModelSelectState,
 } from "./chat-model-select-state.ts";
+import { refreshSlashCommands } from "./chat/slash-commands.ts";
 import { refreshVisibleToolsEffectiveForCurrentSession } from "./controllers/agents.ts";
 import { ChatState, loadChatHistory } from "./controllers/chat.ts";
 import { loadSessions } from "./controllers/sessions.ts";
@@ -31,6 +32,7 @@ type SessionDefaultsSnapshot = {
 
 type SessionSwitchHost = AppViewState & {
   chatStreamStartedAt: number | null;
+  chatSideResultTerminalRuns: Set<string>;
   resetToolStream(): void;
   resetChatScroll(): void;
 };
@@ -42,6 +44,14 @@ type ChatRefreshHost = AppViewState & {
   scrollToBottom(opts?: { smooth?: boolean }): void;
   updateComplete?: Promise<unknown>;
 };
+
+export function resolveAssistantAttachmentAuthToken(
+  state: Pick<AppViewState, "settings" | "password">,
+) {
+  return (
+    normalizeOptionalString(state.settings.token) ?? normalizeOptionalString(state.password) ?? null
+  );
+}
 
 function resolveSidebarChatSessionKey(state: AppViewState): string {
   const snapshot = state.hello?.snapshot as
@@ -68,6 +78,7 @@ function resetChatStateForSessionSwitch(state: AppViewState, sessionKey: string)
   state.chatStreamSegments = [];
   state.chatThinkingLevel = null;
   state.chatStream = null;
+  state.chatSideResult = null;
   state.lastError = null;
   state.compactionStatus = null;
   state.fallbackStatus = null;
@@ -75,6 +86,7 @@ function resetChatStateForSessionSwitch(state: AppViewState, sessionKey: string)
   state.chatQueue = [];
   host.chatStreamStartedAt = null;
   state.chatRunId = null;
+  host.chatSideResultTerminalRuns.clear();
   host.resetToolStream();
   host.resetChatScroll();
   state.applySettings({
@@ -531,6 +543,10 @@ export function switchChatSession(state: AppViewState, nextSessionKey: string) {
   resetChatStateForSessionSwitch(state, nextSessionKey);
   void state.loadAssistantIdentity();
   void refreshChatAvatar(state);
+  void refreshSlashCommands({
+    client: state.client,
+    agentId: parseAgentSessionKey(nextSessionKey)?.agentId,
+  });
   syncUrlWithSessionKey(
     state as unknown as Parameters<typeof syncUrlWithSessionKey>[0],
     nextSessionKey,
