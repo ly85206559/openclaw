@@ -38,8 +38,11 @@ export function handleAgentStart(ctx: EmbeddedPiSubscribeContext) {
 
 export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext): void | Promise<void> {
   const lastAssistant = ctx.state.lastAssistant;
-  const isError = isAssistantMessage(lastAssistant) && lastAssistant.stopReason === "error";
+  const lastAssistantMessage = isAssistantMessage(lastAssistant) ? lastAssistant : null;
+  const isError = lastAssistantMessage?.stopReason === "error";
+  const isAborted = lastAssistantMessage?.stopReason === "aborted";
   let lifecycleErrorText: string | undefined;
+  let lifecycleAbortedErrorText: string | undefined;
   const hasAssistantVisibleText =
     Array.isArray(ctx.state.assistantTexts) &&
     ctx.state.assistantTexts.some((text) => hasAssistantVisibleReply({ text }));
@@ -50,7 +53,7 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext): void | Promise<
     (ctx.state.successfulCronAdds ?? 0) > 0;
   const incompleteTerminalAssistant = isIncompleteTerminalAssistantTurn({
     hasAssistantVisibleText,
-    lastAssistant: isAssistantMessage(lastAssistant) ? lastAssistant : null,
+    lastAssistant: lastAssistantMessage,
   });
   const replayInvalid =
     ctx.state.replayState.replayInvalid || incompleteTerminalAssistant ? true : undefined;
@@ -62,29 +65,39 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext): void | Promise<
   const livenessState =
     ctx.state.livenessState === "working" ? derivedWorkingTerminalState : ctx.state.livenessState;
 
-  if (isError && lastAssistant) {
+  if (isAborted && lastAssistantMessage?.errorMessage) {
+    lifecycleAbortedErrorText =
+      buildTextObservationFields(lastAssistantMessage.errorMessage).textPreview ??
+      "This operation was aborted.";
+  }
+
+  if (isError && lastAssistantMessage) {
     const friendlyError = formatAssistantErrorText(lastAssistant, {
       cfg: ctx.params.config,
       sessionKey: ctx.params.sessionKey,
-      provider: lastAssistant.provider,
-      model: lastAssistant.model,
+      provider: lastAssistantMessage.provider,
+      model: lastAssistantMessage.model,
     });
-    const rawError = lastAssistant.errorMessage?.trim();
+    const rawError = lastAssistantMessage.errorMessage?.trim();
     const failoverReason = classifyFailoverReason(rawError ?? "", {
-      provider: lastAssistant.provider,
+      provider: lastAssistantMessage.provider,
     });
-    const errorText = (friendlyError || lastAssistant.errorMessage || "LLM request failed.").trim();
+    const errorText = (
+      friendlyError ||
+      lastAssistantMessage.errorMessage ||
+      "LLM request failed."
+    ).trim();
     const observedError = buildApiErrorObservationFields(rawError, {
-      provider: lastAssistant.provider,
+      provider: lastAssistantMessage.provider,
     });
     const safeErrorText =
       buildTextObservationFields(errorText, {
-        provider: lastAssistant.provider,
+        provider: lastAssistantMessage.provider,
       }).textPreview ?? "LLM request failed.";
     lifecycleErrorText = safeErrorText;
     const safeRunId = sanitizeForConsole(ctx.params.runId) ?? "-";
-    const safeModel = sanitizeForConsole(lastAssistant.model) ?? "unknown";
-    const safeProvider = sanitizeForConsole(lastAssistant.provider) ?? "unknown";
+    const safeModel = sanitizeForConsole(lastAssistantMessage.model) ?? "unknown";
+    const safeProvider = sanitizeForConsole(lastAssistantMessage.provider) ?? "unknown";
     const safeRawErrorPreview = sanitizeForConsole(observedError.rawErrorPreview);
     const shouldSuppressRawErrorConsoleSuffix =
       observedError.providerRuntimeFailureKind === "auth_html_403" ||
@@ -101,8 +114,8 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext): void | Promise<
       isError: true,
       error: safeErrorText,
       failoverReason,
-      model: lastAssistant.model,
-      provider: lastAssistant.provider,
+      model: lastAssistantMessage.model,
+      provider: lastAssistantMessage.provider,
       ...observedError,
       consoleMessage: `embedded run agent end: runId=${safeRunId} isError=true model=${safeModel} provider=${safeProvider} error=${safeErrorText}${rawErrorConsoleSuffix}`,
     });
@@ -139,6 +152,8 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext): void | Promise<
       stream: "lifecycle",
       data: {
         phase: "end",
+        ...(isAborted ? { aborted: true, stopReason: "aborted" } : {}),
+        ...(lifecycleAbortedErrorText ? { error: lifecycleAbortedErrorText } : {}),
         ...(livenessState ? { livenessState } : {}),
         ...(replayInvalid ? { replayInvalid } : {}),
         endedAt: Date.now(),
@@ -148,6 +163,8 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext): void | Promise<
       stream: "lifecycle",
       data: {
         phase: "end",
+        ...(isAborted ? { aborted: true, stopReason: "aborted" } : {}),
+        ...(lifecycleAbortedErrorText ? { error: lifecycleAbortedErrorText } : {}),
         ...(livenessState ? { livenessState } : {}),
         ...(replayInvalid ? { replayInvalid } : {}),
       },

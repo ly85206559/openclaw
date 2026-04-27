@@ -135,9 +135,18 @@ function createSnapshotFromLifecycleEvent(params: {
     typeof data?.startedAt === "number" ? data.startedAt : agentRunStarts.get(runId);
   const endedAt = typeof data?.endedAt === "number" ? data.endedAt : undefined;
   const error = typeof data?.error === "string" ? data.error : undefined;
+  const stopReason = typeof data?.stopReason === "string" ? data.stopReason : undefined;
+  const status =
+    phase === "error"
+      ? "error"
+      : stopReason === "aborted"
+        ? "error"
+        : data?.aborted
+          ? "timeout"
+          : "ok";
   return {
     runId,
-    status: phase === "error" ? "error" : data?.aborted ? "timeout" : "ok",
+    status,
     startedAt,
     endedAt,
     error,

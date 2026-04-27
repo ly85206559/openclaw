@@ -83,6 +83,36 @@ describe("waitForAgentJob", () => {
     }
   });
 
+  it("maps aborted stop reasons to immediate errors", async () => {
+    const runId = `run-aborted-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const snapshotPromise = waitForAgentJob({ runId, timeoutMs: 1_000 });
+
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: { phase: "start", startedAt: 100 },
+    });
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+        startedAt: 100,
+        endedAt: 200,
+        aborted: true,
+        stopReason: "aborted",
+        error: "This operation was aborted",
+      },
+    });
+
+    const snapshot = await snapshotPromise;
+    expect(snapshot).not.toBeNull();
+    expect(snapshot?.status).toBe("error");
+    expect(snapshot?.startedAt).toBe(100);
+    expect(snapshot?.endedAt).toBe(200);
+    expect(snapshot?.error).toBe("This operation was aborted");
+  });
+
   it("keeps non-aborted lifecycle end events as ok", async () => {
     const snapshot = await runLifecycleScenario({
       runIdPrefix: "run-ok",

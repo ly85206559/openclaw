@@ -224,6 +224,32 @@ describe("handleAgentEnd", () => {
     expect(ctx.log.debug).toHaveBeenCalledWith("embedded run agent end: runId=run-1 isError=false");
   });
 
+  it("propagates aborted assistant terminal state to lifecycle events", async () => {
+    const onAgentEvent = vi.fn();
+    const ctx = createContext(
+      {
+        role: "assistant",
+        stopReason: "aborted",
+        errorMessage: "This operation was aborted",
+        content: [],
+      },
+      { onAgentEvent },
+    );
+
+    await handleAgentEnd(ctx);
+
+    expect(ctx.log.warn).not.toHaveBeenCalled();
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+        aborted: true,
+        stopReason: "aborted",
+        error: "This operation was aborted",
+      },
+    });
+  });
+
   it("surfaces replay-invalid paused lifecycle end state when present", async () => {
     const onAgentEvent = vi.fn();
     const ctx = createContext(undefined, { onAgentEvent });
