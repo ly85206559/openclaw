@@ -7,7 +7,6 @@ const mocks = vi.hoisted(() => ({
   readConfigFileSnapshot: vi.fn(),
   applyPluginAutoEnable: vi.fn(),
   getChannelPlugin: vi.fn(),
-  getBundledChannelPlugin: vi.fn(),
   normalizeChannelId: vi.fn((value: string) => value),
 }));
 
@@ -18,10 +17,6 @@ vi.mock("../../config/config.js", () => ({
 
 vi.mock("../../config/plugin-auto-enable.js", () => ({
   applyPluginAutoEnable: mocks.applyPluginAutoEnable,
-}));
-
-vi.mock("../../channels/plugins/bundled.js", () => ({
-  getBundledChannelPlugin: mocks.getBundledChannelPlugin,
 }));
 
 vi.mock("../../channels/plugins/index.js", () => ({
@@ -76,7 +71,6 @@ describe("channelsHandlers channels.start", () => {
     mocks.getRuntimeConfig.mockReturnValue({});
     mocks.applyPluginAutoEnable.mockImplementation(({ config }) => ({ config, changes: [] }));
     mocks.normalizeChannelId.mockImplementation((value: string) => value);
-    mocks.getBundledChannelPlugin.mockReturnValue(undefined);
     mocks.getChannelPlugin.mockReturnValue({
       id: "whatsapp",
       gateway: { startAccount: vi.fn() },
@@ -186,11 +180,17 @@ describe("channelsHandlers channels.start", () => {
     );
   });
 
-  it("falls back to bundled channel metadata when the channel id is not in the registry yet", async () => {
+  it("resolves the channel id via getChannelPlugin when the registry normalizer returns null", async () => {
     mocks.normalizeChannelId.mockReturnValue(null);
-    mocks.getBundledChannelPlugin.mockReturnValue({
+    mocks.getChannelPlugin.mockReturnValue({
       id: "whatsapp",
-    } as never);
+      gateway: { startAccount: vi.fn() },
+      config: {
+        defaultAccountId: () => "default-account",
+        listAccountIds: () => ["default-account"],
+        resolveAccount: () => ({}),
+      },
+    });
 
     const startChannel = vi.fn();
     const respond = vi.fn();
@@ -226,7 +226,7 @@ describe("channelsHandlers channels.start", () => {
       ),
     );
 
-    expect(mocks.getBundledChannelPlugin).toHaveBeenCalledWith("whatsapp");
+    expect(mocks.getChannelPlugin).toHaveBeenCalledWith("whatsapp");
     expect(startChannel).toHaveBeenCalledWith("whatsapp", "default-account");
     expect(respond).toHaveBeenCalledWith(
       true,

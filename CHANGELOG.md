@@ -19,7 +19,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- Gateway/channels: resolve bundled channel ids in `channels.start`, `channels.stop`, and `channels.logout` when the lightweight registry has not registered the plugin yet, aligning RPC channel resolution with `getChannelPlugin` and avoiding spurious invalid-channel errors after CLI login. Related #77508.
+- Gateway/channels: resolve channel ids in `channels.start`, `channels.stop`, and `channels.logout` with the same `getChannelPlugin` lookup used elsewhere when the lightweight registry normalizer returns null, avoiding spurious invalid-channel RPC errors after CLI login. Related #77508.
 - Plugins/externalization: keep official ACPX, Google Chat, and LINE install specs on production package names, leaving beta-tag probing to the explicit OpenClaw beta update channel. Thanks @vincentkoc.
 - CLI/doctor: keep missing-plugin repair from overriding official catalog metadata with runtime fallbacks, so ACPX repairs preserve the official npm spec during the externalization rollout. Thanks @vincentkoc.
 - Plugins/catalog: preserve ClawHub install specs when generating the packaged channel catalog so future storepack-first channel plugins keep their remote source instead of becoming npm-only. Thanks @vincentkoc.

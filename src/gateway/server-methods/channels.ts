@@ -1,6 +1,5 @@
 import { buildChannelUiCatalog } from "../../channels/plugins/catalog.js";
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
-import { getBundledChannelPlugin } from "../../channels/plugins/bundled.js";
 import {
   type ChannelId,
   getChannelPlugin,
@@ -72,8 +71,7 @@ function resolveGatewayChannelMethodId(rawChannel: string): ChannelId | null {
   if (!key) {
     return null;
   }
-  const bundled = getBundledChannelPlugin(key as ChannelId);
-  return bundled?.id ?? null;
+  return getChannelPlugin(key as ChannelId)?.id ?? null;
 }
 
 function resolveChannelsStatusTimeoutMs(params: { probe: boolean; timeoutMsRaw: unknown }): number {
