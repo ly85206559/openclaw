@@ -7,6 +7,8 @@ const mocks = vi.hoisted(() => ({
   readConfigFileSnapshot: vi.fn(),
   applyPluginAutoEnable: vi.fn(),
   getChannelPlugin: vi.fn(),
+  getBundledChannelPlugin: vi.fn(),
+  normalizeChannelId: vi.fn((value: string) => value),
 }));
 
 vi.mock("../../config/config.js", () => ({
@@ -18,10 +20,14 @@ vi.mock("../../config/plugin-auto-enable.js", () => ({
   applyPluginAutoEnable: mocks.applyPluginAutoEnable,
 }));
 
+vi.mock("../../channels/plugins/bundled.js", () => ({
+  getBundledChannelPlugin: mocks.getBundledChannelPlugin,
+}));
+
 vi.mock("../../channels/plugins/index.js", () => ({
   listChannelPlugins: vi.fn(),
   getChannelPlugin: mocks.getChannelPlugin,
-  normalizeChannelId: (value: string) => value,
+  normalizeChannelId: mocks.normalizeChannelId,
 }));
 
 import { channelsHandlers } from "./channels.js";
@@ -69,6 +75,8 @@ describe("channelsHandlers channels.start", () => {
     vi.clearAllMocks();
     mocks.getRuntimeConfig.mockReturnValue({});
     mocks.applyPluginAutoEnable.mockImplementation(({ config }) => ({ config, changes: [] }));
+    mocks.normalizeChannelId.mockImplementation((value: string) => value);
+    mocks.getBundledChannelPlugin.mockReturnValue(undefined);
     mocks.getChannelPlugin.mockReturnValue({
       id: "whatsapp",
       gateway: { startAccount: vi.fn() },
@@ -173,6 +181,59 @@ describe("channelsHandlers channels.start", () => {
         channel: "whatsapp",
         accountId: "default-account",
         started: false,
+      },
+      undefined,
+    );
+  });
+
+  it("falls back to bundled channel metadata when the channel id is not in the registry yet", async () => {
+    mocks.normalizeChannelId.mockReturnValue(null);
+    mocks.getBundledChannelPlugin.mockReturnValue({
+      id: "whatsapp",
+    } as never);
+
+    const startChannel = vi.fn();
+    const respond = vi.fn();
+
+    await channelsHandlers["channels.start"](
+      createOptions(
+        { channel: "whatsapp" },
+        {
+          respond,
+          context: {
+            getRuntimeConfig: mocks.getRuntimeConfig,
+            startChannel,
+            getRuntimeSnapshot: vi.fn(
+              (): ChannelRuntimeSnapshot => ({
+                channels: {
+                  whatsapp: {
+                    accountId: "default-account",
+                    running: true,
+                  },
+                },
+                channelAccounts: {
+                  whatsapp: {
+                    "default-account": {
+                      accountId: "default-account",
+                      running: true,
+                    },
+                  },
+                },
+              }),
+            ),
+          } as unknown as GatewayRequestHandlerOptions["context"],
+        },
+      ),
+    );
+
+    expect(mocks.getBundledChannelPlugin).toHaveBeenCalledWith("whatsapp");
+    expect(startChannel).toHaveBeenCalledWith("whatsapp", "default-account");
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      {
+        channel: "whatsapp",
+        accountId: "default-account",
+        started: true,
       },
       undefined,
     );

@@ -1,5 +1,6 @@
 import { buildChannelUiCatalog } from "../../channels/plugins/catalog.js";
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
+import { getBundledChannelPlugin } from "../../channels/plugins/bundled.js";
 import {
   type ChannelId,
   getChannelPlugin,
@@ -15,7 +16,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getChannelActivity } from "../../infra/channel-activity.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { normalizeOptionalLowercaseString, normalizeOptionalString } from "../../shared/string-coerce.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import {
   DEFAULT_CHANNEL_CONNECT_GRACE_MS,
@@ -56,6 +57,24 @@ type ChannelStopPayload = {
 
 const CHANNEL_STATUS_MAX_TIMEOUT_MS = 30_000;
 const CHANNEL_STATUS_PROBE_CONCURRENCY = 5;
+
+/**
+ * Resolve a gateway channel id consistently with {@link getChannelPlugin}: prefer the
+ * lightweight registry normalizer, then fall back to bundled channel metadata when the
+ * channel is not registered yet (e.g. fresh login before the channel runtime registers).
+ */
+function resolveGatewayChannelMethodId(rawChannel: string): ChannelId | null {
+  const fromRegistry = normalizeChannelId(rawChannel);
+  if (fromRegistry) {
+    return fromRegistry;
+  }
+  const key = normalizeOptionalLowercaseString(rawChannel);
+  if (!key) {
+    return null;
+  }
+  const bundled = getBundledChannelPlugin(key as ChannelId);
+  return bundled?.id ?? null;
+}
 
 function resolveChannelsStatusTimeoutMs(params: { probe: boolean; timeoutMsRaw: unknown }): number {
   const fallback = params.probe ? CHANNEL_STATUS_MAX_TIMEOUT_MS : 10_000;
@@ -393,7 +412,8 @@ export const channelsHandlers: GatewayRequestHandlers = {
       return;
     }
     const rawChannel = (params as { channel?: unknown }).channel;
-    const channelId = typeof rawChannel === "string" ? normalizeChannelId(rawChannel) : null;
+    const channelId =
+      typeof rawChannel === "string" ? resolveGatewayChannelMethodId(rawChannel) : null;
     if (!channelId) {
       respond(
         false,
@@ -449,7 +469,8 @@ export const channelsHandlers: GatewayRequestHandlers = {
       return;
     }
     const rawChannel = (params as { channel?: unknown }).channel;
-    const channelId = typeof rawChannel === "string" ? normalizeChannelId(rawChannel) : null;
+    const channelId =
+      typeof rawChannel === "string" ? resolveGatewayChannelMethodId(rawChannel) : null;
     if (!channelId) {
       respond(
         false,
@@ -495,7 +516,8 @@ export const channelsHandlers: GatewayRequestHandlers = {
       return;
     }
     const rawChannel = (params as { channel?: unknown }).channel;
-    const channelId = typeof rawChannel === "string" ? normalizeChannelId(rawChannel) : null;
+    const channelId =
+      typeof rawChannel === "string" ? resolveGatewayChannelMethodId(rawChannel) : null;
     if (!channelId) {
       respond(
         false,
