@@ -1,5 +1,5 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
-import { streamSimple } from "@mariozechner/pi-ai";
+import { getApiProvider, streamSimple } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 import * as providerTransportStream from "../provider-transport-stream.js";
 import {
@@ -84,6 +84,23 @@ describe("describeEmbeddedAgentStreamStrategy", () => {
       }),
     ).toBe("session-custom");
   });
+
+  it("treats PI-registered openai-completions session streams as boundary-aware fallbacks", () => {
+    const provider = getApiProvider("openai-completions");
+    const nativeStreamFn = (provider?.streamSimple ?? provider?.stream) as StreamFn | undefined;
+    expect(nativeStreamFn).toBeDefined();
+    expect(
+      describeEmbeddedAgentStreamStrategy({
+        currentStreamFn: nativeStreamFn,
+        shouldUseWebSocketTransport: false,
+        model: {
+          api: "openai-completions",
+          provider: "llama",
+          id: "qwen",
+        } as never,
+      }),
+    ).toBe("boundary-aware:openai-completions");
+  });
 });
 
 describe("resolveEmbeddedAgentStreamFn", () => {
@@ -115,6 +132,32 @@ describe("resolveEmbeddedAgentStreamFn", () => {
     });
 
     expect(streamFn).not.toBe(streamSimple);
+  });
+
+  it("routes PI native openai-completions session streams through boundary-aware transports", async () => {
+    const provider = getApiProvider("openai-completions");
+    const nativeStreamFn = (provider?.streamSimple ?? provider?.stream) as StreamFn;
+    expect(nativeStreamFn).toBeDefined();
+
+    const innerStreamFn = vi.fn(async (_model, _context, options) => options);
+    overrideBoundaryAwareStreamFnOnce(innerStreamFn as never);
+    const streamFn = resolveEmbeddedAgentStreamFn({
+      currentStreamFn: nativeStreamFn,
+      shouldUseWebSocketTransport: false,
+      sessionId: "session-1",
+      model: {
+        api: "openai-completions",
+        provider: "llama",
+        id: "qwen36-35b-a3b",
+      } as never,
+      resolvedApiKey: "local-token",
+    });
+
+    expect(streamFn).not.toBe(nativeStreamFn);
+    await expect(
+      streamFn({ provider: "llama", id: "qwen36-35b-a3b" } as never, {} as never, {}),
+    ).resolves.toMatchObject({ apiKey: "local-token" });
+    expect(innerStreamFn).toHaveBeenCalledTimes(1);
   });
 
   it("routes Codex responses fallbacks through boundary-aware transports", () => {
