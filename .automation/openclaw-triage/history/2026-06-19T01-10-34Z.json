@@ -1,0 +1,635 @@
+{
+  "schema": "openclaw-auto-triage-history:v1",
+  "run_id": "2026-06-19T01:10:34Z",
+  "snapshot_utc": "2026-06-19T01:10:34Z",
+  "source_repo": "openclaw/openclaw",
+  "fork_repo": "ly85206559/openclaw",
+  "data_snapshot": {
+    "open_issue_sample_size": 500,
+    "open_issue_last7_overlap": 500,
+    "upstream_main_commits_analyzed": 300,
+    "total_open_issues_reported": 3309
+  },
+  "trend_analysis": {
+    "maintainer_hot_modules_top3": [
+      {
+        "module": "core/other",
+        "commit_count_300": 71,
+        "note": "近 300 commit 中未匹配具体模块关键词的变更"
+      },
+      {
+        "module": "src/agents",
+        "commit_count_300": 43,
+        "note": "subagent/transcript/session 相关 fix/refactor 密集"
+      },
+      {
+        "module": "docker/",
+        "commit_count_300": 38,
+        "note": "e2e/CI 与 Docker 断言修复活跃"
+      }
+    ],
+    "open_issue_hot_modules_top3": [
+      {
+        "module": "src/agents",
+        "count_500": 113,
+        "share_pct": 22.6
+      },
+      {
+        "module": "src/gateway",
+        "count_500": 99,
+        "share_pct": 19.8
+      },
+      {
+        "module": "extensions/telegram",
+        "count_500": 75,
+        "share_pct": 15.0
+      }
+    ],
+    "commit_type_ratio_300": {
+      "fix": 137,
+      "refactor": 110,
+      "test": 28,
+      "other": 23,
+      "merge": 2
+    },
+    "commit_module_top8": [
+      [
+        "core/other",
+        71
+      ],
+      [
+        "src/agents",
+        43
+      ],
+      [
+        "docker/",
+        38
+      ],
+      [
+        "extensions/",
+        25
+      ],
+      [
+        "src/state",
+        25
+      ],
+      [
+        "src/gateway",
+        24
+      ],
+      [
+        "src/cli",
+        14
+      ],
+      [
+        "src/providers",
+        11
+      ]
+    ],
+    "label_top10_last7d_sample": []
+  },
+  "priority_rank": [
+    {
+      "rank": 1,
+      "number": 83809,
+      "title": "Live session: expose stream-json user-message injection from external processes (e.g. UDS) for orchestrator wake delivery",
+      "url": "https://github.com/openclaw/openclaw/issues/83809",
+      "priority_inferred": "P0",
+      "module": "extensions/codex",
+      "maintainer_match": "高 — 与 agents/gateway 编排热点一致，但需安全/产品决策",
+      "why_important": "外部进程注入用户消息影响 orchestrator 唤醒与会话安全边界",
+      "investigation_entry": "评估 gateway 外部注入 seam 与现有 stream-json 协议；需 maintainer 安全评审",
+      "risks": [
+        "needs-product-decision",
+        "needs-security-review",
+        "clawsweeper:no-new-fix-pr"
+      ],
+      "has_open_pr": false,
+      "handoff_eligible": false
+    },
+    {
+      "rank": 2,
+      "number": 54531,
+      "title": "feat: Force reply to originating channel (Telegram/Discord/WhatsApp)",
+      "url": "https://github.com/openclaw/openclaw/issues/54531",
+      "priority_inferred": "P0",
+      "module": "extensions/telegram",
+      "maintainer_match": "中 — Telegram 为 open issue 高发模块，但是跨 channel 产品特性",
+      "why_important": "多 channel 路由下回复落错 channel 会导致消息丢失与用户困惑",
+      "investigation_entry": "梳理 channel reply routing 与 session binding 现有 contract",
+      "risks": [
+        "needs-product-decision",
+        "needs-security-review",
+        "大范围跨插件行为变更"
+      ],
+      "has_open_pr": false,
+      "handoff_eligible": false
+    },
+    {
+      "rank": 3,
+      "number": 79281,
+      "title": "[Feature] Default ACP thread-binding preset (or opt-in config flag) — third-party channels currently re-implement ~870 LOC each",
+      "url": "https://github.com/openclaw/openclaw/issues/79281",
+      "priority_inferred": "P0",
+      "module": "extensions/slack",
+      "maintainer_match": "中 — plugin SDK/ACP seam 方向与近期 refactor 一致",
+      "why_important": "减少各 channel 重复实现 thread binding，降低维护成本",
+      "investigation_entry": "比较 Slack/Discord/Telegram 现有 ACP preset 重复面，设计 SDK 级默认",
+      "risks": [
+        "needs-product-decision",
+        "870 LOC 级架构变更，不适合窄修复"
+      ],
+      "has_open_pr": false,
+      "handoff_eligible": false
+    },
+    {
+      "rank": 4,
+      "number": 79077,
+      "title": "Support for Telegram bot-to-bot and guest-bot modes (Telegram May-7 2026 release)",
+      "url": "https://github.com/openclaw/openclaw/issues/79077",
+      "priority_inferred": "P0",
+      "module": "extensions/telegram",
+      "maintainer_match": "高 — Telegram 热点 + 平台 API 变更",
+      "why_important": "Telegram 2026-05 新 bot 模式不支持会阻断集成场景",
+      "investigation_entry": "对照 Telegram Bot API 新 guest/bot-to-bot 模式与现有 transport 限制",
+      "risks": [
+        "needs-live-repro",
+        "needs-product-decision",
+        "外部 API 行为验证"
+      ],
+      "has_open_pr": false,
+      "handoff_eligible": false
+    },
+    {
+      "rank": 5,
+      "number": 78256,
+      "title": "Approved exec command can return unrelated output in subagent context",
+      "url": "https://github.com/openclaw/openclaw/issues/78256",
+      "priority_inferred": "P0",
+      "module": "src/gateway",
+      "maintainer_match": "高 — gateway + agents 双热点",
+      "why_important": "已批准 exec 返回无关输出存在安全与会话污染风险",
+      "investigation_entry": "追踪 subagent exec approval 输出隔离与 gateway tool 路由",
+      "risks": [
+        "needs-live-repro",
+        "needs-security-review",
+        "安全边界需 maintainer 评审"
+      ],
+      "has_open_pr": false,
+      "handoff_eligible": false
+    }
+  ],
+  "handoff_rank": [
+    {
+      "number": 80498,
+      "title": "Subagent completion announcements can be premature or duplicated after tool-use turns",
+      "url": "https://github.com/openclaw/openclaw/issues/80498",
+      "module": "src/agents",
+      "priority": "P1",
+      "handoff_score": 90,
+      "reasons": [
+        "root_files",
+        "tests",
+        "narrow",
+        "commit_pattern"
+      ],
+      "file_refs": [
+        "src/agents/subagent-announce-output.ts",
+        "src/agents/subagent-announce-output.test.ts",
+        "src/agents/subagent-announce.ts",
+        "src/agents/subagent-announce.test.ts"
+      ],
+      "labels": [
+        "P1",
+        "clawsweeper:source-repro",
+        "impact:session-state",
+        "impact:message-loss",
+        "issue-rating: 🦞 diamond lobster"
+      ],
+      "updated_at": "2026-06-18T20:49:50Z",
+      "has_open_pr": true,
+      "excluded_reason": "open PR #81621",
+      "eligible": false
+    },
+    {
+      "number": 76613,
+      "title": "Matrix crypto-store: observability for accumulated populated token-hash sibling dirs (discussion)",
+      "url": "https://github.com/openclaw/openclaw/issues/76613",
+      "module": "extensions/",
+      "priority": "P3",
+      "handoff_score": 85,
+      "reasons": [
+        "root_files",
+        "tests",
+        "narrow",
+        "commit_pattern"
+      ],
+      "file_refs": [
+        "extensions/matrix/src/matrix/client/storage.ts"
+      ],
+      "labels": [
+        "P3",
+        "clawsweeper:source-repro",
+        "issue-rating: 🦞 diamond lobster",
+        "impact:other"
+      ],
+      "updated_at": "2026-06-18T18:39:01Z",
+      "has_open_pr": true,
+      "excluded_reason": "open PR #94644",
+      "eligible": false
+    },
+    {
+      "number": 83730,
+      "title": "[Bug] Feishu p2p DM replies fail with SUBSCRIPTION_NOT_FOUND after upgrading to 2026.5.12",
+      "url": "https://github.com/openclaw/openclaw/issues/83730",
+      "module": "src/cli",
+      "priority": "P1",
+      "handoff_score": 75,
+      "reasons": [
+        "repro",
+        "tests_weak",
+        "narrow",
+        "commit_pattern"
+      ],
+      "file_refs": [],
+      "labels": [
+        "no-stale",
+        "P1",
+        "clawsweeper:fix-shape-clear",
+        "clawsweeper:queueable-fix",
+        "clawsweeper:source-repro",
+        "impact:message-loss",
+        "issue-rating: 🦞 diamond lobster"
+      ],
+      "updated_at": "2026-06-19T01:08:01Z",
+      "has_open_pr": false,
+      "excluded_reason": "Feishu 外部 channel 插件边界",
+      "eligible": false
+    },
+    {
+      "number": 81566,
+      "title": "nextcloud-talk channel returns 400 \"Invalid payload format\" on non-message Talk events (file shares)",
+      "url": "https://github.com/openclaw/openclaw/issues/81566",
+      "module": "src/cli",
+      "priority": "P1",
+      "handoff_score": 75,
+      "reasons": [
+        "repro",
+        "tests_weak",
+        "narrow",
+        "commit_pattern"
+      ],
+      "file_refs": [],
+      "labels": [
+        "no-stale",
+        "P2",
+        "clawsweeper:fix-shape-clear",
+        "clawsweeper:queueable-fix",
+        "clawsweeper:source-repro",
+        "impact:message-loss",
+        "issue-rating: 🦞 diamond lobster"
+      ],
+      "updated_at": "2026-06-19T00:20:16Z",
+      "has_open_pr": true,
+      "excluded_reason": "open PR #94715",
+      "eligible": false
+    },
+    {
+      "number": 81099,
+      "title": "[Bug]: claude-cli backend: AskUserQuestion tool call renders input but no picker UI / never returns a result",
+      "url": "https://github.com/openclaw/openclaw/issues/81099",
+      "module": "ui/",
+      "priority": "P1",
+      "handoff_score": 75,
+      "reasons": [
+        "repro",
+        "tests_weak",
+        "narrow",
+        "commit_pattern"
+      ],
+      "file_refs": [],
+      "labels": [
+        "stale",
+        "P1",
+        "clawsweeper:source-repro",
+        "impact:message-loss",
+        "issue-rating: 🦞 diamond lobster"
+      ],
+      "updated_at": "2026-06-18T23:26:31Z",
+      "has_open_pr": false,
+      "excluded_reason": null,
+      "eligible": true
+    },
+    {
+      "number": 80582,
+      "title": "Memory: skip markdown placeholder snippets during short-term promotion",
+      "url": "https://github.com/openclaw/openclaw/issues/80582",
+      "module": "src/state",
+      "priority": "P1",
+      "handoff_score": 75,
+      "reasons": [
+        "repro",
+        "tests_weak",
+        "narrow",
+        "commit_pattern"
+      ],
+      "file_refs": [],
+      "labels": [
+        "stale",
+        "P2",
+        "clawsweeper:source-repro",
+        "impact:session-state",
+        "issue-rating: 🦞 diamond lobster"
+      ],
+      "updated_at": "2026-06-18T20:50:55Z",
+      "has_open_pr": false,
+      "excluded_reason": null,
+      "eligible": true
+    },
+    {
+      "number": 94730,
+      "title": "doctor: copy-sensitive paths get re-wrapped by clack note box, splitting file extensions",
+      "url": "https://github.com/openclaw/openclaw/issues/94730",
+      "module": "src/agents",
+      "priority": "P2",
+      "handoff_score": 72,
+      "reasons": [
+        "repro",
+        "tests_weak",
+        "narrow",
+        "commit_pattern"
+      ],
+      "file_refs": [],
+      "labels": [],
+      "updated_at": "2026-06-19T01:08:41Z",
+      "has_open_pr": false,
+      "excluded_reason": null,
+      "eligible": true
+    },
+    {
+      "number": 94295,
+      "title": "[Bug]: Native Codex suppresses root MEMORY.md when memory tools are available",
+      "url": "https://github.com/openclaw/openclaw/issues/94295",
+      "module": "extensions/codex",
+      "priority": "P2",
+      "handoff_score": 72,
+      "reasons": [
+        "repro",
+        "tests_weak",
+        "narrow",
+        "commit_pattern"
+      ],
+      "file_refs": [],
+      "labels": [],
+      "updated_at": "2026-06-18T22:45:03Z",
+      "has_open_pr": true,
+      "excluded_reason": "open PR #94353/#94339/#94299",
+      "eligible": false
+    },
+    {
+      "number": 79731,
+      "title": "[Bug]: Minimax OAuth issue",
+      "url": "https://github.com/openclaw/openclaw/issues/79731",
+      "module": "src/agents",
+      "priority": "P2",
+      "handoff_score": 72,
+      "reasons": [
+        "repro",
+        "tests_weak",
+        "narrow",
+        "commit_pattern"
+      ],
+      "file_refs": [],
+      "labels": [
+        "bug",
+        "stale",
+        "regression",
+        "P2",
+        "clawsweeper:source-repro",
+        "impact:auth-provider",
+        "issue-rating: 🦞 diamond lobster"
+      ],
+      "updated_at": "2026-06-18T20:16:38Z",
+      "has_open_pr": true,
+      "excluded_reason": "open PR #82587",
+      "eligible": false
+    },
+    {
+      "number": 79487,
+      "title": "Channel-reload race: deferred reload + gateway-tool `restart` double-spawn telegram channel → EADDRINUSE crash loop",
+      "url": "https://github.com/openclaw/openclaw/issues/79487",
+      "module": "extensions/telegram",
+      "priority": "P2",
+      "handoff_score": 72,
+      "reasons": [
+        "repro",
+        "tests_weak",
+        "narrow",
+        "commit_pattern"
+      ],
+      "file_refs": [],
+      "labels": [
+        "no-stale",
+        "P2",
+        "clawsweeper:fix-shape-clear",
+        "clawsweeper:queueable-fix",
+        "clawsweeper:source-repro",
+        "impact:crash-loop",
+        "issue-rating: 🦞 diamond lobster"
+      ],
+      "updated_at": "2026-06-18T20:10:59Z",
+      "has_open_pr": false,
+      "excluded_reason": null,
+      "eligible": true
+    },
+    {
+      "number": 79100,
+      "title": "gateway health/probe reject --port while gateway run accepts it",
+      "url": "https://github.com/openclaw/openclaw/issues/79100",
+      "module": "src/gateway",
+      "priority": "P2",
+      "handoff_score": 72,
+      "reasons": [
+        "repro",
+        "tests_weak",
+        "narrow",
+        "commit_pattern"
+      ],
+      "file_refs": [],
+      "labels": [
+        "no-stale",
+        "P2",
+        "clawsweeper:fix-shape-clear",
+        "clawsweeper:queueable-fix",
+        "clawsweeper:source-repro",
+        "issue-rating: 🦞 diamond lobster",
+        "impact:other"
+      ],
+      "updated_at": "2026-06-18T19:47:19Z",
+      "has_open_pr": false,
+      "excluded_reason": null,
+      "eligible": true
+    },
+    {
+      "number": 78431,
+      "title": "Discord: implement messages.statusReactions lifecycle (done emoji persistence) — currently Telegram-only despite docs",
+      "url": "https://github.com/openclaw/openclaw/issues/78431",
+      "module": "extensions/telegram",
+      "priority": "P2",
+      "handoff_score": 72,
+      "reasons": [
+        "repro",
+        "tests_weak",
+        "narrow",
+        "commit_pattern"
+      ],
+      "file_refs": [],
+      "labels": [
+        "no-stale",
+        "P2",
+        "clawsweeper:fix-shape-clear",
+        "clawsweeper:queueable-fix",
+        "clawsweeper:source-repro",
+        "issue-rating: 🦞 diamond lobster",
+        "impact:other"
+      ],
+      "updated_at": "2026-06-18T19:22:40Z",
+      "has_open_pr": false,
+      "excluded_reason": null,
+      "eligible": true
+    },
+    {
+      "number": 83778,
+      "title": "Cron jobs with tools enabled cause delivery failure and silent fallback to DM",
+      "url": "https://github.com/openclaw/openclaw/issues/83778",
+      "module": "extensions/whatsapp",
+      "priority": "P1",
+      "handoff_score": 70,
+      "reasons": [
+        "repro",
+        "tests_weak",
+        "narrow"
+      ],
+      "file_refs": [],
+      "labels": [
+        "P1",
+        "clawsweeper:source-repro",
+        "impact:message-loss",
+        "issue-rating: 🦞 diamond lobster"
+      ],
+      "updated_at": "2026-06-19T01:08:21Z",
+      "has_open_pr": false,
+      "excluded_reason": null,
+      "eligible": true
+    },
+    {
+      "number": 94691,
+      "title": "[Enhancement]: Slack provider lacks per-inbound INFO log for app_mention events — asymmetry with Telegram blocks silent-failure forensics",
+      "url": "https://github.com/openclaw/openclaw/issues/94691",
+      "module": "extensions/telegram",
+      "priority": "P3",
+      "handoff_score": 70,
+      "reasons": [
+        "repro",
+        "tests_weak",
+        "narrow",
+        "commit_pattern"
+      ],
+      "file_refs": [],
+      "labels": [
+        "no-stale",
+        "P3",
+        "clawsweeper:fix-shape-clear",
+        "clawsweeper:queueable-fix",
+        "clawsweeper:source-repro",
+        "issue-rating: 🦞 diamond lobster",
+        "impact:other"
+      ],
+      "updated_at": "2026-06-18T22:57:40Z",
+      "has_open_pr": false,
+      "excluded_reason": null,
+      "eligible": true
+    },
+    {
+      "number": 76729,
+      "title": "Feishu replies disappear from webchat after compaction rotation (buildSuccessorEntries drops assistant messages)",
+      "url": "https://github.com/openclaw/openclaw/issues/76729",
+      "module": "ui/",
+      "priority": "P1",
+      "handoff_score": 60,
+      "reasons": [
+        "tests_weak",
+        "narrow",
+        "commit_pattern"
+      ],
+      "file_refs": [],
+      "labels": [
+        "no-stale",
+        "P1",
+        "clawsweeper:fix-shape-clear",
+        "clawsweeper:queueable-fix",
+        "clawsweeper:source-repro",
+        "impact:session-state",
+        "impact:message-loss",
+        "issue-rating: 🦞 diamond lobster"
+      ],
+      "updated_at": "2026-06-19T00:33:17Z",
+      "has_open_pr": false,
+      "excluded_reason": null,
+      "eligible": true
+    }
+  ],
+  "handoff_selected": {
+    "schema": "openclaw-auto-triage:v1",
+    "run_id": "2026-06-19T01:10:34Z",
+    "snapshot_utc": "2026-06-19T01:10:34Z",
+    "source_repo": "openclaw/openclaw",
+    "fork_repo": "ly85206559/openclaw",
+    "status": "ready-to-fix",
+    "issue": 94730,
+    "url": "https://github.com/openclaw/openclaw/issues/94730",
+    "title": "doctor: copy-sensitive paths get re-wrapped by clack note box, splitting file extensions",
+    "priority_inferred": "P2",
+    "module": "packages/terminal-core",
+    "handoff_score": 95,
+    "handoff_rank": 1,
+    "blockers": [],
+    "has_open_pr": false,
+    "root_cause_files": [
+      "packages/terminal-core/src/note.ts",
+      "src/commands/doctor-session-locks.ts"
+    ],
+    "suggested_fix": "在 note() 调用 clackNote 前，对含 copy-sensitive token 的超宽行做二次保护：避免 @clack/prompts 在 box 内再次断行；优先扩展 wrapNoteMessage/isCopySensitiveToken 语义或改为自绘边框，使 session lock 等路径可整段复制。",
+    "suggested_tests": [
+      "pnpm test packages/terminal-core/src/table.test.ts",
+      "node scripts/run-vitest.mjs src/commands/doctor-session-locks.test.ts"
+    ],
+    "estimated_loc": 60,
+    "risk": "clack 版本升级可能改变 box 渲染行为；需在 80 列终端验证 doctor Session locks 面板；issue 无 ClawSweeper 标签，需确认非 maintainer-only 项。",
+    "automation_b_action": "fix-and-pr"
+  },
+  "watchlist": [
+    {
+      "rank": 6,
+      "number": 83584,
+      "title": "Outbound MEDIA directive on /v1/responses passed through as raw text",
+      "url": "https://github.com/openclaw/openclaw/issues/83584",
+      "reason": "P0 级 message-loss/security 影响，但已有 no-new-fix-pr 与多重 maintainer 阻塞标签"
+    },
+    {
+      "rank": 7,
+      "number": 81610,
+      "title": "Signal monitor deliverReplies bypasses message_sending hook",
+      "url": "https://github.com/openclaw/openclaw/issues/81610",
+      "reason": "Signal channel hook 绕过影响消息策略一致性，需 channel owner 评审"
+    },
+    {
+      "rank": 8,
+      "number": 80296,
+      "title": "agents.defaults.sandbox.mode is binary (all/none) — full bot outage when Docker unavailable",
+      "url": "https://github.com/openclaw/openclaw/issues/80296",
+      "reason": "sandbox 降级策略影响可用性，但更偏产品/配置 contract 决策"
+    }
+  ],
+  "latest_status": "ready-to-fix"
+}

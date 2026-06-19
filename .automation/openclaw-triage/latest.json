@@ -1,0 +1,29 @@
+{
+  "schema": "openclaw-auto-triage:v1",
+  "run_id": "2026-06-19T01:10:34Z",
+  "snapshot_utc": "2026-06-19T01:10:34Z",
+  "source_repo": "openclaw/openclaw",
+  "fork_repo": "ly85206559/openclaw",
+  "status": "ready-to-fix",
+  "issue": 94730,
+  "url": "https://github.com/openclaw/openclaw/issues/94730",
+  "title": "doctor: copy-sensitive paths get re-wrapped by clack note box, splitting file extensions",
+  "priority_inferred": "P2",
+  "module": "packages/terminal-core",
+  "handoff_score": 95,
+  "handoff_rank": 1,
+  "blockers": [],
+  "has_open_pr": false,
+  "root_cause_files": [
+    "packages/terminal-core/src/note.ts",
+    "src/commands/doctor-session-locks.ts"
+  ],
+  "suggested_fix": "在 note() 调用 clackNote 前，对含 copy-sensitive token 的超宽行做二次保护：避免 @clack/prompts 在 box 内再次断行；优先扩展 wrapNoteMessage/isCopySensitiveToken 语义或改为自绘边框，使 session lock 等路径可整段复制。",
+  "suggested_tests": [
+    "pnpm test packages/terminal-core/src/table.test.ts",
+    "node scripts/run-vitest.mjs src/commands/doctor-session-locks.test.ts"
+  ],
+  "estimated_loc": 60,
+  "risk": "clack 版本升级可能改变 box 渲染行为；需在 80 列终端验证 doctor Session locks 面板；issue 无 ClawSweeper 标签，需确认非 maintainer-only 项。",
+  "automation_b_action": "fix-and-pr"
+}
