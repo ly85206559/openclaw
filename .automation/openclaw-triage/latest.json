@@ -4,7 +4,7 @@
   "snapshot_utc": "2026-06-19T01:10:34Z",
   "source_repo": "openclaw/openclaw",
   "fork_repo": "ly85206559/openclaw",
-  "status": "ready-to-fix",
+  "status": "superseded",
   "issue": 94730,
   "url": "https://github.com/openclaw/openclaw/issues/94730",
   "title": "doctor: copy-sensitive paths get re-wrapped by clack note box, splitting file extensions",
@@ -13,7 +13,13 @@
   "handoff_score": 95,
   "handoff_rank": 1,
   "blockers": [],
-  "has_open_pr": false,
+  "has_open_pr": true,
+  "existing_pr_urls": [
+    "https://github.com/openclaw/openclaw/pull/94744",
+    "https://github.com/openclaw/openclaw/pull/94746"
+  ],
+  "automation_b_note": "Skipped: live gate found existing open upstream fix PRs for issue 94730 before code changes.",
+  "completed_utc": "2026-06-19T02:03:19Z",
   "root_cause_files": [
     "packages/terminal-core/src/note.ts",
     "src/commands/doctor-session-locks.ts"
