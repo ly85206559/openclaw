@@ -1,0 +1,245 @@
+{
+  "schema": "openclaw-auto-triage:v1-history",
+  "run_id": "2026-06-20T01:05:57Z",
+  "snapshot_utc": "2026-06-20T01:05:57Z",
+  "source_repo": "openclaw/openclaw",
+  "fork_repo": "ly85206559/openclaw",
+  "sample_pool_size": 551,
+  "commits_analyzed": 300,
+  "trend_analysis": {
+    "maintainer_hotspot_modules_top3": [
+      "src/agents",
+      "src/channels",
+      "core/other"
+    ],
+    "open_issue_hotspot_modules_top3": [
+      "src/agents",
+      "src/channels",
+      "core/other"
+    ],
+    "top_labels": [
+      [
+        "clawsweeper:no-new-fix-pr",
+        509
+      ],
+      [
+        "clawsweeper:needs-maintainer-review",
+        334
+      ],
+      [
+        "clawsweeper:needs-product-decision",
+        323
+      ],
+      [
+        "clawsweeper:source-repro",
+        315
+      ],
+      [
+        "issue-rating: 🦞 diamond lobster",
+        315
+      ],
+      [
+        "P2",
+        303
+      ],
+      [
+        "clawsweeper:linked-pr-open",
+        208
+      ],
+      [
+        "impact:session-state",
+        204
+      ],
+      [
+        "impact:message-loss",
+        172
+      ],
+      [
+        "P1",
+        162
+      ]
+    ],
+    "commit_types": {
+      "fix": 193,
+      "refactor": 63,
+      "test": 32,
+      "other": 12
+    },
+    "commit_modules_top5": [
+      [
+        "core/other",
+        155
+      ],
+      [
+        "ui",
+        32
+      ],
+      [
+        "src/cli",
+        19
+      ],
+      [
+        "src/gateway",
+        13
+      ],
+      [
+        "src/agents",
+        12
+      ]
+    ],
+    "fix_ratio": 64.3,
+    "notes": "近 300 commit 中 fix 占 64.3%；agents/ui/gateway 为 commit 与 issue 双热点；92% open issue 带 clawsweeper:no-new-fix-pr"
+  },
+  "priority_rank": [
+    {
+      "rank": 1,
+      "number": 91588,
+      "title": "Critical: Gateway Memory Leak — RSS grows from 350MB to 15.5GB over days, causing repeated OOM crashes",
+      "url": "https://github.com/openclaw/openclaw/issues/91588",
+      "priority_inferred": "P0",
+      "module": "src/gateway",
+      "maintainer_match": "高 — gateway 与 crash-loop 为近期 commit 热点",
+      "importance": "生产环境网关内存泄漏导致 OOM 循环重启，8GB 机器上 RSS 可达 15.5GB",
+      "suggested_fix": "排查 gateway 长生命周期状态累积（插件缓存、session 状态），考虑堆限制与周期性清理",
+      "risks": "clawsweeper:no-new-fix-pr、needs-product-decision；涉及第三方插件 claw-mem/claw-ctx；需 live 环境长期观测"
+    },
+    {
+      "rank": 2,
+      "number": 90378,
+      "title": "[Bug] Upgrading from 5.28 → 6.1: cron store migrated to SQLite silently, but new jobs default to delivery.mode=announce causing channel errors",
+      "url": "https://github.com/openclaw/openclaw/issues/90378",
+      "priority_inferred": "P0",
+      "module": "src/cron",
+      "maintainer_match": "高 — cron/SQLite 迁移为近期维护焦点",
+      "importance": "升级后 cron 任务静默丢失，delivery 默认值导致全量任务失败",
+      "suggested_fix": "补全 jobs.json→SQLite doctor 迁移路径；修正 cron add 默认 delivery.mode",
+      "risks": "linked-pr-open、needs-product-decision；兼容性敏感"
+    },
+    {
+      "rank": 3,
+      "number": 95141,
+      "title": "WebChat: a config-change gateway restart drops the in-flight turn",
+      "url": "https://github.com/openclaw/openclaw/issues/95141",
+      "priority_inferred": "P1",
+      "module": "ui",
+      "maintainer_match": "高 — session-state/message-loss 为近 7 天最高发 impact 标签",
+      "importance": "配置变更触发 gateway 重启时，WebChat 进行中对话静默丢失且无用户通知",
+      "suggested_fix": "检查 server-reload-handlers 的 deferGatewayRestartUntilIdle 为何未保护 embedded run；确保 transcript 持久化与 recovery 通知",
+      "risks": "改动可能跨 gateway/ui/agents 边界；需 WebChat E2E 验证；无 open PR 但复杂度高"
+    },
+    {
+      "rank": 4,
+      "number": 94686,
+      "title": "Critical Fleet Stability Issues — Multi-Agent Session Crashes",
+      "url": "https://github.com/openclaw/openclaw/issues/94686",
+      "priority_inferred": "P1",
+      "module": "src/agents",
+      "maintainer_match": "高 — agents 模块占 open issue 44%",
+      "importance": "多 agent 会话 thinking block 损坏、session 膨胀、cron 争用导致集群不稳定",
+      "suggested_fix": "分轨处理 thinking block 校验、session 压缩策略、cron 隔离",
+      "risks": "no-new-fix-pr、needs-live-repro、needs-product-decision；需 maintainer 决策"
+    },
+    {
+      "rank": 5,
+      "number": 91440,
+      "title": "[Bug] Dashboard Stop button can corrupt session files + agent permission isolation lacks guardrails",
+      "url": "https://github.com/openclaw/openclaw/issues/91440",
+      "priority_inferred": "P0",
+      "module": "ui",
+      "maintainer_match": "中 — ui/gateway 交叉问题",
+      "importance": "Dashboard Stop 可损坏 session 文件；agent 间无文件系统隔离",
+      "suggested_fix": "Stop 按钮增加 grace flush；exec 工具增加跨 agent 目录保护",
+      "risks": "needs-security-review、needs-live-repro、needs-product-decision；安全边界敏感"
+    }
+  ],
+  "handoff_rank": [
+    {
+      "rank": 1,
+      "number": 95145,
+      "score": 95,
+      "has_open_pr": false,
+      "note": "无修复 PR，根因明确，窄改动"
+    },
+    {
+      "rank": 2,
+      "number": 95141,
+      "score": 95,
+      "has_open_pr": false,
+      "note": "无关联 PR，但跨模块复杂"
+    },
+    {
+      "rank": 3,
+      "number": 78640,
+      "score": 95,
+      "has_open_pr": true,
+      "note": "已有 PR #95113 等"
+    },
+    {
+      "rank": 4,
+      "number": 90455,
+      "score": 95,
+      "has_open_pr": true,
+      "note": "已有 PR #94942"
+    },
+    {
+      "rank": 5,
+      "number": 94555,
+      "score": 90,
+      "has_open_pr": true,
+      "note": "已有 7+ open PR"
+    }
+  ],
+  "watchlist": [
+    {
+      "rank": 6,
+      "number": 89994,
+      "reason": "P0 edit 工具 fuzzy 匹配导致全文件静默改写，已有 linked PR 但数据损坏风险极高"
+    },
+    {
+      "rank": 7,
+      "number": 88838,
+      "reason": "P1 session/transcript SQLite 迁移协调 issue，maintainer 跟踪中，非窄修复"
+    },
+    {
+      "rank": 8,
+      "number": 94661,
+      "reason": "P2 Wizard RPC 非终端客户端 parity，需 security/product 决策"
+    }
+  ],
+  "latest_handoff": {
+    "schema": "openclaw-auto-triage:v1",
+    "run_id": "2026-06-20T01:05:57Z",
+    "snapshot_utc": "2026-06-20T01:05:57Z",
+    "source_repo": "openclaw/openclaw",
+    "fork_repo": "ly85206559/openclaw",
+    "status": "ready-to-fix",
+    "issue": 95145,
+    "url": "https://github.com/openclaw/openclaw/issues/95145",
+    "title": "Bug: Darwin kernel version 25.x incorrectly mapped to macOS 15.x (should be macOS 26 / Tahoe)",
+    "priority_inferred": "P2",
+    "module": "src/agents",
+    "handoff_score": 95,
+    "handoff_rank": 1,
+    "blockers": [],
+    "has_open_pr": false,
+    "root_cause_files": [
+      "src/agents/embedded-agent-runner/run/attempt.ts",
+      "src/agents/embedded-agent-runner/compact.ts",
+      "src/agents/cli-runner/helpers.ts",
+      "src/infra/os-summary.ts"
+    ],
+    "suggested_fix": "复用 src/infra/os-summary.ts 中 sw_vers 逻辑，将 agent runtime prompt 元数据路径中的 os.type()+os.release() 替换为 macOS 产品版本字符串，避免 Tahoe 主机向 agent 上下文暴露 Darwin 25.x 内核版本。",
+    "suggested_tests": [
+      "node scripts/run-vitest.mjs src/infra/os-summary.test.ts",
+      "node scripts/run-vitest.mjs src/agents/cli-runner/helpers.system-prompt.test.ts"
+    ],
+    "estimated_loc": 60,
+    "risk": "报告未指明具体 UI 展示面；status/presence 已用 sw_vers，修复应聚焦 agent prompt 路径。无 macOS 26 live 验证环境，但 ClawSweeper 源码审查已确认复现路径。",
+    "automation_b_action": "fix-and-pr"
+  },
+  "github_snapshot": {
+    "issues_sample_method": "GraphQL issues(states:OPEN) 500 + 7d created supplement",
+    "commits_method": "REST repos/openclaw/openclaw/commits?sha=main limit 300",
+    "rate_limit_note": "PR 搜索在运行末期触发 403 rate limit；#95145 在 rate limit 前已确认 0 关联 PR"
+  }
+}
