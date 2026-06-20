@@ -1,28 +1,33 @@
 {
   "schema": "openclaw-auto-triage:v1",
-  "run_id": "2026-06-20T09:44:29Z",
-  "snapshot_utc": "2026-06-20T09:44:29Z",
+  "run_id": "2026-06-20T09:52:11.009Z",
+  "snapshot_utc": "2026-06-20T09:52:11.009Z",
   "source_repo": "openclaw/openclaw",
   "fork_repo": "ly85206559/openclaw",
   "status": "ready-to-fix",
-  "issue": 80582,
-  "url": "https://github.com/openclaw/openclaw/issues/80582",
-  "title": "Memory: skip markdown placeholder snippets during short-term promotion",
+  "issue": 93507,
+  "url": "https://github.com/openclaw/openclaw/issues/93507",
+  "title": "[Feature]: Allow selecting cron job models and clearly displaying them in the Web UI",
   "priority_inferred": "P2",
-  "module": "extensions/memory-core",
-  "handoff_score": 100,
+  "module": "ui",
+  "handoff_score": 95,
   "handoff_rank": 1,
   "blockers": [],
   "has_open_pr": false,
   "root_cause_files": [
-    "extensions/memory-core/src/short-term-promotion.ts",
-    "extensions/memory-core/src/short-term-promotion.test.ts"
+    "ui/src/ui/views/cron-quick-create.ts",
+    "ui/src/ui/views/cron.ts",
+    "ui/src/ui/controllers/cron.ts",
+    "ui/src/ui/views/cron-quick-create.node.test.ts",
+    "ui/src/ui/views/cron.test.ts",
+    "ui/src/ui/controllers/cron.test.ts"
   ],
-  "suggested_fix": "在 short-term promotion 路径新增 isMarkdownPlaceholderLine / isPlaceholderShortTermSnippet，与现有 isContaminatedDreamingSnippet 合并为 isUnpromotableShortTermSnippet，并在 recordShortTermRecalls、recordGroundedShortTermCandidates、rank/apply 与 substring relocation 入口统一过滤 bare `-` 等 markdown 占位符。",
+  "suggested_fix": "复用现有 cron payloadModel / payload.model 契约，在 quick-create Web UI 中增加模型选择输入；创建时把 draft model 映射到 CronFormState.payloadModel，并在 cron list/detail 中显示已配置模型或 default 标签。不要改 cron runtime 或新增配置面。",
   "suggested_tests": [
-    "node scripts/run-vitest.mjs extensions/memory-core/src/short-term-promotion.test.ts"
+    "node scripts/run-vitest.mjs ui/src/ui/views/cron-quick-create.node.test.ts ui/src/ui/views/cron.test.ts ui/src/ui/controllers/cron.test.ts",
+    "git diff --check"
   ],
-  "estimated_loc": 80,
-  "risk": "issue 带 stale 标签但无阻塞标签；需确认 substring relocation 收紧后不会误伤合法短 snippet。无 open PR，但 memory promotion 行为变更需回归 dreaming/grounded 相邻测试。",
+  "estimated_loc": 160,
+  "risk": "这是 UI feature/ergonomics 修复，不是 crash/data-loss bug；主要风险是默认模型标签展示细节（仅显示 default 还是 resolved default）和 closed unmerged PR #93523 的旧实现不能直接信任。需要聚焦 current main，并保持 payloadModel 既有契约。",
   "automation_b_action": "fix-and-pr"
 }

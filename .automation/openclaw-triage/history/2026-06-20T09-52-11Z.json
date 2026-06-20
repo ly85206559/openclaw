@@ -1,0 +1,304 @@
+{
+  "schema": "openclaw-auto-triage-history:v1",
+  "run_id": "2026-06-20T09:52:11.009Z",
+  "snapshot_utc": "2026-06-20T09:52:11.009Z",
+  "snapshot_utc_safe": "2026-06-20T09-52-11Z",
+  "source_repo": "openclaw/openclaw",
+  "fork_repo": "ly85206559/openclaw",
+  "origin_main_sha": "d72f7edf2d60cf74f2f1d8da1a9c33d261562690",
+  "data_scope": {
+    "issues": "仅分析 open issue；样本池为最近 7 天新建/更新 open issue 与按更新时间排序最近 500 个 open issue 的并集，去重。",
+    "open_issue_sample_size": 600,
+    "recent_updated_limit_returned": 500,
+    "recent_created_limit_returned": 200,
+    "commits": "origin/main 最近 300 个 commit，按实质 changed paths 分类。"
+  },
+  "statistics_summary": {
+    "issue_module_counts": {
+      "src/gateway": 192,
+      "extensions/telegram": 133,
+      "src/agents": 94,
+      "memory": 82,
+      "extensions/discord": 44,
+      "extensions/whatsapp": 16,
+      "src/commands": 14,
+      "ui": 8
+    },
+    "issue_module_top3": [
+      {
+        "module": "src/gateway",
+        "count": 192,
+        "ratio": 0.32
+      },
+      {
+        "module": "extensions/telegram",
+        "count": 133,
+        "ratio": 0.2217
+      },
+      {
+        "module": "src/agents",
+        "count": 94,
+        "ratio": 0.1567
+      }
+    ],
+    "commit_type_counts_latest_300": {
+      "fix": 199,
+      "refactor": 60,
+      "test": 32,
+      "other": 9,
+      "merge": 0
+    },
+    "commit_type_ratio_latest_300": {
+      "fix": 0.6633,
+      "refactor": 0.2,
+      "test": 0.1067,
+      "other": 0.03,
+      "merge": 0
+    },
+    "commit_module_counts_latest_300": {
+      "core/other": 151,
+      "extensions/other": 95,
+      "src/agents": 13,
+      "packages/": 10,
+      "docs/": 9,
+      "src/gateway": 7,
+      "src/commands": 6,
+      "ui": 4
+    },
+    "maintainer_hot_modules_top3": [
+      {
+        "module": "core/other",
+        "evidence": "近 300 commit 中 151 个主归类到 core/other，shared/runtime/cache/QA surface 的 fix/refactor 密集。"
+      },
+      {
+        "module": "extensions/other",
+        "evidence": "近 300 commit 中 95 个落在 extensions/*，provider/channel/plugin 修复持续活跃。"
+      },
+      {
+        "module": "src/agents",
+        "evidence": "open issue 94 个且 commit 中仍有 13 个直接触及 agents；session/subagent/runtime prompt/context 仍是维护者高频关注面。"
+      }
+    ],
+    "maintainer_attention": [
+      "fix 类 commit 占 66.3%，近期主线仍以缺陷修复为主。",
+      "open issue 高发集中在 src/gateway、extensions/telegram、src/agents；impact:session-state、impact:message-loss、clawsweeper:no-new-fix-pr 高密度出现。",
+      "大量高影响 issue 已被 no-new-fix-pr、needs-product-decision/security 或 open PR 阻塞，自动 handoff 池明显收缩。"
+    ]
+  },
+  "priority_rank": [
+    {
+      "rank": 1,
+      "issue": 91588,
+      "title": "Critical: Gateway Memory Leak — RSS grows from 350MB to 15.5GB over days, causing repeated OOM crashes",
+      "url": "https://github.com/openclaw/openclaw/issues/91588",
+      "priority_inferred": "P0",
+      "module": "memory / src/gateway",
+      "maintainer_match": "高：gateway/session-state/crash-loop 与近期修复热点重合。",
+      "why_important": "生产网关 RSS 可增长到 15.5GB 并 OOM 重启，直接造成 message loss 与 session-state 风险。",
+      "suggested_entry": "复核 session/cache/embedding memory retention 路径，与 #88147/#55334 族群分离；优先定位可界定的长生命周期 cache 或 store hydration。",
+      "risk": "clawsweeper:no-new-fix-pr、needs-product-decision；需要长时间 live/heap proof，不适合作为本轮窄 handoff。"
+    },
+    {
+      "rank": 2,
+      "issue": 95248,
+      "title": "OpenClaw release_lane is a no-op when claim is held by a live worker; stuck Telegram inbound events block agent response until gateway restart",
+      "url": "https://github.com/openclaw/openclaw/issues/95248",
+      "priority_inferred": "P1",
+      "module": "extensions/telegram / src/gateway",
+      "maintainer_match": "高：Telegram、gateway lane、message-loss 是本轮 open issue 高发组合。",
+      "why_important": "Telegram inbound 被 live worker claim 卡住后，用户响应阻塞直到 gateway restart。",
+      "suggested_entry": "调查 release_lane 对 live worker claim 的语义，确认是否需要 gateway lane owner 可取消/转移 claim。",
+      "risk": "no-new-fix-pr、needs-product-decision；涉及 live lane 语义和 Telegram 行为，不能自动窄修。"
+    },
+    {
+      "rank": 3,
+      "issue": 89254,
+      "title": "Matrix channel: inbound DMs intermittently not dispatched to agent; no reply delivery; cross-user verification cannot complete (E2EE, self-hosted homeserver)",
+      "url": "https://github.com/openclaw/openclaw/issues/89254",
+      "priority_inferred": "P1",
+      "module": "src/gateway / channels",
+      "maintainer_match": "中高：gateway/message-loss 是热点，但 Matrix/E2EE 依赖外部环境。",
+      "why_important": "DM inbound 不 dispatch 造成无回复，影响 channel 可靠性和验证闭环。",
+      "suggested_entry": "比对 Matrix inbound event 解密、dispatch queue 和 delivery ack 路径，先确定是否卡在 E2EE 解密还是 gateway dispatch。",
+      "risk": "needs-product-decision、needs-security-review、no-new-fix-pr；需要 self-hosted homeserver/E2EE live repro。"
+    },
+    {
+      "rank": 4,
+      "issue": 88562,
+      "title": "[Bug]: models.json generator writes apiKey as plain string instead of secret-ref object",
+      "url": "https://github.com/openclaw/openclaw/issues/88562",
+      "priority_inferred": "P1",
+      "module": "src/agents / auth-provider",
+      "maintainer_match": "高：auth/provider/config/secret-ref 近期维护敏感度高。",
+      "why_important": "模型配置生成把 apiKey 写成明文 string 会破坏 SecretRef 契约并引入安全风险。",
+      "suggested_entry": "审计 models.json generator 与 doctor migration/secret-ref schema，确认 shipped 配置迁移边界。",
+      "risk": "needs-security-review、needs-product-decision、no-new-fix-pr；不能由自动修复直接推进。"
+    },
+    {
+      "rank": 5,
+      "issue": 89425,
+      "title": "[Bug]: Missing extensions/speech-core/ in npm tarball (v2026.5.28)",
+      "url": "https://github.com/openclaw/openclaw/issues/89425",
+      "priority_inferred": "P1",
+      "module": "extensions / packaging",
+      "maintainer_match": "中：extensions 变更高发，packaging/release 但通常需发布流程确认。",
+      "why_important": "npm 包缺少 bundled public surface，会导致插件 runtime-api resolve 失败。",
+      "suggested_entry": "检查 package include/exclude、bundled extension manifest 和 publish artifact 验证。",
+      "risk": "linked-pr-open、needs-product-decision、release/package 流程敏感；不进 handoff。"
+    }
+  ],
+  "handoff_rank": [
+    {
+      "rank": 1,
+      "issue": 93507,
+      "title": "[Feature]: Allow selecting cron job models and clearly displaying them in the Web UI",
+      "url": "https://github.com/openclaw/openclaw/issues/93507",
+      "module": "ui",
+      "handoff_score": 95,
+      "status": "selected_ready_to_fix",
+      "has_open_pr": false,
+      "scoring": {
+        "root_cause_files_clear": 20,
+        "estimated_loc_under_200": 20,
+        "clear_repro_or_source_evidence": 15,
+        "adjacent_tests_available": 15,
+        "no_blocking_labels": 15,
+        "no_open_pr": 10,
+        "same_pattern_recent_fix": 0
+      },
+      "root_cause_files": [
+        "ui/src/ui/views/cron-quick-create.ts",
+        "ui/src/ui/views/cron.ts",
+        "ui/src/ui/controllers/cron.ts",
+        "ui/src/ui/views/cron-quick-create.node.test.ts",
+        "ui/src/ui/views/cron.test.ts",
+        "ui/src/ui/controllers/cron.test.ts"
+      ],
+      "suggested_fix": "复用现有 cron payloadModel / payload.model 契约，在 quick-create Web UI 中增加模型选择输入；创建时把 draft model 映射到 CronFormState.payloadModel，并在 cron list/detail 中显示已配置模型或 default 标签。不要改 cron runtime 或新增配置面。",
+      "suggested_tests": [
+        "node scripts/run-vitest.mjs ui/src/ui/views/cron-quick-create.node.test.ts ui/src/ui/views/cron.test.ts ui/src/ui/controllers/cron.test.ts",
+        "git diff --check"
+      ],
+      "estimated_loc": 160,
+      "risk": "这是 UI feature/ergonomics 修复，不是 crash/data-loss bug；主要风险是默认模型标签展示细节（仅显示 default 还是 resolved default）和 closed unmerged PR #93523 的旧实现不能直接信任。需要聚焦 current main，并保持 payloadModel 既有契约。"
+    },
+    {
+      "rank": 2,
+      "issue": 92582,
+      "title": "Bug: doctor falsely warns local memory embeddings are not ready",
+      "url": "https://github.com/openclaw/openclaw/issues/92582",
+      "handoff_score": 85,
+      "status": "excluded_has_open_pr",
+      "open_prs": [
+        95067,
+        95091,
+        95177
+      ],
+      "reason": "根因清楚但已有 3 个 open PR；应 repair/补 proof 现有 PR，不新开 handoff。"
+    },
+    {
+      "rank": 3,
+      "issue": 94555,
+      "title": "Bug: openclaw workboard list CLI does not filter archived cards",
+      "url": "https://github.com/openclaw/openclaw/issues/94555",
+      "handoff_score": 85,
+      "status": "excluded_has_open_pr",
+      "open_prs": [
+        94562,
+        94865,
+        94900,
+        95125
+      ],
+      "reason": "CLI/API 不一致很适合修，但已有 4 个 open PR；不应创建第五个。"
+    },
+    {
+      "rank": 4,
+      "issue": 95145,
+      "title": "Bug: Darwin kernel version 25.x incorrectly mapped to macOS 15.x",
+      "url": "https://github.com/openclaw/openclaw/issues/95145",
+      "handoff_score": 80,
+      "status": "excluded_has_open_pr",
+      "open_prs": [
+        95158,
+        95189,
+        95194,
+        95195,
+        95216,
+        95225,
+        95234,
+        95290
+      ],
+      "reason": "已有多条重复 open PR，当前主要缺真实 Tahoe proof 与 canonical PR 选择。"
+    },
+    {
+      "rank": 5,
+      "issue": 93383,
+      "title": "Stale .jsonl.lock + stuck typing indicator after EmbeddedAttemptSessionTakeoverError on parallel subagent fan-out",
+      "url": "https://github.com/openclaw/openclaw/issues/93383",
+      "handoff_score": 55,
+      "status": "excluded_complex_live_runtime",
+      "reason": "无 open PR 但包含 4 个 root-cause 子问题、Telegram/cron/subagent live race 与数据丢失风险，预估 >200 LOC。"
+    }
+  ],
+  "watchlist": [
+    {
+      "rank": 6,
+      "issue": 89223,
+      "title": "SecretRef file provider broken on Windows 11 26200",
+      "url": "https://github.com/openclaw/openclaw/issues/89223",
+      "note": "P1/security/auth-provider，但 needs-security-review + product decision，不适合自动修。"
+    },
+    {
+      "rank": 7,
+      "issue": 88707,
+      "title": "Bedrock provider registration regression after pi-ai removal",
+      "url": "https://github.com/openclaw/openclaw/issues/88707",
+      "note": "P1 auth-provider regression，影响面大；需维护者确认 provider routing/legacy contract。"
+    },
+    {
+      "rank": 8,
+      "issue": 86215,
+      "title": "Codex OAuth refresh failures can wedge an agent for hours",
+      "url": "https://github.com/openclaw/openclaw/issues/86215",
+      "note": "session/message-loss 风险高，但 OAuth/provider rotation 属产品与安全边界。"
+    }
+  ],
+  "latest_status": "ready-to-fix",
+  "latest_payload": {
+    "schema": "openclaw-auto-triage:v1",
+    "run_id": "2026-06-20T09:52:11.009Z",
+    "snapshot_utc": "2026-06-20T09:52:11.009Z",
+    "source_repo": "openclaw/openclaw",
+    "fork_repo": "ly85206559/openclaw",
+    "status": "ready-to-fix",
+    "issue": 93507,
+    "url": "https://github.com/openclaw/openclaw/issues/93507",
+    "title": "[Feature]: Allow selecting cron job models and clearly displaying them in the Web UI",
+    "priority_inferred": "P2",
+    "module": "ui",
+    "handoff_score": 95,
+    "handoff_rank": 1,
+    "blockers": [],
+    "has_open_pr": false,
+    "root_cause_files": [
+      "ui/src/ui/views/cron-quick-create.ts",
+      "ui/src/ui/views/cron.ts",
+      "ui/src/ui/controllers/cron.ts",
+      "ui/src/ui/views/cron-quick-create.node.test.ts",
+      "ui/src/ui/views/cron.test.ts",
+      "ui/src/ui/controllers/cron.test.ts"
+    ],
+    "suggested_fix": "复用现有 cron payloadModel / payload.model 契约，在 quick-create Web UI 中增加模型选择输入；创建时把 draft model 映射到 CronFormState.payloadModel，并在 cron list/detail 中显示已配置模型或 default 标签。不要改 cron runtime 或新增配置面。",
+    "suggested_tests": [
+      "node scripts/run-vitest.mjs ui/src/ui/views/cron-quick-create.node.test.ts ui/src/ui/views/cron.test.ts ui/src/ui/controllers/cron.test.ts",
+      "git diff --check"
+    ],
+    "estimated_loc": 160,
+    "risk": "这是 UI feature/ergonomics 修复，不是 crash/data-loss bug；主要风险是默认模型标签展示细节（仅显示 default 还是 resolved default）和 closed unmerged PR #93523 的旧实现不能直接信任。需要聚焦 current main，并保持 payloadModel 既有契约。",
+    "automation_b_action": "fix-and-pr"
+  },
+  "report_cn": {
+    "summary": "本轮样本 600 个 open issue；open issue 高发模块为 src/gateway、extensions/telegram、src/agents。近 300 commit 中 fix 199 个，占 66.3%。大多数高影响 issue 已被 no-new-fix-pr、needs-product-decision/security 或 open PR 阻塞。本轮选择 #93507 作为唯一 ready-to-fix handoff，因为它无 open PR、无阻塞标签、复用现有 cron payloadModel 契约，且可用 focused UI 单测验证。",
+    "fork_write_intent": "写入 fork 分支 automation/handoff 的 latest.json 和 history JSON；不向 upstream push。"
+  }
+}
