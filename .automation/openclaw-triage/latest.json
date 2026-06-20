@@ -1,31 +1,28 @@
 {
   "schema": "openclaw-auto-triage:v1",
-  "run_id": "2026-06-20T01:05:57Z",
-  "snapshot_utc": "2026-06-20T01:05:57Z",
+  "run_id": "2026-06-20T09:44:29Z",
+  "snapshot_utc": "2026-06-20T09:44:29Z",
   "source_repo": "openclaw/openclaw",
   "fork_repo": "ly85206559/openclaw",
   "status": "ready-to-fix",
-  "issue": 95145,
-  "url": "https://github.com/openclaw/openclaw/issues/95145",
-  "title": "Bug: Darwin kernel version 25.x incorrectly mapped to macOS 15.x (should be macOS 26 / Tahoe)",
+  "issue": 80582,
+  "url": "https://github.com/openclaw/openclaw/issues/80582",
+  "title": "Memory: skip markdown placeholder snippets during short-term promotion",
   "priority_inferred": "P2",
-  "module": "src/agents",
-  "handoff_score": 95,
+  "module": "extensions/memory-core",
+  "handoff_score": 100,
   "handoff_rank": 1,
   "blockers": [],
   "has_open_pr": false,
   "root_cause_files": [
-    "src/agents/embedded-agent-runner/run/attempt.ts",
-    "src/agents/embedded-agent-runner/compact.ts",
-    "src/agents/cli-runner/helpers.ts",
-    "src/infra/os-summary.ts"
+    "extensions/memory-core/src/short-term-promotion.ts",
+    "extensions/memory-core/src/short-term-promotion.test.ts"
   ],
-  "suggested_fix": "复用 src/infra/os-summary.ts 中 sw_vers 逻辑，将 agent runtime prompt 元数据路径中的 os.type()+os.release() 替换为 macOS 产品版本字符串，避免 Tahoe 主机向 agent 上下文暴露 Darwin 25.x 内核版本。",
+  "suggested_fix": "在 short-term promotion 路径新增 isMarkdownPlaceholderLine / isPlaceholderShortTermSnippet，与现有 isContaminatedDreamingSnippet 合并为 isUnpromotableShortTermSnippet，并在 recordShortTermRecalls、recordGroundedShortTermCandidates、rank/apply 与 substring relocation 入口统一过滤 bare `-` 等 markdown 占位符。",
   "suggested_tests": [
-    "node scripts/run-vitest.mjs src/infra/os-summary.test.ts",
-    "node scripts/run-vitest.mjs src/agents/cli-runner/helpers.system-prompt.test.ts"
+    "node scripts/run-vitest.mjs extensions/memory-core/src/short-term-promotion.test.ts"
   ],
-  "estimated_loc": 60,
-  "risk": "报告未指明具体 UI 展示面；status/presence 已用 sw_vers，修复应聚焦 agent prompt 路径。无 macOS 26 live 验证环境，但 ClawSweeper 源码审查已确认复现路径。",
+  "estimated_loc": 80,
+  "risk": "issue 带 stale 标签但无阻塞标签；需确认 substring relocation 收紧后不会误伤合法短 snippet。无 open PR，但 memory promotion 行为变更需回归 dreaming/grounded 相邻测试。",
   "automation_b_action": "fix-and-pr"
 }

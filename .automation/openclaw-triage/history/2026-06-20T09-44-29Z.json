@@ -1,0 +1,465 @@
+{
+  "schema": "openclaw-auto-triage-history:v1",
+  "run_id": "2026-06-20T09:44:29Z",
+  "snapshot_utc": "2026-06-20T09:44:29Z",
+  "source_repo": "openclaw/openclaw",
+  "fork_repo": "ly85206559/openclaw",
+  "status": "ready-to-fix",
+  "data_snapshot": {
+    "open_issue_sample_size": 500,
+    "recent_7d_union_size": 500,
+    "deep_scan_pages": 15,
+    "deep_scan_eligible_count": 4,
+    "upstream_open_issues_total": 3275,
+    "commits_analyzed": 300
+  },
+  "trends": {
+    "maintainer_hotspot_top3": [
+      {
+        "module": "src/agents",
+        "reason": "近 7 天关闭 issue 与 main fix commit 中 agent/session 类变更最集中"
+      },
+      {
+        "module": "src/gateway",
+        "reason": "gateway/cron/exec 审批与 channel ingress 修复活跃"
+      },
+      {
+        "module": "extensions/discord",
+        "reason": "channel 传输层与 ws 兼容 fix 持续合入"
+      }
+    ],
+    "open_issue_hotspot_top3": [
+      {
+        "module": "src/agents",
+        "count": 144,
+        "pct": 28.8
+      },
+      {
+        "module": "src/gateway",
+        "count": 137,
+        "pct": 27.4
+      },
+      {
+        "module": "core/other",
+        "count": 83,
+        "pct": 16.6
+      }
+    ],
+    "commit_module_top5": [
+      {
+        "module": "core/other",
+        "count": 250
+      },
+      {
+        "module": "src/gateway",
+        "count": 18
+      },
+      {
+        "module": "src/agents",
+        "count": 8
+      },
+      {
+        "module": "extensions/discord",
+        "count": 8
+      },
+      {
+        "module": "extensions/memory-wiki",
+        "count": 5
+      }
+    ],
+    "commit_type_ratio": {
+      "fix": {
+        "count": 201,
+        "pct": 67.0
+      },
+      "chore": {
+        "count": 15,
+        "pct": 5.0
+      },
+      "test": {
+        "count": 32,
+        "pct": 10.7
+      },
+      "refactor": {
+        "count": 44,
+        "pct": 14.7
+      },
+      "other": {
+        "count": 3,
+        "pct": 1.0
+      },
+      "feat": {
+        "count": 3,
+        "pct": 1.0
+      },
+      "docs": {
+        "count": 2,
+        "pct": 0.7
+      }
+    },
+    "top_labels_sample_500": [
+      [
+        "clawsweeper:no-new-fix-pr",
+        489
+      ],
+      [
+        "clawsweeper:needs-product-decision",
+        337
+      ],
+      [
+        "clawsweeper:needs-maintainer-review",
+        328
+      ],
+      [
+        "P2",
+        276
+      ],
+      [
+        "clawsweeper:source-repro",
+        261
+      ],
+      [
+        "issue-rating: 🦞 diamond lobster",
+        261
+      ],
+      [
+        "impact:session-state",
+        202
+      ],
+      [
+        "clawsweeper:linked-pr-open",
+        186
+      ],
+      [
+        "impact:message-loss",
+        178
+      ],
+      [
+        "P1",
+        171
+      ],
+      [
+        "clawsweeper:needs-live-repro",
+        152
+      ],
+      [
+        "issue-rating: 🐚 platinum hermit",
+        152
+      ]
+    ],
+    "notes": "样本 500 条最新 open issue（GraphQL，排除 PR）中 489 条带 clawsweeper:no-new-fix-pr；深度扫描 1500 条仅 4 条满足 handoff 硬条件。"
+  },
+  "priority_rank": [
+    {
+      "rank": 1,
+      "number": 88312,
+      "title": "[Bug]: [Regression] 2026.5.27: Codex app-server turn-completion stall returns (\"Codex stopped before confirming the turn was complete\") — regression of #84076 (fixed by #85107)",
+      "url": "https://github.com/openclaw/openclaw/issues/88312",
+      "priority_inferred": "P1",
+      "priority_reason": "ClawSweeper/影响标签 + 评论/时效，综合分 105",
+      "module": "extensions/codex",
+      "maintainer_match": "中",
+      "importance": "[Bug]: [Regression] 2026.5.27: Codex app-server turn-completion stall returns (\"Codex stopped before confirming the turn was complete\") — regression of #84076 (fixed by #85107)",
+      "investigation": "### Bug type\n\nRegression (worked before, now fails)\n\n### Beta release blocker\n\nNo\n\n### Summary\n\nOn the Codex app-server (ChatGPT Plus sub), a multi-tool agent turn reliably fails with Codex stopped before confirming the turn was complete starting in ",
+      "risks": [
+        "clawsweeper:no-new-fix-pr",
+        "clawsweeper:needs-maintainer-review",
+        "clawsweeper:needs-product-decision",
+        "clawsweeper:needs-live-repro"
+      ],
+      "has_open_pr": false,
+      "open_prs": [],
+      "labels": [
+        "bug",
+        "regression",
+        "P1",
+        "clawsweeper:no-new-fix-pr",
+        "clawsweeper:needs-maintainer-review",
+        "clawsweeper:needs-product-decision",
+        "clawsweeper:needs-live-repro",
+        "impact:session-state",
+        "impact:message-loss",
+        "issue-rating: 🐚 platinum hermit"
+      ]
+    },
+    {
+      "rank": 2,
+      "number": 84882,
+      "title": "[Bug]: memory-core Dreaming `normalized recall artifacts` silently deletes daily memory files (memory/YYYY-MM-DD.md)",
+      "url": "https://github.com/openclaw/openclaw/issues/84882",
+      "priority_inferred": "P0",
+      "priority_reason": "ClawSweeper/影响标签 + 评论/时效，综合分 102",
+      "module": "extensions/memory-wiki",
+      "maintainer_match": "低",
+      "importance": "[Bug]: memory-core Dreaming `normalized recall artifacts` silently deletes daily memory files (memory/YYYY-MM-DD.md)",
+      "investigation": "# [Bug]: memory-core Dreaming `normalized recall artifacts` silently deletes daily memory files (memory/YYYY-MM-DD.md)\n\n## Bug type\nBehavior bug (silent data loss)\n\n## Summary\nThe `memory-core` Dreaming pipeline step `normalized recall artifacts befo",
+      "risks": [
+        "已有 open PR",
+        "clawsweeper:no-new-fix-pr",
+        "clawsweeper:needs-maintainer-review",
+        "clawsweeper:linked-pr-open",
+        "clawsweeper:needs-info"
+      ],
+      "has_open_pr": true,
+      "open_prs": [
+        {
+          "number": 87247,
+          "draft": false,
+          "title": "docs: clarify LanceDB dreaming settings vs vector-native plugins"
+        },
+        {
+          "number": 94537,
+          "draft": false,
+          "title": "fix(memory-core): harden dreaming daily-file writes and drain dangling recall refs"
+        },
+        {
+          "number": 94625,
+          "draft": false,
+          "title": "investigate(memory-core): root-cause for #84882 dreaming silent daily-file deletion"
+        }
+      ],
+      "labels": [
+        "clawsweeper:no-new-fix-pr",
+        "clawsweeper:fix-shape-clear",
+        "clawsweeper:needs-maintainer-review",
+        "clawsweeper:linked-pr-open",
+        "clawsweeper:needs-info",
+        "impact:session-state",
+        "impact:data-loss",
+        "P0",
+        "issue-rating: 🦐 gold shrimp"
+      ]
+    },
+    {
+      "rank": 3,
+      "number": 93556,
+      "title": "Bug: openclaw-weixin startAccount ???,?????????? session",
+      "url": "https://github.com/openclaw/openclaw/issues/93556",
+      "priority_inferred": "P1",
+      "priority_reason": "ClawSweeper/影响标签 + 评论/时效，综合分 101",
+      "module": "src/gateway",
+      "maintainer_match": "中",
+      "importance": "Bug: openclaw-weixin startAccount ???,?????????? session",
+      "investigation": "## ??\n\n| ?? | ?? |\n|------|------|\n| **OpenClaw ??** | 2026.4.2 (d74a122) |\n| **????** | Windows 11 (22621) x64 |\n| **??** | @tencent-weixin/openclaw-weixin@2.1.8 |\n| **Runtime** | Node v22.19.0 |\n\n## ????\n\n1. ? ????????,clabot ????????\n2. ? ??? clab",
+      "risks": [
+        "已有 open PR"
+      ],
+      "has_open_pr": true,
+      "open_prs": [
+        {
+          "number": 93686,
+          "draft": false,
+          "title": "Bug: openclaw-weixin startAccount ???,?????????? session"
+        }
+      ],
+      "labels": [
+        "P1",
+        "clawsweeper:source-repro",
+        "impact:message-loss",
+        "issue-rating: 🦞 diamond lobster"
+      ]
+    },
+    {
+      "rank": 4,
+      "number": 87711,
+      "title": "[Bug]: Empty assistant delivery (footer-only, \"— out\" usage) on first turn after /new on Telegram-routed topic lane — 2026.5.27",
+      "url": "https://github.com/openclaw/openclaw/issues/87711",
+      "priority_inferred": "P1",
+      "priority_reason": "ClawSweeper/影响标签 + 评论/时效，综合分 101",
+      "module": "extensions/telegram",
+      "maintainer_match": "中",
+      "importance": "[Bug]: Empty assistant delivery (footer-only, \"— out\" usage) on first turn after /new on Telegram-routed topic lane — 2026.5.27",
+      "investigation": "## Environment\n\n- **OpenClaw**: 2026.5.27\n- **Backend**: gateway with `api: \"openai-responses\"` transport (per session record `api` field)\n- **Channel**: Telegram (group + forum topic routing)\n- **Agent**: single `agents.list[main]`, model `claude-op",
+      "risks": [
+        "clawsweeper:no-new-fix-pr",
+        "clawsweeper:needs-maintainer-review",
+        "clawsweeper:needs-product-decision",
+        "clawsweeper:needs-live-repro"
+      ],
+      "has_open_pr": false,
+      "open_prs": [],
+      "labels": [
+        "P1",
+        "clawsweeper:no-new-fix-pr",
+        "clawsweeper:needs-maintainer-review",
+        "clawsweeper:needs-product-decision",
+        "clawsweeper:needs-live-repro",
+        "impact:session-state",
+        "impact:message-loss",
+        "impact:crash-loop",
+        "issue-rating: 🐚 platinum hermit"
+      ]
+    },
+    {
+      "rank": 5,
+      "number": 87756,
+      "title": "[Bug]: Regression: prompt-launched Lobster workflow hangs on nested /tools/invoke, while curl-launched workflow works",
+      "url": "https://github.com/openclaw/openclaw/issues/87756",
+      "priority_inferred": "P1",
+      "priority_reason": "ClawSweeper/影响标签 + 评论/时效，综合分 99",
+      "module": "core/other",
+      "maintainer_match": "高",
+      "importance": "[Bug]: Regression: prompt-launched Lobster workflow hangs on nested /tools/invoke, while curl-launched workflow works",
+      "investigation": "### Bug type\n\nRegression (worked before, now fails)\n\n### Beta release blocker\n\nNo\n\n### Summary\n\nA Lobster workflow that calls `/tools/invoke` from a shell step hangs when the Lobster workflow is launched from an agent prompt/chat.\n\nThe same workflow ",
+      "risks": [
+        "clawsweeper:no-new-fix-pr",
+        "clawsweeper:needs-maintainer-review",
+        "clawsweeper:needs-product-decision"
+      ],
+      "has_open_pr": false,
+      "open_prs": [],
+      "labels": [
+        "bug",
+        "P1",
+        "clawsweeper:no-new-fix-pr",
+        "clawsweeper:needs-maintainer-review",
+        "clawsweeper:needs-product-decision",
+        "clawsweeper:source-repro",
+        "impact:session-state",
+        "impact:crash-loop",
+        "issue-rating: 🦞 diamond lobster"
+      ]
+    }
+  ],
+  "handoff_rank": [
+    {
+      "rank": 1,
+      "number": 80582,
+      "title": "Memory: skip markdown placeholder snippets during short-term promotion",
+      "url": "https://github.com/openclaw/openclaw/issues/80582",
+      "handoff_score": 100,
+      "module": "extensions/memory-core",
+      "has_open_pr": false,
+      "blockers": [],
+      "labels": [
+        "stale",
+        "P2",
+        "clawsweeper:source-repro",
+        "impact:session-state",
+        "issue-rating: 🦞 diamond lobster"
+      ]
+    },
+    {
+      "rank": 2,
+      "number": 91171,
+      "title": "[Bug]: Sub-agent model routing ignores model parameter, silently falls back to deepseek",
+      "url": "https://github.com/openclaw/openclaw/issues/91171",
+      "handoff_score": 65,
+      "module": "src/agents",
+      "has_open_pr": false,
+      "blockers": [],
+      "labels": [
+        "bug",
+        "P2",
+        "clawsweeper:source-repro",
+        "impact:auth-provider",
+        "issue-rating: 🦞 diamond lobster"
+      ]
+    },
+    {
+      "rank": 3,
+      "number": 91799,
+      "title": "[Bug]: Discord Agents cannot access MCP tools (works via CLI)",
+      "url": "https://github.com/openclaw/openclaw/issues/91799",
+      "handoff_score": 65,
+      "module": "extensions/discord",
+      "has_open_pr": false,
+      "blockers": [],
+      "labels": [
+        "bug",
+        "bug:behavior",
+        "P2",
+        "issue-rating: 🦪 silver shellfish",
+        "impact:other"
+      ]
+    },
+    {
+      "rank": 4,
+      "number": 84034,
+      "title": "[Bug] active-memory recall injects assistant chitchat into <active_memory_plugin> instead of NONE or valid memory summary",
+      "url": "https://github.com/openclaw/openclaw/issues/84034",
+      "handoff_score": 65,
+      "module": "src/agents",
+      "has_open_pr": false,
+      "blockers": [],
+      "labels": [
+        "P2",
+        "clawsweeper:source-repro",
+        "impact:session-state",
+        "issue-rating: 🦞 diamond lobster"
+      ]
+    }
+  ],
+  "watchlist": [
+    {
+      "rank": 6,
+      "number": 87744,
+      "title": "[Bug]: Codex-backed Telegram turns repeatedly time out waiting for turn/completed on 2026.5.27",
+      "url": "https://github.com/openclaw/openclaw/issues/87744",
+      "reason": "P1 · extensions/telegram · 综合分99 · 阻塞标签"
+    },
+    {
+      "rank": 7,
+      "number": 87938,
+      "title": "[Bug]: Feishu DM sessions rebuilt after gateway restart — duplicate keys + maintenance pruning",
+      "url": "https://github.com/openclaw/openclaw/issues/87938",
+      "reason": "P1 · extensions/feishu · 综合分97 · 阻塞标签"
+    },
+    {
+      "rank": 8,
+      "number": 94716,
+      "title": "[Bug]: Anthropic claude-cli provider sends stale user-agent (claude-cli/2.1.75) — bearer auth fails with authentication_error",
+      "url": "https://github.com/openclaw/openclaw/issues/94716",
+      "reason": "P1 · src/agents · 综合分97 · 已有PR"
+    }
+  ],
+  "ready_candidate": {
+    "number": 80582,
+    "title": "Memory: skip markdown placeholder snippets during short-term promotion",
+    "url": "https://github.com/openclaw/openclaw/issues/80582",
+    "priority_inferred": "P2",
+    "module": "extensions/memory-core",
+    "handoff_score": 100,
+    "handoff_rank": 1,
+    "blockers": [],
+    "has_open_pr": false,
+    "root_cause_files": [
+      "extensions/memory-core/src/short-term-promotion.ts",
+      "extensions/memory-core/src/short-term-promotion.test.ts"
+    ],
+    "suggested_fix": "在 short-term promotion 路径新增 isMarkdownPlaceholderLine / isPlaceholderShortTermSnippet，与现有 isContaminatedDreamingSnippet 合并为 isUnpromotableShortTermSnippet，并在 recordShortTermRecalls、recordGroundedShortTermCandidates、rank/apply 与 substring relocation 入口统一过滤 bare `-` 等 markdown 占位符。",
+    "suggested_tests": [
+      "node scripts/run-vitest.mjs extensions/memory-core/src/short-term-promotion.test.ts"
+    ],
+    "estimated_loc": 80,
+    "risk": "issue 带 stale 标签但无阻塞标签；需确认 substring relocation 收紧后不会误伤合法短 snippet。无 open PR，但 memory promotion 行为变更需回归 dreaming/grounded 相邻测试。"
+  },
+  "latest_handoff": {
+    "schema": "openclaw-auto-triage:v1",
+    "run_id": "2026-06-20T09:44:29Z",
+    "snapshot_utc": "2026-06-20T09:44:29Z",
+    "source_repo": "openclaw/openclaw",
+    "fork_repo": "ly85206559/openclaw",
+    "status": "ready-to-fix",
+    "issue": 80582,
+    "url": "https://github.com/openclaw/openclaw/issues/80582",
+    "title": "Memory: skip markdown placeholder snippets during short-term promotion",
+    "priority_inferred": "P2",
+    "module": "extensions/memory-core",
+    "handoff_score": 100,
+    "handoff_rank": 1,
+    "blockers": [],
+    "has_open_pr": false,
+    "root_cause_files": [
+      "extensions/memory-core/src/short-term-promotion.ts",
+      "extensions/memory-core/src/short-term-promotion.test.ts"
+    ],
+    "suggested_fix": "在 short-term promotion 路径新增 isMarkdownPlaceholderLine / isPlaceholderShortTermSnippet，与现有 isContaminatedDreamingSnippet 合并为 isUnpromotableShortTermSnippet，并在 recordShortTermRecalls、recordGroundedShortTermCandidates、rank/apply 与 substring relocation 入口统一过滤 bare `-` 等 markdown 占位符。",
+    "suggested_tests": [
+      "node scripts/run-vitest.mjs extensions/memory-core/src/short-term-promotion.test.ts"
+    ],
+    "estimated_loc": 80,
+    "risk": "issue 带 stale 标签但无阻塞标签；需确认 substring relocation 收紧后不会误伤合法短 snippet。无 open PR，但 memory promotion 行为变更需回归 dreaming/grounded 相邻测试。",
+    "automation_b_action": "fix-and-pr"
+  }
+}
