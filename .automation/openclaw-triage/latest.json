@@ -1,33 +1,32 @@
 {
   "schema": "openclaw-auto-triage:v1",
-  "run_id": "2026-06-20T09:52:11.009Z",
-  "snapshot_utc": "2026-06-20T09:52:11.009Z",
+  "run_id": "2026-06-21T01:02:27Z",
+  "snapshot_utc": "2026-06-21T01:02:27Z",
   "source_repo": "openclaw/openclaw",
   "fork_repo": "ly85206559/openclaw",
   "status": "ready-to-fix",
-  "issue": 93507,
-  "url": "https://github.com/openclaw/openclaw/issues/93507",
-  "title": "[Feature]: Allow selecting cron job models and clearly displaying them in the Web UI",
+  "issue": 95440,
+  "url": "https://github.com/openclaw/openclaw/issues/95440",
+  "title": "[Bug]: Slack presentation payload never renders Block Kit — delivered as plain text despite capability + interactiveReplies enabled",
   "priority_inferred": "P2",
-  "module": "ui",
-  "handoff_score": 95,
+  "module": "extensions/slack",
+  "handoff_score": 90,
   "handoff_rank": 1,
   "blockers": [],
   "has_open_pr": false,
   "root_cause_files": [
-    "ui/src/ui/views/cron-quick-create.ts",
-    "ui/src/ui/views/cron.ts",
-    "ui/src/ui/controllers/cron.ts",
-    "ui/src/ui/views/cron-quick-create.node.test.ts",
-    "ui/src/ui/views/cron.test.ts",
-    "ui/src/ui/controllers/cron.test.ts"
+    "src/infra/outbound/deliver.ts",
+    "src/infra/outbound/message-action-runner.ts",
+    "extensions/slack/src/outbound-adapter.ts",
+    "src/channels/message/outbound-bridge.ts"
   ],
-  "suggested_fix": "复用现有 cron payloadModel / payload.model 契约，在 quick-create Web UI 中增加模型选择输入；创建时把 draft model 映射到 CronFormState.payloadModel，并在 cron list/detail 中显示已配置模型或 default 标签。不要改 cron runtime 或新增配置面。",
+  "suggested_fix": "CLI `openclaw message send --presentation` 在 Slack 上返回 receipt.parts[0].kind=text，但 Slack outbound adapter 单测已证明 presentation 可渲染 Block Kit。应沿 deliver.ts 的 renderPresentationForDelivery → sendPayload 路径对比 CLI/message-action-runner 收据构建，确保 presentation 渲染后的 channelData/presentationBlocks 进入 sendPayload 且 receipt kind 为 card。",
   "suggested_tests": [
-    "node scripts/run-vitest.mjs ui/src/ui/views/cron-quick-create.node.test.ts ui/src/ui/views/cron.test.ts ui/src/ui/controllers/cron.test.ts",
-    "git diff --check"
+    "pnpm test extensions/slack/src/outbound-payload.test.ts",
+    "pnpm test src/channels/message/outbound-bridge.test.ts",
+    "pnpm test src/infra/outbound/message-action-runner.plugin-dispatch.test.ts"
   ],
-  "estimated_loc": 160,
-  "risk": "这是 UI feature/ergonomics 修复，不是 crash/data-loss bug；主要风险是默认模型标签展示细节（仅显示 default 还是 resolved default）和 closed unmerged PR #93523 的旧实现不能直接信任。需要聚焦 current main，并保持 payloadModel 既有契约。",
+  "estimated_loc": 80,
+  "risk": "Issue 声称 adapter 层 renderPresentation 正常，根因可能在 core deliver/CLI receipt 路径而非 Slack 插件；若实际为配置/网关模式差异需 live Slack 复现。当前无关联 open PR，但 issue 极新，可能有未 cross-reference 的修复尝试。",
   "automation_b_action": "fix-and-pr"
 }

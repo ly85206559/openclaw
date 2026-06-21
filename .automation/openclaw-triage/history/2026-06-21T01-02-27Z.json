@@ -1,0 +1,34 @@
+{
+  "latest": {
+    "schema": "openclaw-auto-triage:v1",
+    "run_id": "2026-06-21T01:02:27Z",
+    "snapshot_utc": "2026-06-21T01:02:27Z",
+    "source_repo": "openclaw/openclaw",
+    "fork_repo": "ly85206559/openclaw",
+    "status": "ready-to-fix",
+    "issue": 95440,
+    "url": "https://github.com/openclaw/openclaw/issues/95440",
+    "title": "[Bug]: Slack presentation payload never renders Block Kit — delivered as plain text despite capability + interactiveReplies enabled",
+    "priority_inferred": "P2",
+    "module": "extensions/slack",
+    "handoff_score": 90,
+    "handoff_rank": 1,
+    "blockers": [],
+    "has_open_pr": false,
+    "root_cause_files": [
+      "src/infra/outbound/deliver.ts",
+      "src/infra/outbound/message-action-runner.ts",
+      "extensions/slack/src/outbound-adapter.ts",
+      "src/channels/message/outbound-bridge.ts"
+    ],
+    "suggested_fix": "CLI `openclaw message send --presentation` 在 Slack 上返回 receipt.parts[0].kind=text，但 Slack outbound adapter 单测已证明 presentation 可渲染 Block Kit。应沿 deliver.ts 的 renderPresentationForDelivery → sendPayload 路径对比 CLI/message-action-runner 收据构建，确保 presentation 渲染后的 channelData/presentationBlocks 进入 sendPayload 且 receipt kind 为 card。",
+    "suggested_tests": [
+      "pnpm test extensions/slack/src/outbound-payload.test.ts",
+      "pnpm test src/channels/message/outbound-bridge.test.ts",
+      "pnpm test src/infra/outbound/message-action-runner.plugin-dispatch.test.ts"
+    ],
+    "estimated_loc": 80,
+    "risk": "Issue 声称 adapter 层 renderPresentation 正常，根因可能在 core deliver/CLI receipt 路径而非 Slack 插件；若实际为配置/网关模式差异需 live Slack 复现。当前无关联 open PR，但 issue 极新，可能有未 cross-reference 的修复尝试。",
+    "automation_b_action": "fix-and-pr"
+  }
+}
