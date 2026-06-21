@@ -1,4 +1,173 @@
 {
+  "schema": "openclaw-auto-triage-history:v1",
+  "run_id": "2026-06-21T01:02:27Z",
+  "snapshot_utc": "2026-06-21T01:02:27Z",
+  "source_repo": "openclaw/openclaw",
+  "fork_repo": "ly85206559/openclaw",
+  "summary": {
+    "open_issue_sample_size": 600,
+    "sample_definition": "最近7天新建/更新的 open issue ∪ 按 updated_at 排序的最近500个 open issue，去重后 600 条",
+    "commits_analyzed": 300,
+    "handoff_status": "ready-to-fix",
+    "handoff_issue": 95440,
+    "excluded_high_scorers_reason": "handoff_score≥60 的多个候选已有 upstream open PR（#95407/#95109/#93326/#95145/#91171/#92194）或 main 已修复（#84084 mirrored-history 已传 maxRenderedContextChars）"
+  },
+  "trends": {
+    "maintainer_hot_modules_top3": [
+      {
+        "module": "extensions/codex + extensions/copilot + harness",
+        "signal": "近300 commit 中 fix/refactor 高度集中在 codex/copilot/harness lifecycle 与 prompt bounds（约45+22+14 commits）"
+      },
+      {
+        "module": "scripts/test + chore/deadcode",
+        "signal": "大量 test(scripts) 路由与 deadcode 共享 helper 清理，维护者在做测试分片与重复代码删除"
+      },
+      {
+        "module": "extensions/feishu + message-delivery",
+        "signal": "近期 merged/closed PR 以 feishu 分页、DM reply、message-delivery 修复为主"
+      }
+    ],
+    "open_issue_hot_modules_top3": [
+      { "module": "core/other", "count": 230, "share": "38.3%" },
+      { "module": "src/agents (session)", "count": 60, "share": "10.0%" },
+      { "module": "extensions/memory-core", "count": 47, "share": "7.8%" }
+    ],
+    "label_distribution_top": [
+      { "label": "clawsweeper:no-new-fix-pr", "count": 482 },
+      { "label": "P2", "count": 346 },
+      { "label": "clawsweeper:needs-product-decision", "count": 312 },
+      { "label": "clawsweeper:linked-pr-open", "count": 217 },
+      { "label": "impact:session-state", "count": 196 }
+    ],
+    "commit_type_ratio_300": {
+      "fix": 192,
+      "test": 48,
+      "refactor": 56,
+      "docs": 1,
+      "other": 3
+    },
+    "impact_distribution": [
+      { "impact": "impact:session-state", "count": 196 },
+      { "impact": "impact:message-loss", "count": 159 },
+      { "impact": "impact:auth-provider", "count": 109 }
+    ]
+  },
+  "priority_rank": [
+    {
+      "rank": 1,
+      "issue": 95429,
+      "url": "https://github.com/openclaw/openclaw/issues/95429",
+      "title": "[Bug]: wrapAnthropicStreamWithRecovery bypassed when streamFn is async (embedded agent path)",
+      "priority_inferred": "P1",
+      "module": "src/providers",
+      "maintainer_alignment": "高 — 与近期 provider/stream recovery fix 同族",
+      "why_important": "embedded agent 路径跳过 stream recovery，导致 message-loss 与 session-state 风险",
+      "investigation_entry": "检查 embedded agent streamFn 包装链路与 wrapAnthropicStreamWithRecovery 调用条件",
+      "risks": "已有 open PR clawsweeper:linked-pr-open；需 sibling provider 路径证明"
+    },
+    {
+      "rank": 2,
+      "issue": 94176,
+      "url": "https://github.com/openclaw/openclaw/issues/94176",
+      "title": "non_deliverable_terminal_turn surfaces as generic /new fallback with no diagnostic signal",
+      "priority_inferred": "P1",
+      "module": "src/agents",
+      "maintainer_alignment": "高 — impact:message-loss + diamond lobster 评级",
+      "why_important": "终端 turn 不可交付时用户只见 /new fallback，诊断信号缺失",
+      "investigation_entry": "从 agent-run-terminal-outcome 与 channel delivery 投影追踪 non_deliverable 分支",
+      "risks": "clawsweeper:needs-product-decision + no-new-fix-pr；不适合自动 PR"
+    },
+    {
+      "rank": 3,
+      "issue": 94008,
+      "url": "https://github.com/openclaw/openclaw/issues/94008",
+      "title": "[Bug]: Telegram channel stuck in \"stopped\" state after transient API outage",
+      "priority_inferred": "P1",
+      "module": "extensions/telegram",
+      "maintainer_alignment": "高 — Telegram health/recovery 为近期高频主题",
+      "why_important": "瞬断后 channel 永久 stopped，health monitor 无法自愈",
+      "investigation_entry": "extensions/telegram health monitor 与 polling restart 状态机",
+      "risks": "已有 linked-pr-open；可能需要 live Telegram repro"
+    },
+    {
+      "rank": 4,
+      "issue": 95378,
+      "url": "https://github.com/openclaw/openclaw/issues/95378",
+      "title": "Conversation context assembled per-transport, not per-session: cross-channel reply binds to stale proposal",
+      "priority_inferred": "P1",
+      "module": "src/agents",
+      "maintainer_alignment": "中 — session-state 核心 invariant",
+      "why_important": "跨 channel 回复可能执行 stale proposal，存在 message-loss/错误执行风险",
+      "investigation_entry": "session key / transport context assembly 边界与 sibling channel 路径",
+      "risks": "needs-product-decision；架构/产品边界敏感"
+    },
+    {
+      "rank": 5,
+      "issue": 95440,
+      "url": "https://github.com/openclaw/openclaw/issues/95440",
+      "title": "[Bug]: Slack presentation payload never renders Block Kit",
+      "priority_inferred": "P2",
+      "module": "extensions/slack",
+      "maintainer_alignment": "中 — message-presentation 与 channel delivery 近期有 feishu/slack sibling 修复",
+      "why_important": "Slack 上 presentation capability 形同虚设，影响 CLI/agent/approval 的 Block Kit 输出",
+      "investigation_entry": "对比 CLI message send 与 slackOutbound.sendPayload 测试路径",
+      "risks": "issue 极新、ClawSweeper 未 triage；receipt kind 与真实 Slack 渲染需 CLI 单测锁定"
+    }
+  ],
+  "handoff_rank": [
+    {
+      "rank": 1,
+      "issue": 95440,
+      "handoff_score": 90,
+      "eligible": true,
+      "reason": "无阻塞标签、无 upstream open PR、CLI 复现清晰、改动面窄、相邻单测丰富"
+    },
+    {
+      "rank": 2,
+      "issue": 84084,
+      "handoff_score": 0,
+      "eligible": false,
+      "reason": "main 已在 run-attempt.ts 全路径传入 maxRenderedContextChars；issue 可能已在 main 修复"
+    },
+    {
+      "rank": 3,
+      "issue": 95407,
+      "handoff_score": 0,
+      "eligible": false,
+      "reason": "存在多个 upstream open PR（#95414/#95421/#95424/#95427）"
+    },
+    {
+      "rank": 4,
+      "issue": 95109,
+      "handoff_score": 0,
+      "eligible": false,
+      "reason": "存在 upstream open PR #95110"
+    },
+    {
+      "rank": 5,
+      "issue": 93326,
+      "handoff_score": 0,
+      "eligible": false,
+      "reason": "存在多个 upstream open PR（#95338/#95354/#95376 等）"
+    }
+  ],
+  "watchlist": [
+    {
+      "rank": 6,
+      "issue": 95145,
+      "note": "macOS Darwin→product version 映射清晰且 queueable，但已有 6+ open PR 争抢同一修复面"
+    },
+    {
+      "rank": 7,
+      "issue": 91171,
+      "note": "subagent modelOverride 丢失影响 provider 路由，已有 #95434/#95436 open PR"
+    },
+    {
+      "rank": 8,
+      "issue": 94885,
+      "note": "Telegram richMessages 与 shipped/docs 不一致，P1 产品决策标签阻塞自动修复"
+    }
+  ],
   "latest": {
     "schema": "openclaw-auto-triage:v1",
     "run_id": "2026-06-21T01:02:27Z",
