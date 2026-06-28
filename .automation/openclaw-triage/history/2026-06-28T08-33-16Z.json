@@ -1,0 +1,215 @@
+{
+  "schema": "openclaw-auto-triage-report:v1",
+  "run_id": "2026-06-28T08:33:16.081Z",
+  "snapshot_utc": "2026-06-28T08:33:16.081Z",
+  "source_repo": "openclaw/openclaw",
+  "fork_repo": "ly85206559/openclaw",
+  "data_source_note": "gitcrawl unavailable; fell back to gh api + local git log origin/main",
+  "sample": {
+    "open_issue_fetched": 168,
+    "recent_7d_count": 168,
+    "sample_pool_size": 168,
+    "commits_analyzed": 300,
+    "sample_limit_note": "gh issues API 仅拉取最近 168 条 open issue（不足 500 上限）；近 7 天更新 issue 与 fetched 集合完全重合。"
+  },
+  "trends": {
+    "open_issue_modules_top3": [
+      { "name": "extensions/", "count": 33, "pct": "19.6%" },
+      { "name": "ui", "count": 30, "pct": "17.9%" },
+      { "name": "extensions/memory", "count": 20, "pct": "11.9%" }
+    ],
+    "open_issue_labels_top10": [
+      { "name": "clawsweeper:no-new-fix-pr", "count": 162 },
+      { "name": "clawsweeper:needs-product-decision", "count": 129 },
+      { "name": "clawsweeper:source-repro", "count": 128 },
+      { "name": "issue-rating: diamond lobster", "count": 128 },
+      { "name": "clawsweeper:needs-maintainer-review", "count": 120 },
+      { "name": "P2", "count": 109 },
+      { "name": "impact:session-state", "count": 61 },
+      { "name": "clawsweeper:fix-shape-clear", "count": 54 },
+      { "name": "clawsweeper:linked-pr-open", "count": 53 },
+      { "name": "impact:message-loss", "count": 49 }
+    ],
+    "commit_modules_top3": [
+      { "name": "src/", "count": 343 },
+      { "name": "extensions", "count": 300 },
+      { "name": "src/agents", "count": 105 }
+    ],
+    "commit_kinds": {
+      "fix": 182,
+      "refactor": 7,
+      "test": 41,
+      "other": 70,
+      "fix_pct": "60.7%",
+      "refactor_pct": "2.3%",
+      "test_pct": "13.7%"
+    },
+    "maintainer_hot_modules_top3": [
+      { "name": "src/agents", "reason": "近 300 commit 中 agents 路径 105 次变更，且 provider/cache/fallback 类 fix 密集" },
+      { "name": "extensions", "reason": "commit 路径 300 次，channel/plugin 修复持续活跃" },
+      { "name": "src/gateway", "reason": "session/exec/approval 相关 P0 issue 与近期 fix 模式一致" }
+    ],
+    "maintainer_hot_modules_note": "maintainer comment/assign/close 未做 timeline 批量统计；热点由 commit 路径 + clawsweeper 标签分布推断。"
+  },
+  "priority_rank": [
+    {
+      "rank": 1,
+      "issue": 69478,
+      "url": "https://github.com/openclaw/openclaw/issues/69478",
+      "title": "[Bug]: enqueueSystemEvent not deduplicated by runId/contextKey — agents cascade duplicate exec approval prompts under new IDs, locking ecosystem",
+      "priority_inferred": "P0",
+      "module": "src/gateway",
+      "maintainer_match": "高",
+      "importance": "exec approval 重复弹出可导致生态锁定，影响 session-state 与 message-loss。",
+      "suggested_fix": "在 enqueueSystemEvent 层按 runId/contextKey 去重，并补回归测试覆盖 cascade 场景。",
+      "risk": "已有 clawsweeper:no-new-fix-pr、needs-product-decision、needs-security-review、needs-live-repro 阻塞标签；不适合 Automation B。"
+    },
+    {
+      "rank": 2,
+      "issue": 68264,
+      "url": "https://github.com/openclaw/openclaw/issues/68264",
+      "title": "[Bug] Canvas/Browser UI Visualization Fails to Render in Chat Environment",
+      "priority_inferred": "P0",
+      "module": "ui",
+      "maintainer_match": "中",
+      "importance": "Canvas/Browser 可视化在 chat 环境无法渲染，影响核心交互体验。",
+      "suggested_fix": "检查 chat 渲染路径与 canvas/browser 组件挂载条件，对比 WebChat 正常路径。",
+      "risk": "needs-live-repro + needs-product-decision；可能有隐藏 UI 架构决策。"
+    },
+    {
+      "rank": 3,
+      "issue": 71586,
+      "url": "https://github.com/openclaw/openclaw/issues/71586",
+      "title": "[Bug]: macOS companion app chat UI hangs when dragging scrollbar thumb up and down",
+      "priority_inferred": "P0",
+      "module": "apps/macos",
+      "maintainer_match": "中",
+      "importance": "macOS 伴侣 app 滚动条拖拽导致 UI 挂起，crash-loop 标签。",
+      "suggested_fix": "复现 SwiftUI/AppKit 滚动事件循环，定位 chat 列表重绘死锁。",
+      "risk": "needs-live-repro；需 macOS 实机，不适合纯单测自动化修复。"
+    },
+    {
+      "rank": 4,
+      "issue": 73910,
+      "url": "https://github.com/openclaw/openclaw/issues/73910",
+      "title": "BUG: OpenClaw-managed Codex ACP uses isolated CODEX_HOME without auth bridge and sends unsupported timeout config",
+      "priority_inferred": "P0",
+      "module": "src/agents",
+      "maintainer_match": "高",
+      "importance": "Codex ACP 认证桥接缺失 + 无效 timeout 配置，影响 auth-provider 与 security。",
+      "suggested_fix": "统一 CODEX_HOME 与宿主 auth bridge，移除或映射 unsupported timeout 字段。",
+      "risk": "needs-security-review + needs-product-decision；安全边界需维护者裁决。"
+    },
+    {
+      "rank": 5,
+      "issue": 73542,
+      "url": "https://github.com/openclaw/openclaw/issues/73542",
+      "title": "[Bug]: message_sending hook event not firing for user-defined hooks",
+      "priority_inferred": "P0",
+      "module": "src/plugins",
+      "maintainer_match": "高",
+      "importance": "用户自定义 hook 的 message_sending 事件不触发，影响插件生态与 message-loss 感知。",
+      "suggested_fix": "追踪 hook dispatch 路径，确认 user-defined hook 注册与 message_sending 触发点是否被跳过。",
+      "risk": "needs-security-review；插件 hook 语义可能涉及产品决策。"
+    }
+  ],
+  "handoff_rank": [
+    {
+      "rank": 1,
+      "issue": 37966,
+      "url": "https://github.com/openclaw/openclaw/issues/37966",
+      "title": "[Bug]: cacheRetention ignored for LiteLLM-proxied Anthropic models",
+      "handoff_score": 85,
+      "module": "src/agents",
+      "has_open_pr": false,
+      "blockers": [],
+      "root_cause_files": [
+        "src/agents/embedded-agent-runner/prompt-cache-retention.ts",
+        "src/llm/providers/stream-wrappers/anthropic-family-cache-semantics.ts",
+        "src/llm/providers/stream-wrappers/proxy.ts"
+      ],
+      "reasons": [
+        "root_cause_file_hint",
+        "no_blocker_labels",
+        "no_open_pr",
+        "repro_or_logs",
+        "test_adjacent",
+        "narrow_scope",
+        "pattern_match_openrouter_wrapper"
+      ]
+    },
+    {
+      "rank": 2,
+      "issue": 74399,
+      "url": "https://github.com/openclaw/openclaw/issues/74399",
+      "title": "[Feature]: Add ETA timeline during openclaw onboard",
+      "handoff_score": 70,
+      "module": "src/cli",
+      "has_open_pr": false,
+      "blockers": [],
+      "reasons": ["narrow_scope", "no_open_pr", "fix_shape_clear"],
+      "note": "产品文案增强，非 bug；优先级 P3。"
+    },
+    {
+      "rank": 3,
+      "issue": 97444,
+      "url": "https://github.com/openclaw/openclaw/issues/97444",
+      "title": "Bug: QClaw小程序语音转文字出现层层重复叠加",
+      "handoff_score": 0,
+      "module": "external/QClaw",
+      "has_open_pr": false,
+      "blockers": ["external_surface"],
+      "reasons": ["rejected_external"],
+      "note": "ClawSweeper 已判定为 QClaw 微信小程序外部问题，非 openclaw 本仓；脚本误选已人工剔除。"
+    }
+  ],
+  "watchlist": [
+    {
+      "issue": 94919,
+      "url": "https://github.com/openclaw/openclaw/issues/94919",
+      "title": "[Bug]: Z.AI Coding-Plan: ECONNRESET triggers model fallback — fallback notice invisible in async contexts",
+      "reason": "P1 级 provider fallback 可见性问题，但有 clawsweeper:no-new-fix-pr 阻塞。"
+    },
+    {
+      "issue": 69943,
+      "url": "https://github.com/openclaw/openclaw/issues/69943",
+      "title": "[Bug]: session-memory hook persists raw chat-template tokens — context poisoning loop",
+      "reason": "P0 数据污染风险，但已有 no-new-fix-pr 且改动面可能超 200 行。"
+    },
+    {
+      "issue": 69110,
+      "url": "https://github.com/openclaw/openclaw/issues/69110",
+      "title": "Gateway-level model identity not passed to delivery hooks (enables silent model-tag forgery)",
+      "reason": "安全相关 P0，但 needs-security-review 且已有 open PR 队列。"
+    }
+  ],
+  "latest": {
+    "schema": "openclaw-auto-triage:v1",
+    "run_id": "2026-06-28T08:33:16.081Z",
+    "snapshot_utc": "2026-06-28T08:33:16.081Z",
+    "source_repo": "openclaw/openclaw",
+    "fork_repo": "ly85206559/openclaw",
+    "status": "ready-to-fix",
+    "issue": 37966,
+    "url": "https://github.com/openclaw/openclaw/issues/37966",
+    "title": "[Bug]: cacheRetention ignored for LiteLLM-proxied Anthropic models",
+    "priority_inferred": "P2",
+    "module": "src/agents",
+    "handoff_score": 85,
+    "handoff_rank": 1,
+    "blockers": [],
+    "has_open_pr": false,
+    "root_cause_files": [
+      "src/agents/embedded-agent-runner/prompt-cache-retention.ts",
+      "src/llm/providers/stream-wrappers/anthropic-family-cache-semantics.ts",
+      "src/llm/providers/stream-wrappers/proxy.ts"
+    ],
+    "suggested_fix": "当 provider=litellm 且 modelApi=openai-completions 且用户显式配置 cacheRetention 时，允许 resolveCacheRetention 透传，并复用 OpenRouter 的 cache_control payload 注入 wrapper，使 LiteLLM 代理 Anthropic 模型能命中 prompt cache。",
+    "suggested_tests": [
+      "pnpm test src/agents/embedded-agent-runner/extra-params.cache-retention-default.test.ts"
+    ],
+    "estimated_loc": 120,
+    "risk": "需确认 litellm/claude-opus-4-6 在当前 catalog 上实际走 openai-completions 还是 anthropic-messages；若已有 open PR 未命中搜索需 Automation B 复核。",
+    "automation_b_action": "fix-and-pr"
+  }
+}
