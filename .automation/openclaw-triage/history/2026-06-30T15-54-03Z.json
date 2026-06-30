@@ -1,0 +1,233 @@
+{
+  "schema": "openclaw-auto-triage-history:v1",
+  "run_id": "2026-06-30T15:54:03.115Z",
+  "snapshot_utc": "2026-06-30T15:54:03.115Z",
+  "source_repo": "openclaw/openclaw",
+  "fork_repo": "ly85206559/openclaw",
+  "data_source_note": "gitcrawl unavailable; used live gh api plus origin/main git log. No Slack or external channel delivery.",
+  "sample": {
+    "open_issue_sample_size": 1000,
+    "open_issue_recent_7d_count": 1000,
+    "commits_analyzed": 300,
+    "branch_base": "origin/main"
+  },
+  "trend_analysis": {
+    "maintainer_hot_modules_top3": [
+      {
+        "module": "extensions",
+        "recent_commits": 115
+      },
+      {
+        "module": "src",
+        "recent_commits": 93
+      },
+      {
+        "module": "src/agents",
+        "recent_commits": 49
+      }
+    ],
+    "open_issue_modules_top3": [
+      {
+        "module": "ui",
+        "open_issue_count": 212
+      },
+      {
+        "module": "extensions/telegram",
+        "open_issue_count": 133
+      },
+      {
+        "module": "docs",
+        "open_issue_count": 104
+      }
+    ],
+    "open_issue_label_top10": [
+      {
+        "label": "clawsweeper:no-new-fix-pr",
+        "count": 931
+      },
+      {
+        "label": "clawsweeper:needs-maintainer-review",
+        "count": 676
+      },
+      {
+        "label": "clawsweeper:needs-product-decision",
+        "count": 670
+      },
+      {
+        "label": "P2",
+        "count": 647
+      },
+      {
+        "label": "clawsweeper:source-repro",
+        "count": 594
+      },
+      {
+        "label": "issue-rating: diamond lobster",
+        "count": 594
+      },
+      {
+        "label": "impact:session-state",
+        "count": 378
+      },
+      {
+        "label": "maturity:stable",
+        "count": 307
+      },
+      {
+        "label": "clawsweeper:linked-pr-open",
+        "count": 306
+      },
+      {
+        "label": "clawsweeper:fix-shape-clear",
+        "count": 303
+      }
+    ],
+    "recent_commit_kinds": {
+      "fix": 220,
+      "test": 28,
+      "refactor": 2,
+      "other": 50
+    }
+  },
+  "priority_rank_top5": [
+    {
+      "rank": 1,
+      "issue": 78805,
+      "url": "https://github.com/openclaw/openclaw/issues/78805",
+      "title": "[Bug]: Severe Event Loop Blocking / Freezing due to Synchronous I/O (execSync, readFileSync)",
+      "priority_inferred": "P0",
+      "module": "extensions/telegram",
+      "reason": "event-loop blocking plus regression/message-loss/crash-loop labels; high impact but blocked by no-new-fix-pr/product-decision/open PR state.",
+      "risk": "Too broad for Automation B; maintainer decision and linked PR state make it unsuitable as handoff."
+    },
+    {
+      "rank": 2,
+      "issue": 72176,
+      "url": "https://github.com/openclaw/openclaw/issues/72176",
+      "title": "[Bug]: Intermittent duplicate message delivery in 2026.4.24 across all channels",
+      "priority_inferred": "P0",
+      "module": "ui",
+      "reason": "duplicate delivery across channels with regression/session-state/message-loss signal.",
+      "risk": "Cross-channel scope and maintainer/product-decision labels block a narrow autonomous fix."
+    },
+    {
+      "rank": 3,
+      "issue": 78196,
+      "url": "https://github.com/openclaw/openclaw/issues/78196",
+      "title": "[Bug]: Extension plugins silently skipped by gateway loader in v5.3+ (loads in CLI process, not in long-running daemon)",
+      "priority_inferred": "P0",
+      "module": "extensions/memory-core",
+      "reason": "plugin loader regression with security/stable impact.",
+      "risk": "Security-review and linked PR labels require maintainer review before any fix."
+    },
+    {
+      "rank": 4,
+      "issue": 69478,
+      "url": "https://github.com/openclaw/openclaw/issues/69478",
+      "title": "[Bug]: enqueueSystemEvent not deduplicated by runId/contextKey ? agents cascade duplicate exec approval prompts under new IDs, locking ecosystem",
+      "priority_inferred": "P0",
+      "module": "extensions/telegram",
+      "reason": "approval prompt cascade can lock ecosystem; message-loss/security/session-state labels.",
+      "risk": "Multiple blocker labels and live repro/security/product gates make it non-handoff."
+    },
+    {
+      "rank": 5,
+      "issue": 97994,
+      "url": "https://github.com/openclaw/openclaw/issues/97994",
+      "title": "[Bug]: OpenAI-compatible streaming tool calls are dropped when provider omits finish_reason",
+      "priority_inferred": "P0",
+      "module": "extensions/provider-streaming",
+      "reason": "provider streaming drops tool calls, current issue is fresh and source-repro quality.",
+      "risk": "Has no-new-fix-pr and needs-product-decision labels; not eligible for Automation B despite high priority."
+    }
+  ],
+  "handoff_rank": [
+    {
+      "rank": 1,
+      "issue": 98044,
+      "url": "https://github.com/openclaw/openclaw/issues/98044",
+      "title": "Android onboarding should request and explain camera permission for QR setup",
+      "priority_inferred": "P2",
+      "module": "apps/android",
+      "handoff_score": 75,
+      "reasons": [
+        "open issue",
+        "no open PR found",
+        "no blocker labels",
+        "source-level repro from ClawSweeper",
+        "narrow Android onboarding/UI boundary",
+        "test-adjacent Android unit tests exist"
+      ],
+      "blockers": [],
+      "root_cause_files": [
+        "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
+        "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
+        "apps/android/app/src/main/java/ai/openclaw/app/node/DeviceHandler.kt",
+        "apps/android/app/src/main/AndroidManifest.xml"
+      ],
+      "suggested_fix": "? Android onboarding ??????? QR scanner ????? camera permission denied/permanently denied??? Google Code Scanner ? permissionless ????????? camera ???? denied ?????????/?? App Settings affordance?????? inline ???",
+      "suggested_tests": [
+        "node scripts/run-android-gradle.mjs :app:testPlayDebugUnitTest --tests ai.openclaw.app.ui.OnboardingFlowLogicTest",
+        "node scripts/run-android-gradle.mjs :app:testPlayDebugUnitTest --tests ai.openclaw.app.PermissionRequesterTest",
+        "Real Android device proof: deny camera, tap Scan setup code, verify permission prompt or inline denied state; permanently deny camera and verify app-settings action."
+      ],
+      "estimated_loc": 120,
+      "risk": "Google Code Scanner ????????? app ???? CAMERA???????????????????Automation B ????? Android ???? denied/permanently-denied ?? UX?"
+    }
+  ],
+  "watchlist_rank_6_to_8": [
+    {
+      "rank": 6,
+      "issue": 94919,
+      "url": "https://github.com/openclaw/openclaw/issues/94919",
+      "title": "[Bug]: Z.AI Coding-Plan: ECONNRESET triggers model fallback ? fallback notice is invisible to the user in async contexts (cron jobs, sub-agents, isolated runs)",
+      "reason": "High-priority async fallback visibility bug, but blocked by no-new-fix-pr, product-decision, security-review, and linked PR labels."
+    },
+    {
+      "rank": 7,
+      "issue": 75187,
+      "url": "https://github.com/openclaw/openclaw/issues/75187",
+      "title": "[Bug]: Auto-generated AGENTS.md puts load-bearing tool-use rules at the bottom; head-truncation by bootstrapMaxChars strips them",
+      "reason": "High impact source-repro issue, but blocked by no-new-fix-pr/security-review and linked PR state."
+    },
+    {
+      "rank": 8,
+      "issue": 69110,
+      "url": "https://github.com/openclaw/openclaw/issues/69110",
+      "title": "Gateway-level model identity not passed to delivery hooks (enables silent model-tag forgery)",
+      "reason": "Security/provider identity issue, but blocker labels require maintainer/product/security review before autonomous fix."
+    }
+  ],
+  "selected_handoff": {
+    "schema": "openclaw-auto-triage:v1",
+    "run_id": "2026-06-30T15:54:03.115Z",
+    "snapshot_utc": "2026-06-30T15:54:03.115Z",
+    "source_repo": "openclaw/openclaw",
+    "fork_repo": "ly85206559/openclaw",
+    "status": "ready-to-fix",
+    "issue": 98044,
+    "url": "https://github.com/openclaw/openclaw/issues/98044",
+    "title": "Android onboarding should request and explain camera permission for QR setup",
+    "priority_inferred": "P2",
+    "module": "apps/android",
+    "handoff_score": 75,
+    "handoff_rank": 1,
+    "blockers": [],
+    "has_open_pr": false,
+    "root_cause_files": [
+      "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
+      "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
+      "apps/android/app/src/main/java/ai/openclaw/app/node/DeviceHandler.kt",
+      "apps/android/app/src/main/AndroidManifest.xml"
+    ],
+    "suggested_fix": "? Android onboarding ??????? QR scanner ????? camera permission denied/permanently denied??? Google Code Scanner ? permissionless ????????? camera ???? denied ?????????/?? App Settings affordance?????? inline ???",
+    "suggested_tests": [
+      "node scripts/run-android-gradle.mjs :app:testPlayDebugUnitTest --tests ai.openclaw.app.ui.OnboardingFlowLogicTest",
+      "node scripts/run-android-gradle.mjs :app:testPlayDebugUnitTest --tests ai.openclaw.app.PermissionRequesterTest",
+      "Real Android device proof: deny camera, tap Scan setup code, verify permission prompt or inline denied state; permanently deny camera and verify app-settings action."
+    ],
+    "estimated_loc": 120,
+    "risk": "Google Code Scanner ????????? app ???? CAMERA???????????????????Automation B ????? Android ???? denied/permanently-denied ?? UX?",
+    "automation_b_action": "fix-and-pr"
+  }
+}

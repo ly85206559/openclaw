@@ -1,29 +1,32 @@
 {
   "schema": "openclaw-auto-triage:v1",
-  "run_id": "2026-06-28T08:33:16.081Z",
-  "snapshot_utc": "2026-06-28T08:33:16.081Z",
+  "run_id": "2026-06-30T15:54:03.115Z",
+  "snapshot_utc": "2026-06-30T15:54:03.115Z",
   "source_repo": "openclaw/openclaw",
   "fork_repo": "ly85206559/openclaw",
   "status": "ready-to-fix",
-  "issue": 37966,
-  "url": "https://github.com/openclaw/openclaw/issues/37966",
-  "title": "[Bug]: cacheRetention ignored for LiteLLM-proxied Anthropic models",
+  "issue": 98044,
+  "url": "https://github.com/openclaw/openclaw/issues/98044",
+  "title": "Android onboarding should request and explain camera permission for QR setup",
   "priority_inferred": "P2",
-  "module": "src/agents",
-  "handoff_score": 85,
+  "module": "apps/android",
+  "handoff_score": 75,
   "handoff_rank": 1,
   "blockers": [],
   "has_open_pr": false,
   "root_cause_files": [
-    "src/agents/embedded-agent-runner/prompt-cache-retention.ts",
-    "src/llm/providers/stream-wrappers/anthropic-family-cache-semantics.ts",
-    "src/llm/providers/stream-wrappers/proxy.ts"
+    "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
+    "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
+    "apps/android/app/src/main/java/ai/openclaw/app/node/DeviceHandler.kt",
+    "apps/android/app/src/main/AndroidManifest.xml"
   ],
-  "suggested_fix": "当 provider=litellm 且 modelApi=openai-completions 且用户显式配置 cacheRetention 时，允许 resolveCacheRetention 透传，并复用 OpenRouter 的 cache_control payload 注入 wrapper，使 LiteLLM 代理 Anthropic 模型能命中 prompt cache。",
+  "suggested_fix": "? Android onboarding ??????? QR scanner ????? camera permission denied/permanently denied??? Google Code Scanner ? permissionless ????????? camera ???? denied ?????????/?? App Settings affordance?????? inline ???",
   "suggested_tests": [
-    "pnpm test src/agents/embedded-agent-runner/extra-params.cache-retention-default.test.ts"
+    "node scripts/run-android-gradle.mjs :app:testPlayDebugUnitTest --tests ai.openclaw.app.ui.OnboardingFlowLogicTest",
+    "node scripts/run-android-gradle.mjs :app:testPlayDebugUnitTest --tests ai.openclaw.app.PermissionRequesterTest",
+    "Real Android device proof: deny camera, tap Scan setup code, verify permission prompt or inline denied state; permanently deny camera and verify app-settings action."
   ],
   "estimated_loc": 120,
-  "risk": "需确认 litellm/claude-opus-4-6 在当前 catalog 上实际走 openai-completions 还是 anthropic-messages；若已有 open PR 未命中搜索需 Automation B 复核。",
+  "risk": "Google Code Scanner ????????? app ???? CAMERA???????????????????Automation B ????? Android ???? denied/permanently-denied ?? UX?",
   "automation_b_action": "fix-and-pr"
 }
