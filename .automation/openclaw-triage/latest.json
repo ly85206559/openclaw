@@ -1,7 +1,7 @@
 {
   "schema": "openclaw-auto-triage:v1",
-  "run_id": "2026-06-30T15:54:03.115Z",
-  "snapshot_utc": "2026-06-30T15:54:03.115Z",
+  "run_id": "2026-06-30T15:56:02.497Z",
+  "snapshot_utc": "2026-06-30T15:56:02.497Z",
   "source_repo": "openclaw/openclaw",
   "fork_repo": "ly85206559/openclaw",
   "status": "ready-to-fix",
@@ -20,13 +20,13 @@
     "apps/android/app/src/main/java/ai/openclaw/app/node/DeviceHandler.kt",
     "apps/android/app/src/main/AndroidManifest.xml"
   ],
-  "suggested_fix": "? Android onboarding ??????? QR scanner ????? camera permission denied/permanently denied??? Google Code Scanner ? permissionless ????????? camera ???? denied ?????????/?? App Settings affordance?????? inline ???",
+  "suggested_fix": "At the Android onboarding QR scan boundary, distinguish scanner startup failure from CAMERA permission denied or permanently denied. Preserve Google Code Scanner permissionless behavior by default; only when local camera permission is actually denied should the UI reuse the existing permission request or open-app-settings affordance and show a specific inline error.",
   "suggested_tests": [
     "node scripts/run-android-gradle.mjs :app:testPlayDebugUnitTest --tests ai.openclaw.app.ui.OnboardingFlowLogicTest",
     "node scripts/run-android-gradle.mjs :app:testPlayDebugUnitTest --tests ai.openclaw.app.PermissionRequesterTest",
     "Real Android device proof: deny camera, tap Scan setup code, verify permission prompt or inline denied state; permanently deny camera and verify app-settings action."
   ],
   "estimated_loc": 120,
-  "risk": "Google Code Scanner ????????? app ???? CAMERA???????????????????Automation B ????? Android ???? denied/permanently-denied ?? UX?",
+  "risk": "Google Code Scanner is normally permissionless for the app, so Automation B must not add an unconditional CAMERA prompt before every scan. Real Android device proof is still needed for denied and permanently-denied UX.",
   "automation_b_action": "fix-and-pr"
 }
