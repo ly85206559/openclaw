@@ -322,6 +322,7 @@ export async function readChatHistoryPage(params: {
       : projectChatDisplayMessages(localMessages, {
           includeCommentaryFallbacks: true,
           maxChars: effectiveMaxChars,
+          redactInlineMedia: true,
           resolveCurrentUserProfileDisplay,
           turnBoundaryPending: isHeartbeatHistoryTurnBoundaryMessage(overreadContextMessage),
         });
@@ -413,6 +414,7 @@ export async function readChatHistoryPage(params: {
     const displayMessages = projectChatDisplayMessages(mergedMessages, {
       includeCommentaryFallbacks: true,
       maxChars: effectiveMaxChars,
+      redactInlineMedia: true,
       resolveCurrentUserProfileDisplay,
     });
     return {
