@@ -592,6 +592,31 @@ export function extractImages(message: unknown): ImageBlock[] {
   return images;
 }
 
+export function hasOmittedInlineImage(message: unknown): boolean {
+  const content = (message as Record<string, unknown>).content;
+  if (!Array.isArray(content)) {
+    return false;
+  }
+  return content.some((block) => {
+    if (!block || typeof block !== "object") {
+      return false;
+    }
+    const entry = block as Record<string, unknown>;
+    if (entry.type !== "input_image" || entry.omitted !== true) {
+      return false;
+    }
+    const imageUrl = entry.image_url;
+    const nestedImageUrl = asOptionalRecord(imageUrl)?.url;
+    const source = asOptionalRecord(entry.source);
+    return (
+      typeof imageUrl !== "string" &&
+      typeof nestedImageUrl !== "string" &&
+      typeof source?.url !== "string" &&
+      typeof source?.data !== "string"
+    );
+  });
+}
+
 function readPairingQrExpiresAtMs(block: Record<string, unknown>): number | undefined {
   return asFiniteNumber(block.expiresAtMs);
 }

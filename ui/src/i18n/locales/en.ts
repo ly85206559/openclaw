@@ -6195,6 +6195,11 @@ export const en: TranslationMap = {
       reason: "Run /pair qr again to generate a fresh setup code.",
       badge: "Expired",
     },
+    inlineImageOmitted: {
+      title: "Image unavailable in history",
+      reason: "Inline image data was omitted from stored chat history.",
+      badge: "Omitted",
+    },
     composer: {
       placeholder: "Message {name}",
       emptyHint: "Write a message to send.",
