@@ -593,7 +593,7 @@ export function extractImages(message: unknown): ImageBlock[] {
 }
 
 export function hasOmittedInlineImage(message: unknown): boolean {
-  const content = (message as Record<string, unknown>).content;
+  const content = asOptionalRecord(message)?.content;
   if (!Array.isArray(content)) {
     return false;
   }
@@ -601,7 +601,10 @@ export function hasOmittedInlineImage(message: unknown): boolean {
     if (!block || typeof block !== "object") {
       return false;
     }
-    const entry = block as Record<string, unknown>;
+    const entry = asOptionalRecord(block);
+    if (!entry) {
+      return false;
+    }
     if (entry.type !== "input_image" || entry.omitted !== true) {
       return false;
     }
