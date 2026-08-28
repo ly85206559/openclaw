@@ -82,6 +82,7 @@ export function readChatHistoryDelta(params: {
       messageSeq: row.messageSeq,
       transcriptPosition: row.displayPosition,
       projectionState,
+      redactInlineMedia: true,
       sessionKey: params.sessionKey,
       sessionSnapshot: params.sessionSnapshot,
     });
