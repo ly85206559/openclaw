@@ -49,6 +49,7 @@ import {
   extractPairingQrExpiryNotices,
   extractStructuredSvgAttachments,
   extractTranscriptAttachments,
+  hasOmittedInlineImage,
   schedulePairingQrExpiryRefresh,
   type AssistantAttachmentItem,
   type ArtifactDownloadResolver,
@@ -205,6 +206,27 @@ function renderPairingQrExpiryNotices(notices: PairingQrExpiryNotice[]) {
   `;
 }
 
+function renderOmittedInlineImageNotice() {
+  return html`
+    <div
+      class="chat-assistant-attachment-card chat-assistant-attachment-card--blocked chat-inline-media-omitted"
+    >
+      <div class="chat-assistant-attachment-card__header">
+        <span class="chat-assistant-attachment-card__icon">${icons.alertTriangle}</span>
+        <span class="chat-assistant-attachment-card__title"
+          >${t("chat.inlineImageOmitted.title")}</span
+        >
+        <span class="chat-assistant-attachment-badge chat-assistant-attachment-badge--muted"
+          >${t("chat.inlineImageOmitted.badge")}</span
+        >
+      </div>
+      <div class="chat-assistant-attachment-card__reason">
+        ${t("chat.inlineImageOmitted.reason")}
+      </div>
+    </div>
+  `;
+}
+
 export function renderGroupedMessage(
   message: unknown,
   messageKey: string,
@@ -279,6 +301,7 @@ export function renderGroupedMessage(
   const hasImages = images.length > 0;
   const pairingQrExpiryNotices = extractPairingQrExpiryNotices(message);
   const hasPairingQrExpiryNotices = pairingQrExpiryNotices.length > 0;
+  const hasOmittedInlineImageNotice = hasOmittedInlineImage(message);
 
   const displayMarkdown = resolveMessageDisplayMarkdown(message, normalizedMessage);
   const actionText = opts.actionMarkdown ?? displayMarkdown;
@@ -341,6 +364,7 @@ export function renderGroupedMessage(
     !visibleToolCards &&
     !hasImages &&
     !hasPairingQrExpiryNotices &&
+    !hasOmittedInlineImageNotice &&
     visibleAttachments.length === 0 &&
     assistantViewBlocks.length === 0 &&
     !normalizedMessage.replyTarget
@@ -434,6 +458,7 @@ export function renderGroupedMessage(
     !markdown &&
     !hasImages &&
     !hasPairingQrExpiryNotices &&
+    !hasOmittedInlineImageNotice &&
     visibleAttachments.length === 0 &&
     assistantViewBlocks.length === 0 &&
     !reasoningMarkdown;
@@ -539,6 +564,7 @@ export function renderGroupedMessage(
                 ? html`
                     <div class="chat-tool-msg-body">
                       ${renderPairingQrExpiryNotices(pairingQrExpiryNotices)}
+                      ${hasOmittedInlineImageNotice ? renderOmittedInlineImageNotice() : nothing}
                       ${renderMessageImages(images, imageRenderOptions)}
                       ${renderAssistantAttachments(
                         visibleAttachments,
@@ -616,6 +642,7 @@ export function renderGroupedMessage(
           `
         : html`
             ${renderPairingQrExpiryNotices(pairingQrExpiryNotices)}
+            ${hasOmittedInlineImageNotice ? renderOmittedInlineImageNotice() : nothing}
             ${renderMessageImages(images, imageRenderOptions)}
             ${renderAssistantAttachments(
               visibleAttachments,
