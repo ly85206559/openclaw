@@ -20,7 +20,7 @@ jobs:
     env:
       BASE_SHA: ff102716f4bfd06ab2852dabebeb934d70bc8bfa
       PR_SOURCE_HEAD: 617e15911735baf3cc730d474b20109c76979c04
-      RESULTS_DIR: .artifacts/pr-132366-real-runtime-proof
+      RESULTS_DIR: artifacts/pr-132366-real-runtime-proof
 
     steps:
       - name: Check out immutable proof branch
@@ -134,7 +134,7 @@ jobs:
             `- Current main: \`${process.env.BASE_SHA}\``,
             `- Exact PR source: \`${process.env.PR_SOURCE_HEAD}\``,
             "- A2A: real loopback HTTP POST returned a FAILED task; malformed 512-unit text became well-formed 511-unit text.",
-            "- Workspace: real ENOENT diagnostic through bootstrap loading; malformed 300-unit reason became well-formed 299-unit reason.",
+            "- Workspace: real EACCES diagnostic through bootstrap loading; malformed 300-unit reason became well-formed 299-unit reason.",
             "- Enrollment: real SQLite-persisted resume path; malformed 64-unit display name became well-formed 63-unit display name.",
           ].join("\n");
           fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${summary}\n`);

@@ -130,33 +130,51 @@ async function readErrorReason(directory: string): Promise<string> {
 }
 
 async function proveWorkspace() {
-  const fixedPrefix = path.join(os.tmpdir(), "p".repeat(100));
-  const probeReason = await readErrorReason(path.join(fixedPrefix, "😀tail"));
-  const emojiIndex = probeReason.indexOf("😀");
-  const repeatCount = 299 - emojiIndex;
-  if (emojiIndex < 0 || repeatCount < 0 || repeatCount > 240) {
-    throw new Error(
-      `workspace proof could not tune boundary: ${JSON.stringify({ emojiIndex, repeatCount })}`,
-    );
+  const proofRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-proof-"));
+  const protectedFiles: string[] = [];
+  try {
+    const fixedPrefix = path.join(proofRoot, "p".repeat(100));
+    const createUnreadableFile = async (directory: string) => {
+      await fs.mkdir(directory, { recursive: true });
+      const filePath = path.join(directory, "AGENTS.md");
+      await fs.writeFile(filePath, "proof", { mode: 0o600 });
+      await fs.chmod(filePath, 0o000);
+      protectedFiles.push(filePath);
+    };
+
+    const probeDirectory = path.join(fixedPrefix, "😀tail");
+    await createUnreadableFile(probeDirectory);
+    const probeReason = await readErrorReason(probeDirectory);
+    const emojiIndex = probeReason.indexOf("😀");
+    const repeatCount = 299 - emojiIndex;
+    if (emojiIndex < 0 || repeatCount < 0 || repeatCount > 240) {
+      throw new Error(
+        `workspace proof could not tune boundary: ${JSON.stringify({ emojiIndex, repeatCount })}`,
+      );
+    }
+    const directory = path.join(fixedPrefix, `${"x".repeat(repeatCount)}😀tail`);
+    await createUnreadableFile(directory);
+    const rawReason = await readErrorReason(directory);
+    if (rawReason.charCodeAt(299) !== 0xd83d) {
+      throw new Error(
+        `workspace proof did not place the high surrogate at unit 299: 0x${rawReason.charCodeAt(299).toString(16)}`,
+      );
+    }
+    const files = await loadWorkspaceBootstrapFiles(directory);
+    const content = files.find((file) => file.name === "AGENTS.md")?.content;
+    if (!content?.startsWith("[UNREADABLE: ") || !content.endsWith("]")) {
+      throw new Error(`workspace proof did not return an unreadable diagnostic: ${content}`);
+    }
+    const boundedReason = content.slice("[UNREADABLE: ".length, -1);
+    return {
+      transport: "real fs.readFile EACCES through loadWorkspaceBootstrapFiles",
+      rawReasonBoundaryCodeUnit: `0x${rawReason.charCodeAt(299).toString(16)}`,
+      boundedReason: summarize(boundedReason),
+    };
+  } finally {
+    await Promise.all(protectedFiles.map(async (filePath) => await fs.chmod(filePath, 0o600)));
+    await fs.rm(proofRoot, { recursive: true, force: true });
   }
-  const directory = path.join(fixedPrefix, `${"x".repeat(repeatCount)}😀tail`);
-  const rawReason = await readErrorReason(directory);
-  if (rawReason.charCodeAt(299) !== 0xd83d) {
-    throw new Error(
-      `workspace proof did not place the high surrogate at unit 299: 0x${rawReason.charCodeAt(299).toString(16)}`,
-    );
-  }
-  const files = await loadWorkspaceBootstrapFiles(directory);
-  const content = files.find((file) => file.name === "AGENTS.md")?.content;
-  if (!content?.startsWith("[UNREADABLE: ") || !content.endsWith("]")) {
-    throw new Error(`workspace proof did not return an unreadable diagnostic: ${content}`);
-  }
-  const boundedReason = content.slice("[UNREADABLE: ".length, -1);
-  return {
-    transport: "real fs.readFile ENOENT through loadWorkspaceBootstrapFiles",
-    rawReasonBoundaryCodeUnit: `0x${rawReason.charCodeAt(299).toString(16)}`,
-    boundedReason: summarize(boundedReason),
-  };
 }
 
 async function proveEnrollment() {
