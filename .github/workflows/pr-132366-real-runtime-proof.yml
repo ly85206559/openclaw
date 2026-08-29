@@ -1,0 +1,151 @@
+name: PR 132366 real runtime proof
+
+on:
+  push:
+    branches:
+      - proof/pr-132366-real-runtime
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-132366-real-runtime-proof
+  cancel-in-progress: true
+
+jobs:
+  compare:
+    name: Compare current main with exact PR source
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      BASE_SHA: ff102716f4bfd06ab2852dabebeb934d70bc8bfa
+      PR_SOURCE_HEAD: 617e15911735baf3cc730d474b20109c76979c04
+      RESULTS_DIR: .artifacts/pr-132366-real-runtime-proof
+
+    steps:
+      - name: Check out immutable proof branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify proof lineage and isolation
+        shell: bash
+        run: |
+          set -euo pipefail
+          git merge-base --is-ancestor "$PR_SOURCE_HEAD" HEAD
+          mapfile -t changed < <(git diff --name-only "$PR_SOURCE_HEAD"...HEAD)
+          printf '%s\n' "${changed[@]}"
+          test "${#changed[@]}" -eq 2
+          test "${changed[0]}" = ".github/proof/pr-132366-real-runtime.mts"
+          test "${changed[1]}" = ".github/workflows/pr-132366-real-runtime-proof.yml"
+
+      - name: Set up exact PR source dependencies
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: 24.x
+          install-bun: "false"
+          install-deps: "true"
+          frozen-lockfile: "true"
+          cache-mode: restore
+          dependency-cache: "true"
+
+      - name: Run exact PR source through real runtime paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RESULTS_DIR"
+          cp .github/proof/pr-132366-real-runtime.mts .tmp-pr-132366-real-runtime.mts
+          PROOF_OUTPUT="$RESULTS_DIR/after.json" \
+            PROOF_SOURCE_HEAD="$PR_SOURCE_HEAD" \
+            pnpm exec tsx .tmp-pr-132366-real-runtime.mts after
+
+      - name: Run current main through the same real runtime paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          base_worktree="$RUNNER_TEMP/openclaw-pr-132366-base"
+          git fetch --no-tags --depth=1 https://github.com/openclaw/openclaw.git "$BASE_SHA"
+          test "$(git rev-parse FETCH_HEAD)" = "$BASE_SHA"
+          git worktree add --detach "$base_worktree" FETCH_HEAD
+          cp .github/proof/pr-132366-real-runtime.mts "$base_worktree/.tmp-pr-132366-real-runtime.mts"
+          (
+            cd "$base_worktree"
+            pnpm install --frozen-lockfile --prefer-offline
+            PROOF_OUTPUT="$GITHUB_WORKSPACE/$RESULTS_DIR/before.json" \
+              PROOF_SOURCE_HEAD="$BASE_SHA" \
+              pnpm exec tsx .tmp-pr-132366-real-runtime.mts before
+          )
+
+      - name: Assert the observable before and after behavior
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import fs from "node:fs";
+
+          const resultsDir = process.env.RESULTS_DIR;
+          const before = JSON.parse(fs.readFileSync(`${resultsDir}/before.json`, "utf8"));
+          const after = JSON.parse(fs.readFileSync(`${resultsDir}/after.json`, "utf8"));
+          const expectedBefore = {
+            a2a: { length: 512, wellFormed: false, danglingSurrogate: true, lastCodeUnit: "0xd83d" },
+            workspace: { length: 300, wellFormed: false, danglingSurrogate: true, lastCodeUnit: "0xd83d" },
+            enrollment: { length: 64, wellFormed: false, danglingSurrogate: true, lastCodeUnit: "0xd83d" },
+          };
+          const expectedAfter = {
+            a2a: { length: 511, wellFormed: true, danglingSurrogate: false, lastCodeUnit: "0x78" },
+            workspace: { length: 299, wellFormed: true, danglingSurrogate: false, lastCodeUnit: "0x78" },
+            enrollment: { length: 63, wellFormed: true, danglingSurrogate: false, lastCodeUnit: "0x78" },
+          };
+          const actualBefore = {
+            a2a: before.a2a.text,
+            workspace: before.workspace.boundedReason,
+            enrollment: before.enrollment.displayName,
+          };
+          const actualAfter = {
+            a2a: after.a2a.text,
+            workspace: after.workspace.boundedReason,
+            enrollment: after.enrollment.displayName,
+          };
+          const assertEqual = (label, actual, expected) => {
+            if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+              throw new Error(`${label} mismatch\nactual=${JSON.stringify(actual)}\nexpected=${JSON.stringify(expected)}`);
+            }
+          };
+
+          assertEqual("before", actualBefore, expectedBefore);
+          assertEqual("after", actualAfter, expectedAfter);
+          assertEqual("before source head", before.sourceHead, process.env.BASE_SHA);
+          assertEqual("before checkout head", before.checkoutHead, process.env.BASE_SHA);
+          assertEqual("after source head", after.sourceHead, process.env.PR_SOURCE_HEAD);
+          if (before.a2a.httpStatus !== 200 || before.a2a.taskState !== "TASK_STATE_FAILED") {
+            throw new Error(`before A2A transport failed: ${JSON.stringify(before.a2a)}`);
+          }
+          if (after.a2a.httpStatus !== 200 || after.a2a.taskState !== "TASK_STATE_FAILED") {
+            throw new Error(`after A2A transport failed: ${JSON.stringify(after.a2a)}`);
+          }
+          if (before.enrollment.mode !== "resume" || after.enrollment.mode !== "resume") {
+            throw new Error("worker enrollment did not exercise the persisted resume path");
+          }
+
+          const summary = [
+            "## PR #132366 real-runtime proof",
+            "",
+            `- Current main: \`${process.env.BASE_SHA}\``,
+            `- Exact PR source: \`${process.env.PR_SOURCE_HEAD}\``,
+            "- A2A: real loopback HTTP POST returned a FAILED task; malformed 512-unit text became well-formed 511-unit text.",
+            "- Workspace: real ENOENT diagnostic through bootstrap loading; malformed 300-unit reason became well-formed 299-unit reason.",
+            "- Enrollment: real SQLite-persisted resume path; malformed 64-unit display name became well-formed 63-unit display name.",
+          ].join("\n");
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${summary}\n`);
+          console.log(summary);
+          NODE
+
+      - name: Upload immutable proof records
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: pr-132366-real-runtime-proof
+          path: ${{ env.RESULTS_DIR }}
+          if-no-files-found: error
+          retention-days: 30
