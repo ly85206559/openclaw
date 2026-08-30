@@ -13,6 +13,9 @@ import {
 } from "./src/state/openclaw-state-db.ts";
 import { createWorkerNodeEnrollmentManager } from "./src/gateway/worker-environments/node-enrollment.ts";
 import { createWorkerEnvironmentStore } from "./src/gateway/worker-environments/store.ts";
+import {
+  createWorkerBootstrapArtifactTransferService,
+} from "./src/gateway/worker-environments/worker-bootstrap-artifact-transfer-service.ts";
 
 const label = process.argv[2] ?? "unknown";
 const outputPath = process.env.PROOF_OUTPUT;
@@ -180,8 +183,11 @@ async function proveWorkspace() {
 async function proveEnrollment() {
   const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), `openclaw-enrollment-${label}-`));
   try {
+    const artifactPath = path.join(stateDir, "node-runtime.tgz");
+    await fs.writeFile(artifactPath, "x");
     const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
     const store = createWorkerEnvironmentStore({ database, now: () => 1_000 });
+    const transfer = createWorkerBootstrapArtifactTransferService();
     const intent = store.createIntent({
       environmentId: `real-proof-${label}`,
       providerId: "proof-provider",
@@ -197,8 +203,23 @@ async function proveEnrollment() {
     });
     const manager = createWorkerNodeEnrollmentManager({
       store,
-      getConfig: () => ({}),
+      getConfig: () => ({
+        gateway: {
+          bind: "loopback",
+          publicOrigin: "https://gateway.example.test",
+          auth: { mode: "token", token: "proof-token" },
+        },
+      }),
       resolveAvailability: async () => ({ available: true }),
+      prepareArtifact: async () => ({
+        tarballPath: artifactPath,
+        tarballSha256: "a".repeat(64),
+        tarballBytes: 1,
+        openclawVersion: "proof",
+        buildId: "proof-build",
+        enabledPluginIds: [],
+      }),
+      transfer,
     });
     const enrollment = await manager.begin(record);
     manager.stop();

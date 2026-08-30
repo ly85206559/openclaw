@@ -18,8 +18,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      BASE_SHA: ff102716f4bfd06ab2852dabebeb934d70bc8bfa
-      PR_SOURCE_HEAD: 617e15911735baf3cc730d474b20109c76979c04
+      BASE_SHA: 715760d1c71876cd33d994e0d9472400dd8a7f1b
+      PR_SOURCE_HEAD: a424928003b3d1f1bb77df8ed6c5ca31f4202cd7
       RESULTS_DIR: artifacts/pr-132366-real-runtime-proof
 
     steps:
