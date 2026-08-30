@@ -188,6 +188,7 @@ function renderPairingQrExpiryNotices(notices: PairingQrExpiryNotice[]) {
 }
 
 function renderOmittedInlineImageNotice() {
+  const reason = t("chat.inlineImageOmitted.reason");
   return html`
     <div
       class="chat-assistant-attachment-card chat-assistant-attachment-card--blocked chat-inline-media-omitted"
@@ -201,9 +202,7 @@ function renderOmittedInlineImageNotice() {
           >${t("chat.inlineImageOmitted.badge")}</span
         >
       </div>
-      <div class="chat-assistant-attachment-card__reason">
-        ${t("chat.inlineImageOmitted.reason")}
-      </div>
+      <div class="chat-assistant-attachment-card__reason">${reason}</div>
     </div>
   `;
 }
