@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
@@ -11,8 +11,6 @@ const proofDir = path.join(
   "control-ui-e2e",
   "pr-99556-nested-history",
 );
-const safeLiveImage =
-  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M/wHwAF/gL+X3q8AAAAAElFTkSuQmCC";
 const suite = createControlUiE2eSuite({
   name: "PR #99556 exact-head nested history proof",
   trackBrowserContexts: true,
@@ -21,6 +19,8 @@ const suite = createControlUiE2eSuite({
 suite.define(() => {
   it("shows a nested stored-history omission while preserving a live image", async () => {
     await mkdir(proofDir, { recursive: true });
+    const banner = await readFile(path.join(process.cwd(), "docs/assets/openclaw-banner-dark.png"));
+    const safeLiveImage = `data:image/png;base64,${banner.toString("base64")}`;
     const context = await suite.newBrowserContext({
       locale: "en-US",
       recordVideo: { dir: proofDir, size: { height: 900, width: 1440 } },
