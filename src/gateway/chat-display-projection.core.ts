@@ -331,6 +331,7 @@ export function projectChatDisplayMessagesWithState(
     const sanitized = sanitizeChatHistoryMessage(
       { ...result, role: "toolResult" },
       options?.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
+      { redactInlineMedia: options?.redactInlineMedia },
     ).message;
     return {
       ...asOptionalRecord(message),
