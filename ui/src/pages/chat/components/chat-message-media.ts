@@ -592,30 +592,36 @@ export function extractImages(message: unknown): ImageBlock[] {
   return images;
 }
 
+function isOmittedInlineImageBlock(block: unknown): boolean {
+  const entry = asOptionalRecord(block);
+  if (!entry || entry.type !== "input_image" || entry.omitted !== true) {
+    return false;
+  }
+  const imageUrl = entry.image_url;
+  const nestedImageUrl = asOptionalRecord(imageUrl)?.url;
+  const source = asOptionalRecord(entry.source);
+  return (
+    typeof imageUrl !== "string" &&
+    typeof nestedImageUrl !== "string" &&
+    typeof source?.url !== "string" &&
+    typeof source?.data !== "string"
+  );
+}
+
 export function hasOmittedInlineImage(message: unknown): boolean {
   const content = asOptionalRecord(message)?.content;
   if (!Array.isArray(content)) {
     return false;
   }
   return content.some((block) => {
-    if (!block || typeof block !== "object") {
-      return false;
+    if (isOmittedInlineImageBlock(block)) {
+      return true;
     }
     const entry = asOptionalRecord(block);
-    if (!entry) {
-      return false;
-    }
-    if (entry.type !== "input_image" || entry.omitted !== true) {
-      return false;
-    }
-    const imageUrl = entry.image_url;
-    const nestedImageUrl = asOptionalRecord(imageUrl)?.url;
-    const source = asOptionalRecord(entry.source);
     return (
-      typeof imageUrl !== "string" &&
-      typeof nestedImageUrl !== "string" &&
-      typeof source?.url !== "string" &&
-      typeof source?.data !== "string"
+      entry?.type === "toolResult" &&
+      Array.isArray(entry.content) &&
+      entry.content.some(isOmittedInlineImageBlock)
     );
   });
 }
