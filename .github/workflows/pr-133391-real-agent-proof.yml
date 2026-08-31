@@ -1,0 +1,132 @@
+name: PR 133391 real agent Responses proof
+
+on:
+  push:
+    branches:
+      - proof/pr-133391-real-agent
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-133391-real-agent-proof
+  cancel-in-progress: true
+
+jobs:
+  compare:
+    name: Real Gateway agent Responses before and after
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      BASE_SHA: 836b2efd4068976dde30ad7ac56f2cd576060349
+      PR_SOURCE_HEAD: 5c18025e158736f320943cf3467380dbd2d8281c
+      RESULTS_DIR: artifacts/pr-133391-real-agent-proof
+
+    steps:
+      - name: Check out immutable proof branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify proof lineage and isolation
+        shell: bash
+        run: |
+          set -euo pipefail
+          git merge-base --is-ancestor "$PR_SOURCE_HEAD" HEAD
+          mapfile -t changed < <(git diff --name-only "$PR_SOURCE_HEAD"...HEAD)
+          printf '%s\n' "${changed[@]}"
+          test "${#changed[@]}" -eq 2
+          test "${changed[0]}" = ".github/proof/pr-133391-real-agent.mts"
+          test "${changed[1]}" = ".github/workflows/pr-133391-real-agent-proof.yml"
+
+      - name: Set up exact PR source dependencies
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: 24.x
+          install-bun: "false"
+          install-deps: "true"
+          frozen-lockfile: "true"
+          cache-mode: restore
+          dependency-cache: "true"
+
+      - name: Run exact PR source through a real configured agent
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RESULTS_DIR"
+          cp .github/proof/pr-133391-real-agent.mts .tmp-pr-133391-real-agent.mts
+          PROOF_OUTPUT="$RESULTS_DIR/after.json" \
+            PROOF_SOURCE_HEAD="$PR_SOURCE_HEAD" \
+            pnpm exec tsx .tmp-pr-133391-real-agent.mts after
+
+      - name: Run current main through the same real configured agent
+        shell: bash
+        run: |
+          set -euo pipefail
+          base_worktree="$RUNNER_TEMP/openclaw-pr-133391-base"
+          git fetch --no-tags --depth=1 https://github.com/openclaw/openclaw.git "$BASE_SHA"
+          test "$(git rev-parse FETCH_HEAD)" = "$BASE_SHA"
+          git worktree add --detach "$base_worktree" FETCH_HEAD
+          cp .github/proof/pr-133391-real-agent.mts "$base_worktree/.tmp-pr-133391-real-agent.mts"
+          (
+            cd "$base_worktree"
+            pnpm install --frozen-lockfile --prefer-offline
+            PROOF_OUTPUT="$GITHUB_WORKSPACE/$RESULTS_DIR/before.json" \
+              PROOF_SOURCE_HEAD="$BASE_SHA" \
+              pnpm exec tsx .tmp-pr-133391-real-agent.mts before
+          )
+
+      - name: Assert observable before and after behavior
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import fs from "node:fs";
+
+          const resultsDir = process.env.RESULTS_DIR;
+          const before = JSON.parse(fs.readFileSync(`${resultsDir}/before.json`, "utf8"));
+          const after = JSON.parse(fs.readFileSync(`${resultsDir}/after.json`, "utf8"));
+          const assertLane = (label, lane, expectedText) => {
+            for (const mode of ["required", "pinned"]) {
+              if (lane[mode].completedText !== expectedText) {
+                throw new Error(`${label} ${mode} completed text: ${JSON.stringify(lane[mode])}`);
+              }
+              if (lane[mode].functionCallName !== "get_weather") {
+                throw new Error(`${label} ${mode} lost client tool call: ${JSON.stringify(lane[mode])}`);
+              }
+            }
+            if (lane.providerRequestCount !== 2) {
+              throw new Error(`${label} did not run two real agent turns: ${lane.providerRequestCount}`);
+            }
+            if (!lane.providerToolNames.every((names) => names.includes("get_weather"))) {
+              throw new Error(`${label} provider did not receive the client tool: ${JSON.stringify(lane.providerToolNames)}`);
+            }
+          };
+
+          assertLane("before", before, "Working...");
+          assertLane("after", after, "Done.");
+          if (before.checkoutHead !== process.env.BASE_SHA || after.checkoutHead !== process.env.PR_SOURCE_HEAD) {
+            throw new Error(`checkout identity mismatch: ${JSON.stringify({ before: before.checkoutHead, after: after.checkoutHead })}`);
+          }
+
+          const summary = [
+            "## PR #133391 real configured-agent proof",
+            "",
+            `- Current main: \`${process.env.BASE_SHA}\` emits held provisional text \`Working...\` for required and pinned client tools.`,
+            `- Exact PR source: \`${process.env.PR_SOURCE_HEAD}\` emits finalized text \`Done.\` for both modes.`,
+            "- Both lanes used real loopback HTTP through the Gateway, a configured OpenClaw agent, an OpenAI Responses provider, and retained the `get_weather` function call.",
+            "- No credentials or paid provider were used.",
+          ].join("\n");
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${summary}\n`);
+          console.log(summary);
+          NODE
+
+      - name: Upload immutable proof records
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: pr-133391-real-agent-proof
+          path: ${{ env.RESULTS_DIR }}
+          if-no-files-found: error
+          retention-days: 30
