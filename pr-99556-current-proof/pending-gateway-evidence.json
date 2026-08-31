@@ -1,0 +1,18 @@
+{
+  "exactPrHead": "acd73e4ea9e92aaf8348f58f22ca93173a4b6fa5",
+  "chatHistoryPendingContent": [
+    {
+      "type": "input_image",
+      "omitted": true,
+      "bytes": 34
+    }
+  ],
+  "chatMessageGetContent": [
+    {
+      "type": "input_image",
+      "omitted": true,
+      "bytes": 34
+    }
+  ],
+  "rawPayloadPresent": false
+}
