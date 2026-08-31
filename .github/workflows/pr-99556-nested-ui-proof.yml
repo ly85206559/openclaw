@@ -1,9 +1,9 @@
-name: PR 99556 Nested UI Proof
+name: PR 99556 Exact Head Gateway and UI Proof
 
 on:
   push:
     branches:
-      - codex/proof-pr-99556-current-head
+      - codex/proof-pr-99556-exact-head-2
 
 permissions:
   contents: read
@@ -22,8 +22,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git merge-base HEAD acd73e4ea9e92aaf8348f58f22ca93173a4b6fa5)" = "acd73e4ea9e92aaf8348f58f22ca93173a4b6fa5"
-          test "$(git diff --name-only acd73e4ea9e92aaf8348f58f22ca93173a4b6fa5...HEAD | sort | tr '\n' ' ')" = ".github/workflows/pr-99556-nested-ui-proof.yml src/gateway/server-methods/chat-pending-inline-media-proof.test.ts ui/src/e2e/chat-history-nested-inline-image-proof.e2e.test.ts "
+          test "$(git merge-base HEAD 56347bbdf88020dbda839be75188932acb45f864)" = "56347bbdf88020dbda839be75188932acb45f864"
+          test "$(git diff --name-only 56347bbdf88020dbda839be75188932acb45f864...HEAD | sort | tr '\n' ' ')" = ".github/workflows/pr-99556-nested-ui-proof.yml src/gateway/server-methods/chat-pending-inline-media-proof.test.ts ui/src/e2e/chat-history-nested-inline-image-proof.e2e.test.ts "
 
       - name: Setup Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0

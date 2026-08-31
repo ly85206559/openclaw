@@ -11,8 +11,12 @@ import {
 import { installGatewayTestHooks, rpcReq, testState, writeSessionStore } from "../test-helpers.js";
 import { installConnectedControlUiServerSuite } from "../test-with-server.js";
 
-const EXACT_PR_HEAD = "acd73e4ea9e92aaf8348f58f22ca93173a4b6fa5";
-const DATA_URL = "DATA:image/png;BASE64,cGVuZGluZw==";
+const EXACT_PR_HEAD = "56347bbdf88020dbda839be75188932acb45f864";
+const DATA_URL = " \tDATA:image/png;BASE64,cGVuZGluZw==";
+const NESTED_DATA_URL = "\n data:image/jpeg;base64,bmVzdGVk";
+const SOURCE_URL = "  data:image/webp;base64,c291cmNl";
+const SOURCE_DATA = "raw-source-data";
+const REMOTE_URL = "https://example.test/history-image.png";
 const SESSION_ID = "sess-pending-inline-media-proof";
 const SESSION_KEY = "agent:main:main";
 const proofDir = path.join(
@@ -38,7 +42,37 @@ function expectRedactedContent(content: unknown): void {
       omitted: true,
       bytes: Buffer.byteLength(DATA_URL, "utf8"),
     },
+    {
+      type: "input_image",
+      omitted: true,
+      bytes: Buffer.byteLength(NESTED_DATA_URL, "utf8"),
+      image_url: { detail: "high" },
+    },
+    {
+      type: "input_image",
+      omitted: true,
+      bytes: Buffer.byteLength(SOURCE_URL, "utf8"),
+      source: { media_type: "image/webp" },
+    },
+    {
+      type: "input_image",
+      omitted: true,
+      bytes: Buffer.byteLength(SOURCE_DATA, "utf8"),
+      source: { media_type: "image/png" },
+    },
+    {
+      type: "input_image",
+      source: { media_type: "image/png", url: REMOTE_URL },
+    },
   ]);
+}
+
+function expectNoInlinePayload(value: unknown): void {
+  const serialized = JSON.stringify(value);
+  for (const payload of [DATA_URL, NESTED_DATA_URL, SOURCE_URL, SOURCE_DATA]) {
+    expect(serialized).not.toContain(payload);
+  }
+  expect(serialized).toContain(REMOTE_URL);
 }
 
 describe("pending inline media proof (real WS gateway)", () => {
@@ -64,7 +98,13 @@ describe("pending inline media proof (real WS gateway)", () => {
           assertCurrent: () => {},
           message: {
             role: "user",
-            content: [{ type: "input_image", image_url: DATA_URL }],
+            content: [
+              { type: "input_image", image_url: DATA_URL },
+              { type: "input_image", image_url: { detail: "high", url: NESTED_DATA_URL } },
+              { type: "input_image", source: { media_type: "image/webp", url: SOURCE_URL } },
+              { type: "input_image", source: { data: SOURCE_DATA, media_type: "image/png" } },
+              { type: "input_image", source: { media_type: "image/png", url: REMOTE_URL } },
+            ],
             timestamp: Date.now(),
             idempotencyKey: "pending-image-proof:user",
           } as never,
@@ -78,7 +118,7 @@ describe("pending inline media proof (real WS gateway)", () => {
         expect(history.ok).toBe(true);
         const pendingMessage = history.payload?.pendingInputs?.items?.[0]?.message;
         expectRedactedContent(pendingMessage?.content);
-        expect(JSON.stringify(history.payload)).not.toContain(DATA_URL);
+        expectNoInlinePayload(history.payload);
 
         const messageGet = await rpcReq<{
           ok?: boolean;
@@ -95,7 +135,7 @@ describe("pending inline media proof (real WS gateway)", () => {
         expect(messageGet.ok).toBe(true);
         expect(messageGet.payload?.ok).toBe(true);
         expectRedactedContent(messageGet.payload?.message?.content);
-        expect(JSON.stringify(messageGet.payload)).not.toContain(DATA_URL);
+        expectNoInlinePayload(messageGet.payload);
 
         await mkdir(proofDir, { recursive: true });
         await writeFile(
@@ -105,7 +145,8 @@ describe("pending inline media proof (real WS gateway)", () => {
               exactPrHead: EXACT_PR_HEAD,
               chatHistoryPendingContent: pendingMessage?.content,
               chatMessageGetContent: messageGet.payload?.message?.content,
-              rawPayloadPresent: false,
+              inlinePayloadPresent: false,
+              remoteReferencePreserved: true,
             },
             null,
             2,

@@ -4,7 +4,7 @@ import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-const exactPrHead = "acd73e4ea9e92aaf8348f58f22ca93173a4b6fa5";
+const exactPrHead = "56347bbdf88020dbda839be75188932acb45f864";
 const proofDir = path.join(
   process.cwd(),
   ".artifacts",
