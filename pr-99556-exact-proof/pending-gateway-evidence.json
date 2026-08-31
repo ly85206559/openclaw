@@ -1,0 +1,81 @@
+{
+  "exactPrHead": "56347bbdf88020dbda839be75188932acb45f864",
+  "chatHistoryPendingContent": [
+    {
+      "type": "input_image",
+      "omitted": true,
+      "bytes": 36
+    },
+    {
+      "type": "input_image",
+      "image_url": {
+        "detail": "high"
+      },
+      "omitted": true,
+      "bytes": 33
+    },
+    {
+      "type": "input_image",
+      "source": {
+        "media_type": "image/webp"
+      },
+      "omitted": true,
+      "bytes": 33
+    },
+    {
+      "type": "input_image",
+      "source": {
+        "media_type": "image/png"
+      },
+      "omitted": true,
+      "bytes": 15
+    },
+    {
+      "type": "input_image",
+      "source": {
+        "media_type": "image/png",
+        "url": "https://example.test/history-image.png"
+      }
+    }
+  ],
+  "chatMessageGetContent": [
+    {
+      "type": "input_image",
+      "omitted": true,
+      "bytes": 36
+    },
+    {
+      "type": "input_image",
+      "image_url": {
+        "detail": "high"
+      },
+      "omitted": true,
+      "bytes": 33
+    },
+    {
+      "type": "input_image",
+      "source": {
+        "media_type": "image/webp"
+      },
+      "omitted": true,
+      "bytes": 33
+    },
+    {
+      "type": "input_image",
+      "source": {
+        "media_type": "image/png"
+      },
+      "omitted": true,
+      "bytes": 15
+    },
+    {
+      "type": "input_image",
+      "source": {
+        "media_type": "image/png",
+        "url": "https://example.test/history-image.png"
+      }
+    }
+  ],
+  "inlinePayloadPresent": false,
+  "remoteReferencePreserved": true
+}
