@@ -1,0 +1,60 @@
+name: PR 137641 Active Account Proof
+
+on:
+  push:
+    branches:
+      - codex/proof-pr-137641-active-account-v3
+
+permissions:
+  contents: read
+
+jobs:
+  proof:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      PR_HEAD_SHA: c39e2296d0d082840007c53a805759e0d477871c
+    steps:
+      - name: Checkout proof harness
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 8
+
+      - name: Verify exact PR source plus proof-only files
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git merge-base HEAD "$PR_HEAD_SHA")" = "$PR_HEAD_SHA"
+          test "$(git diff --name-only "$PR_HEAD_SHA"...HEAD | sort | tr '\n' ' ')" = ".github/workflows/pr-137641-active-account-proof.yml extensions/zalo/src/channel.runtime.active-account-proof.test.ts "
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.16.0
+
+      - name: Install pnpm
+        shell: bash
+        run: |
+          set -euo pipefail
+          corepack enable
+          corepack prepare pnpm@12.1.0 --activate
+          pnpm --version
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Capture exact-head active-account pairing proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .artifacts/pr-137641
+          node scripts/run-vitest.mjs extensions/zalo/src/channel.runtime.active-account-proof.test.ts 2>&1 | tee .artifacts/pr-137641/proof.log
+
+      - name: Upload proof log
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: pr-137641-active-account-proof-${{ github.run_id }}
+          path: .artifacts/pr-137641/proof.log
+          if-no-files-found: error
+          retention-days: 14
