@@ -1,0 +1,41 @@
+name: PR 99556 current Gateway and browser proof
+on:
+  push:
+    branches: [codex/proof-99556-20260905]
+permissions:
+  contents: read
+jobs:
+  proof:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 8
+          persist-credentials: false
+      - name: Verify unchanged exact PR source
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_sha=1bfc1427def40f9a258aa6624acede762ac1215d
+          test "$(git merge-base HEAD "$source_sha")" = "$source_sha"
+          test "$(git diff --name-only "$source_sha" HEAD | sort | tr '\n' ' ')" = ".github/workflows/pr-99556-current-proof.yml src/gateway/server-methods/chat-pending-inline-media-proof.test.ts ui/src/e2e/chat-history-nested-inline-image-proof.e2e.test.ts "
+          echo "Validated product source: $source_sha"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.19.0
+      - run: npm install --global pnpm@12.1.0
+      - run: pnpm install --frozen-lockfile
+      - name: Real WebSocket Gateway proof
+        run: node scripts/run-vitest.mjs src/gateway/server-methods/chat-pending-inline-media-proof.test.ts
+      - name: Install Chromium
+        run: pnpm --dir ui exec playwright install --with-deps chromium
+      - name: Chromium proof with simulated Gateway transport
+        run: node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner ui/src/e2e/chat-history-nested-inline-image-proof.e2e.test.ts
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pr-99556-current-proof
+          path: .artifacts/control-ui-e2e/pr-99556-nested-history
+          if-no-files-found: error
+          retention-days: 90
