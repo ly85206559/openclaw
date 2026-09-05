@@ -1,0 +1,35 @@
+name: PR 137699 rebased focused proof
+on:
+  push:
+    branches: [codex/proof-137699-20260905]
+permissions:
+  contents: read
+jobs:
+  proof:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 99493f6c85c07918038ffe9d760937a47657c38d
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.19.0
+      - run: npm install --global pnpm@12.1.0
+      - run: pnpm install --frozen-lockfile
+      - name: Verify exact source and focused delegation regression
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = 99493f6c85c07918038ffe9d760937a47657c38d
+          git show --format=fuller --stat HEAD | tee proof.log
+          pnpm test extensions/openai/realtime-quicksilver-delegation.test.ts 2>&1 | tee -a proof.log
+          pnpm exec oxfmt --check extensions/openai/realtime-quicksilver-delegation-controller.ts extensions/openai/realtime-quicksilver-delegation.test.ts 2>&1 | tee -a proof.log
+          git diff --check
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pr-137699-focused-proof
+          path: proof.log
+          if-no-files-found: warn
