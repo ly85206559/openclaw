@@ -3,9 +3,12 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
-import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
+import {
+  replaceSessionEntry,
+  replaceSessionEntrySync,
+} from "../../../config/sessions/session-accessor.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import { buildSubagentList } from "./subagent-list.js";
 import {
@@ -398,6 +401,65 @@ describe("buildSubagentList", () => {
     expect(list.active[0]?.line).toMatch(/tokens 1(\.0)?k \(in 12 \/ out 1(\.0)?k\)/);
     expect(list.active[0]?.line).toContain("prompt/cache 197k");
     expect(list.active[0]?.line).not.toContain("1k io");
+  });
+
+  it("lists subagent metadata without decoding unrelated prompt payloads", () => {
+    const run = {
+      runId: "run-metadata-only-list",
+      childSessionKey: "agent:main:subagent:metadata-only-list",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "report current usage",
+      cleanup: "keep",
+      createdAt: 1000,
+      execution: { status: "running", startedAt: 1000 },
+    } satisfies SubagentRunRecord;
+    addSubagentRunForTests(run);
+    const storePath = path.join(testWorkspaceDir, "sessions-subagent-list-metadata.json");
+    for (let index = 0; index < 100; index += 1) {
+      replaceSessionEntrySync(
+        { storePath, sessionKey: `agent:main:subagent:unrelated-${index}` },
+        {
+          sessionId: `unrelated-${index}`,
+          updatedAt: 1,
+          skillsSnapshot: { prompt: `UNRELATED_LIST_PAYLOAD_${"x".repeat(4096)}`, skills: [] },
+        },
+      );
+    }
+    replaceSessionEntrySync(
+      { storePath, sessionKey: run.childSessionKey },
+      {
+        sessionId: "metadata-only-list",
+        updatedAt: 2,
+        inputTokens: 12,
+        outputTokens: 34,
+        totalTokens: 56,
+        totalTokensFresh: true,
+        totalTokensVersion: 1,
+        model: "openai/gpt-5.4",
+      },
+    );
+    const parse = vi.spyOn(JSON, "parse");
+    try {
+      const list = buildSubagentList({
+        cfg: { session: { store: storePath } } as OpenClawConfig,
+        runs: [run],
+        recentMinutes: 30,
+      });
+
+      expect(list.active[0]).toMatchObject({
+        model: "openai/gpt-5.4",
+        totalTokens: 56,
+      });
+      expect(list.active[0]?.line).toContain("tokens 46 (in 12 / out 34)");
+      expect(
+        parse.mock.calls.filter(
+          ([value]) => typeof value === "string" && value.includes("UNRELATED_LIST_PAYLOAD_"),
+        ),
+      ).toHaveLength(0);
+    } finally {
+      parse.mockRestore();
+    }
   });
 
   it("keeps stale unended runs out of active and recent list output", () => {
