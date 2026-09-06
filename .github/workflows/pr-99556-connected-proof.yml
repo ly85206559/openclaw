@@ -39,6 +39,8 @@ jobs:
         if: always()
         with:
           name: pr-99556-connected-gateway-proof
-          path: .artifacts/control-ui-e2e/pr-99556-inline-media
+          path: |
+            .artifacts/control-ui-e2e/**
+            .artifacts/control-ui-e2e-timeouts/**
           if-no-files-found: error
           retention-days: 90

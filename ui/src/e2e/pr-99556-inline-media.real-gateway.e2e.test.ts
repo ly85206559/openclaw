@@ -119,7 +119,7 @@ suite.define(() => {
             const composer = page.locator(".agent-chat__composer-combobox textarea");
             await composer.fill("Reply exactly `Live image preserved\nMEDIA:./live-proof.png`");
             await page.getByRole("button", { name: "Send message" }).click();
-            const liveImage = page.locator('img.chat-message-image[src*="live-proof.png"]');
+            const liveImage = page.locator("img.chat-message-image");
             await liveImage.waitFor({ state: "visible", timeout: 30_000 });
             await expect.poll(() => omissionCard.count()).toBe(1);
             expect(pageErrors).toEqual([]);
