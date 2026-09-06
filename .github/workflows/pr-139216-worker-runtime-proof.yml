@@ -1,0 +1,48 @@
+name: PR 139216 worker runtime proof
+
+on:
+  push:
+    branches: [codex/proof-139216-worker-runtime]
+
+permissions:
+  contents: read
+
+jobs:
+  proof:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 8
+          persist-credentials: false
+      - name: Verify exact PR source and proof-only delta
+        shell: bash
+        run: |
+          set -euo pipefail
+          candidate_sha=7f6d80d0687bbea118b9ba7d440222dce33a3ad5
+          baseline_sha=76fb700f1322bc5d8d03ec6f9a63d0d637668aa7
+          test "$(git merge-base HEAD "$candidate_sha")" = "$candidate_sha"
+          test "$(git rev-parse "$candidate_sha^")" = "$baseline_sha"
+          test "$(git diff --name-only "$candidate_sha" HEAD | sort | tr '\n' ' ')" = ".github/workflows/pr-139216-worker-runtime-proof.yml src/worker/worker-fault-injection.test-support.ts src/worker/worker-global-session-owner.real-gateway.test.ts "
+          echo "Validated candidate source: $candidate_sha"
+          echo "Validated baseline source: $baseline_sha"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.19.0
+      - run: npm install --global pnpm@12.3.4
+      - run: pnpm install --frozen-lockfile
+      - name: Prove the exact parent rejects the connected worker commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          baseline_sha=76fb700f1322bc5d8d03ec6f9a63d0d637668aa7
+          git checkout "$baseline_sha" -- src/gateway/worker-environments/session-target.ts
+          OPENCLAW_PR_139216_EXPECT=before-fix node scripts/run-vitest.mjs src/worker/worker-global-session-owner.real-gateway.test.ts --reporter=verbose
+      - name: Prove the exact PR head accepts and persists the connected worker commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          candidate_sha=7f6d80d0687bbea118b9ba7d440222dce33a3ad5
+          git checkout "$candidate_sha" -- src/gateway/worker-environments/session-target.ts
+          OPENCLAW_PR_139216_EXPECT=after-fix node scripts/run-vitest.mjs src/worker/worker-global-session-owner.real-gateway.test.ts --reporter=verbose

@@ -160,6 +160,12 @@ type WorkerClientOptions = {
   runId?: string;
 };
 
+type ComposedGatewayHarnessOptions = {
+  agentId?: string;
+  sessionKey?: string;
+  sessionScope?: "global";
+};
+
 export class ComposedGatewayHarness {
   readonly socketPath: string;
   readonly cfg: OpenClawConfig;
@@ -191,34 +197,50 @@ export class ComposedGatewayHarness {
   private placementGateValue: WorkerSessionPlacementGate | undefined;
   private useReplacementExecutor = false;
   private unsubscribeLive: (() => void) | undefined;
+  private readonly sessionAgentId: string;
+  private readonly sessionKey: string;
 
-  static async create(root: string): Promise<ComposedGatewayHarness> {
-    const sessionsDir = path.join(root, "agents", "main", "sessions");
+  static async create(
+    root: string,
+    options: ComposedGatewayHarnessOptions = {},
+  ): Promise<ComposedGatewayHarness> {
+    const agentId = options.agentId ?? "main";
+    const sessionKey = options.sessionKey ?? SESSION_KEY;
+    const sessionsDir = path.join(root, "agents", agentId, "sessions");
     const storePath = path.join(sessionsDir, "sessions.json");
     await upsertSessionEntryCore(
-      { agentId: "main", sessionKey: SESSION_KEY, storePath },
+      { agentId, sessionKey, storePath },
       { sessionId: SESSION_ID, updatedAt: 1 },
     );
     const sessionTarget = await resolveSessionTranscriptRuntimeTarget({
-      agentId: "main",
+      agentId,
       sessionId: SESSION_ID,
-      sessionKey: SESSION_KEY,
+      sessionKey,
       storePath,
     });
-    return new ComposedGatewayHarness(root, sessionTarget);
+    return new ComposedGatewayHarness(root, sessionTarget, options);
   }
 
   private constructor(
     readonly root: string,
     readonly sessionTarget: Awaited<ReturnType<typeof resolveSessionTranscriptRuntimeTarget>>,
+    options: ComposedGatewayHarnessOptions,
   ) {
     const stateDir = path.join(root, "state");
+    this.sessionAgentId = options.agentId ?? "main";
+    this.sessionKey = options.sessionKey ?? SESSION_KEY;
     this.socketPath = path.join(root, "gateway.sock");
     this.cfg = {
-      agents: { list: [{ id: "main", default: true }] },
+      agents: {
+        list:
+          this.sessionAgentId === "main"
+            ? [{ id: "main", default: true }]
+            : [{ id: "main", default: true }, { id: this.sessionAgentId }],
+      },
       session: {
         mainKey: "main",
         store: path.join(root, "agents", "{agentId}", "sessions", "sessions.json"),
+        ...(options.sessionScope ? { scope: options.sessionScope } : {}),
       },
       cloudWorkers: {
         profiles: { development: { provider: "fake", settings: { region: "test" } } },
@@ -234,7 +256,7 @@ export class ComposedGatewayHarness {
     this.seedAttachedEnvironment();
     this.liveEventsValue = this.createLiveEvents(true);
     this.placementLifecycle = new WorkerFaultPlacementLifecycle({
-      agentId: "main",
+      agentId: this.sessionAgentId,
       bundleHash: BUNDLE_HASH,
       environmentId: ENVIRONMENT_ID,
       environmentStore: this.store,
@@ -243,14 +265,14 @@ export class ComposedGatewayHarness {
       placementStore: this.placementStore,
       rpcSetVersion: WORKER_RPC_SET_VERSION,
       sessionId: SESSION_ID,
-      sessionKey: SESSION_KEY,
+      sessionKey: this.sessionKey,
     });
     this.placementGateValue = createWorkerSessionPlacementGate(this.placementStore);
     this.serviceValue = this.createService();
     this.httpServer = createServer();
     this.webSocketServer = new WebSocketServer({ server: this.httpServer });
     this.webSocketServer.on("connection", (socket) => this.accept(socket));
-    this.chat = createWorkerChatProjection(SESSION_KEY);
+    this.chat = createWorkerChatProjection(this.sessionKey);
     this.unsubscribeLive = onAgentRuntimeEvent((event) => {
       if (typeof event.data.delta === "string") {
         this.liveDeltas.push(event.data.delta);
