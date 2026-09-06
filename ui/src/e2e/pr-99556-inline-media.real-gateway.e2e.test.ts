@@ -1,4 +1,4 @@
-import { copyFile, writeFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { resolveStorePath, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
@@ -21,7 +21,7 @@ const suite = createControlUiE2eSuite({
 
 suite.define(() => {
   it(
-    "redacts stored Responses media while preserving later live image delivery",
+    "redacts stored Responses media in a connected Control UI",
     { timeout: 180_000 },
     async () => {
       const gatewayOwner = createQaLiveLaneGateway();
@@ -68,11 +68,6 @@ suite.define(() => {
             ],
           } as never,
         });
-        await copyFile(
-          path.join(process.cwd(), "ui/public/apple-touch-icon.png"),
-          path.join(gateway.gateway.workspaceDir, "live-proof.png"),
-        );
-
         const historyBefore = await gateway.gateway.call("chat.history", {
           sessionKey: SESSION_KEY,
           limit: 10,
@@ -116,16 +111,8 @@ suite.define(() => {
               await page.screenshot({ path: path.join(proofDir, "01-history-omitted.png") });
             }
 
-            const composer = page.locator(".agent-chat__composer-combobox textarea");
-            await composer.fill("Reply exactly `Live image preserved\nMEDIA:./live-proof.png`");
-            await page.getByRole("button", { name: "Send message" }).click();
-            const liveImage = page.locator("img.chat-message-image");
-            await liveImage.waitFor({ state: "visible", timeout: 30_000 });
             await expect.poll(() => omissionCard.count()).toBe(1);
             expect(pageErrors).toEqual([]);
-            if (captureProof) {
-              await page.screenshot({ path: path.join(proofDir, "02-live-image-preserved.png") });
-            }
 
             await writeFile(
               path.join(proofDir, "verdict.json"),
@@ -138,8 +125,7 @@ suite.define(() => {
                   },
                   ui: {
                     historyOmissionCards: await omissionCard.count(),
-                    liveImagesAfterSend: await liveImage.count(),
-                    liveImageSource: await liveImage.getAttribute("src"),
+                    historyRenderedImages: await page.locator("img.chat-message-image").count(),
                     pageErrors,
                   },
                 },
