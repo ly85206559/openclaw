@@ -1,0 +1,30 @@
+name: Models status case-route proof
+
+on:
+  push:
+    branches:
+      - codex/proof-models-status-case-routes-green
+
+permissions:
+  contents: read
+
+jobs:
+  proof:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          cache-mode: restore
+          dependency-cache: true
+          install-bun: "false"
+      - name: Run focused regression
+        run: >-
+          node scripts/run-vitest.mjs
+          src/commands/models/list.status.test.ts
+          -t "keeps route observations separate for model ids that differ by case"
