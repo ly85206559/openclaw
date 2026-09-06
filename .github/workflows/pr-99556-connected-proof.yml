@@ -27,7 +27,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24.19.0
-      - run: npm install --global pnpm@12.1.0
+      - run: npm install --global pnpm@12.3.4
       - run: pnpm install --frozen-lockfile
       - name: Install Chromium
         run: pnpm --dir ui exec playwright install --with-deps chromium
