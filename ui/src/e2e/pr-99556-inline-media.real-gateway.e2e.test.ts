@@ -8,7 +8,7 @@ import { createQaLiveLaneGateway } from "../../../extensions/qa-lab/src/live-tra
 import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-const EXACT_PR_HEAD = "1e9b2e9e03df1b0b106392fcc394c0856f0c66a9";
+const EXACT_PR_HEAD = "42dafb18f822bcd6a48966badcf3f21f02289de9";
 const INLINE_DATA_URL = `data:image/png;base64,${Buffer.from("responses-history-proof").toString("base64")}`;
 const SESSION_ID = "pr-99556-connected-proof";
 const SESSION_KEY = "agent:qa:pr-99556-connected-proof";

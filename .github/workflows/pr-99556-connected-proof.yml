@@ -20,7 +20,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          source_sha=1e9b2e9e03df1b0b106392fcc394c0856f0c66a9
+          source_sha=42dafb18f822bcd6a48966badcf3f21f02289de9
           test "$(git merge-base HEAD "$source_sha")" = "$source_sha"
           test "$(git diff --name-only "$source_sha" HEAD | sort | tr '\n' ' ')" = ".github/workflows/pr-99556-connected-proof.yml ui/src/e2e/pr-99556-inline-media.real-gateway.e2e.test.ts "
           echo "Validated product source: $source_sha"
