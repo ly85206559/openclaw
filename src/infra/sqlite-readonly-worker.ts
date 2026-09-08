@@ -34,7 +34,11 @@ function isSqliteReadOnlyWorkerResult(value: unknown): value is SqliteReadOnlyWo
 }
 
 function createSqliteReadOnlyWorkerError(message: string, stderr: string): Error {
-  const stderrTail = sliceUtf16Safe(stderr.trim(), -SQLITE_READONLY_STDERR_TAIL_CHARS);
+  // Node can split a decoded surrogate pair when its child stderr buffer overflows.
+  const stderrTail = sliceUtf16Safe(
+    stderr.trim(),
+    -SQLITE_READONLY_STDERR_TAIL_CHARS,
+  ).toWellFormed();
   return new Error(
     `SQLite read-only worker ${message}${stderrTail ? `\nstderr (tail): ${stderrTail}` : ""}`,
   );

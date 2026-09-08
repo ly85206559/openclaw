@@ -536,13 +536,23 @@ describe("prepareSqliteReadOnlyLocation", () => {
     );
   });
 
-  it("keeps worker stderr tails valid at a UTF-16 boundary", async () => {
+  it.each([
+    {
+      boundary: "tail start",
+      stderr: `🤖${"x".repeat(3_999)}`,
+      expectedTail: "x".repeat(3_999),
+    },
+    {
+      boundary: "Node stderr buffer end",
+      stderr: `${"x".repeat(1024 * 1024 - 1)}🤖${"x".repeat(4_096)}`,
+      expectedTail: `${"x".repeat(3_999)}�`,
+    },
+  ])("keeps worker stderr valid at the $boundary", async ({ stderr, expectedTail }) => {
     const tempDir = tempDirs.make("openclaw-sqlite-readonly-stderr-");
     const preloadPath = path.join(tempDir, "stderr-preload.cjs");
-    const expectedTail = "x".repeat(3_999);
     fs.writeFileSync(
       preloadPath,
-      `process.on("exit", () => process.stderr.write(${JSON.stringify(`🤖${expectedTail}`)}));`,
+      `process.once("beforeExit", () => process.stderr.write(${JSON.stringify(stderr)}));`,
     );
     const missingPath = path.join(tempDir, "missing.db");
 
