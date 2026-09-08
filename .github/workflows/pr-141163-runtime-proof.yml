@@ -1,0 +1,116 @@
+name: PR 141163 runtime proof
+
+on:
+  push:
+    branches:
+      - proof/pr-141163-runtime-6bfef9a
+
+permissions:
+  contents: read
+
+jobs:
+  gateway-survives-transient-rejection:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout proof branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Preserve proof injector outside the checkout
+        shell: bash
+        run: cp .github/proof/pr-141163-inject.mjs "$RUNNER_TEMP/pr-141163-inject.mjs"
+
+      - name: Pin reviewed PR head
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected=6bfef9a2710309a7763580108df4982cf0509512
+          git checkout --detach "$expected"
+          test "$(git rev-parse HEAD)" = "$expected"
+
+      - name: Install exact-head dependencies
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          install-deps: "true"
+          frozen-lockfile: "true"
+          cache-mode: "off"
+
+      - name: Run real Gateway survival proof
+        shell: bash
+        env:
+          HOME: ${{ runner.temp }}/pr-141163-home
+          OPENCLAW_PROOF_INJECT_DELAY_MS: "30000"
+        run: |
+          set -euo pipefail
+          proof_dir="$RUNNER_TEMP/pr-141163-proof"
+          log="$proof_dir/gateway.log"
+          summary="$proof_dir/summary.txt"
+          port=19463
+          mkdir -p "$HOME" "$proof_dir"
+
+          node --import tsx --import "$RUNNER_TEMP/pr-141163-inject.mjs" \
+            src/entry.ts gateway --port "$port" --bind loopback --auth none --allow-unconfigured \
+            >"$log" 2>&1 &
+          gateway_pid=$!
+          cleanup() {
+            kill "$gateway_pid" 2>/dev/null || true
+            wait "$gateway_pid" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+
+          before_health=""
+          before_ready=""
+          for _ in $(seq 1 100); do
+            kill -0 "$gateway_pid"
+            before_health="$(curl -sS -o /dev/null -w '%{http_code}' "http://127.0.0.1:$port/healthz" || true)"
+            before_ready="$(curl -sS -o /dev/null -w '%{http_code}' "http://127.0.0.1:$port/readyz" || true)"
+            if [[ "$before_health" = "200" && "$before_ready" = "200" ]]; then
+              break
+            fi
+            sleep 0.25
+          done
+          test "$before_health" = "200"
+          test "$before_ready" = "200"
+
+          injected=false
+          for _ in $(seq 1 160); do
+            kill -0 "$gateway_pid"
+            if grep -Fq "PROOF_TRANSIENT_INJECTED code=EAI_AGAIN" "$log"; then
+              injected=true
+              break
+            fi
+            sleep 0.25
+          done
+          test "$injected" = "true"
+          sleep 3
+
+          kill -0 "$gateway_pid"
+          after_health="$(curl -sS -o /dev/null -w '%{http_code}' "http://127.0.0.1:$port/healthz")"
+          after_ready="$(curl -sS -o /dev/null -w '%{http_code}' "http://127.0.0.1:$port/readyz")"
+          test "$after_health" = "200"
+          test "$after_ready" = "200"
+          grep -Fq "[openclaw] Non-fatal unhandled rejection (continuing):" "$log"
+
+          {
+            echo "reviewed_head=$(git rev-parse HEAD)"
+            echo "gateway_pid_alive_after_injection=true"
+            echo "before_healthz=$before_health"
+            echo "before_readyz=$before_ready"
+            echo "injected_error_code=EAI_AGAIN"
+            echo "non_fatal_handler_observed=true"
+            echo "after_healthz=$after_health"
+            echo "after_readyz=$after_ready"
+          } | tee "$summary"
+
+      - name: Upload redacted proof
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr-141163-runtime-proof
+          path: |
+            ${{ runner.temp }}/pr-141163-proof/summary.txt
+            ${{ runner.temp }}/pr-141163-proof/gateway.log
+          if-no-files-found: error
