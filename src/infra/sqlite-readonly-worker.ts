@@ -1,5 +1,6 @@
 import { execFile, spawnSync } from "node:child_process";
 import path from "node:path";
+import { toUSVString } from "node:util";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { hasErrnoCode } from "./errno.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
@@ -35,10 +36,7 @@ function isSqliteReadOnlyWorkerResult(value: unknown): value is SqliteReadOnlyWo
 
 function createSqliteReadOnlyWorkerError(message: string, stderr: string): Error {
   // Node can split a decoded surrogate pair when its child stderr buffer overflows.
-  const stderrTail = sliceUtf16Safe(
-    stderr.trim(),
-    -SQLITE_READONLY_STDERR_TAIL_CHARS,
-  ).toWellFormed();
+  const stderrTail = toUSVString(sliceUtf16Safe(stderr.trim(), -SQLITE_READONLY_STDERR_TAIL_CHARS));
   return new Error(
     `SQLite read-only worker ${message}${stderrTail ? `\nstderr (tail): ${stderrTail}` : ""}`,
   );
