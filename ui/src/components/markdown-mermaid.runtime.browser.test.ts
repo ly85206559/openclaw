@@ -116,12 +116,12 @@ G --> S`;
   });
 
   it("preserves Unicode at the sandbox error boundary", async () => {
-    const source = `flowchart LR\n${"a".repeat(980)}😀 -->`;
+    const prefix = "No diagram type detected matching given configuration for text: ";
+    const source = `${"x".repeat(935)}😀`;
 
-    const error = await renderMermaidSvg(source, theme).catch((cause: unknown) => cause);
-
-    expect(error).toBeInstanceOf(Error);
-    expect((error as Error).message).not.toMatch(/[\uD800-\uDBFF]$/u);
+    await expect(renderMermaidSvg(source, theme)).rejects.toMatchObject({
+      message: `${prefix}${"x".repeat(935)}`,
+    });
   });
 
   it("blocks image decoding inside Mermaid before the SVG reaches the host", async () => {
