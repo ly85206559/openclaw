@@ -154,18 +154,18 @@ describe("personal model accounts", () => {
     expect(listUserModelAccounts({ profileId: bob.id }, options)).toEqual({ accounts: [] });
   });
 
-  it("repairs a persisted malformed credential label when projecting account inventory", () => {
+  it.each(["\ud83e", "\udd16"])("repairs a persisted label ending in %j", (surrogate) => {
     const options = stateOptions();
     const owner = ensureProfileForEmail("malformed-label@example.test", options);
     const prefix = "x".repeat(255);
-    connectUserModelAccount(
+    const { authProfileId } = connectUserModelAccount(
       {
         ownerProfileId: owner.id,
         credential: {
           type: "token",
           provider: "anthropic",
           token: "synthetic-malformed-label-token",
-          displayName: `${prefix}\ud83e`,
+          displayName: `${prefix}${surrogate}`,
         },
         assertCurrent() {},
       },
@@ -176,6 +176,9 @@ describe("personal model accounts", () => {
 
     expect(listUserModelAccounts({ profileId: owner.id }, options).accounts[0]?.label).toBe(
       `${prefix}\ufffd`,
+    );
+    expect(readUserModelAuthProfile(authProfileId, options)?.credential.displayName).toBe(
+      `${prefix}${surrogate}`,
     );
   });
 

@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 // Durable user profiles plus typed login identities in the shared state DB.
 import type { DatabaseSync } from "node:sqlite";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
-import { toWellFormedUtf16, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { sql } from "kysely";
 import {
   GATEWAY_OWNER_PROFILE_ID,
@@ -94,8 +94,7 @@ function normalizeEmail(email: string): string {
 }
 
 function normalizeInitialDisplayName(name: string | null | undefined): string | null {
-  const trimmed = name?.trim();
-  const normalized = trimmed ? toWellFormedUtf16(trimmed) : undefined;
+  const normalized = name?.trim();
   return normalized ? truncateUtf16Safe(normalized, MAX_USER_PROFILE_DISPLAY_NAME_LENGTH) : null;
 }
 
@@ -254,7 +253,7 @@ function ensureProfileForEmailWithInitialName(
   const displayName =
     initialDisplayName ??
     truncateUtf16Safe(
-      toWellFormedUtf16(normalizedEmail.split("@", 1)[0] || normalizedEmail),
+      normalizedEmail.split("@", 1)[0] || normalizedEmail,
       MAX_USER_PROFILE_DISPLAY_NAME_LENGTH,
     );
   ensureUserProfilesSchema(options);

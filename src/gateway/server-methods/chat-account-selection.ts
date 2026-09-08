@@ -1,4 +1,5 @@
-import { toWellFormedUtf16, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { toUSVString } from "node:util";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { ChatAccountSelection } from "../../../packages/gateway-protocol/src/schema/users.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
@@ -26,10 +27,7 @@ export function resolveChatAccountSelection(params: {
     return {
       kind: "shared",
       authProfileId,
-      label: truncateUtf16Safe(
-        toWellFormedUtf16(credential?.displayName?.trim() || authProfileId),
-        256,
-      ),
+      label: truncateUtf16Safe(toUSVString(credential?.displayName?.trim() || authProfileId), 256),
       source,
     };
   }
@@ -44,7 +42,7 @@ export function resolveChatAccountSelection(params: {
   const locator = parseUserModelAuthProfileId(authProfileId);
   const owner = locator ? resolveUserProfileId(locator.ownerProfileId) : undefined;
   const rawDisplayName = owner ? getUserProfileDisplay(owner).displayName?.trim() : undefined;
-  const displayName = rawDisplayName ? toWellFormedUtf16(rawDisplayName) : undefined;
+  const displayName = rawDisplayName ? toUSVString(rawDisplayName) : undefined;
   return {
     kind: "personal",
     label: displayName ? truncateUtf16Safe(`${displayName}'s account`, 256) : "Personal account",
