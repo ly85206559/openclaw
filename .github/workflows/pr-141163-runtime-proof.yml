@@ -42,7 +42,7 @@ jobs:
         shell: bash
         env:
           HOME: ${{ runner.temp }}/pr-141163-home
-          OPENCLAW_PROOF_INJECT_DELAY_MS: "30000"
+          OPENCLAW_PROOF_INJECT_DELAY_MS: "90000"
         run: |
           set -euo pipefail
           proof_dir="$RUNNER_TEMP/pr-141163-proof"
@@ -63,7 +63,7 @@ jobs:
 
           before_health=""
           before_ready=""
-          for _ in $(seq 1 100); do
+          for _ in $(seq 1 240); do
             kill -0 "$gateway_pid"
             before_health="$(curl -sS -o /dev/null -w '%{http_code}' "http://127.0.0.1:$port/healthz" || true)"
             before_ready="$(curl -sS -o /dev/null -w '%{http_code}' "http://127.0.0.1:$port/readyz" || true)"

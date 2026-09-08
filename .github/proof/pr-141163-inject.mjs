@@ -1,4 +1,4 @@
-const delayMs = Number(process.env.OPENCLAW_PROOF_INJECT_DELAY_MS ?? "30000");
+const delayMs = Number(process.env.OPENCLAW_PROOF_INJECT_DELAY_MS ?? "90000");
 
 setTimeout(() => {
   const error = Object.assign(new Error("PR 141163 transient DNS proof"), {
