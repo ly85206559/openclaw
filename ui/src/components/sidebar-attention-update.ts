@@ -1,6 +1,9 @@
 import type { UpdateRunRecord } from "../../../src/infra/update-run-record.ts";
 import type { ApplicationContext } from "../app/context.ts";
-import { isUpdateActionable } from "../app/update-schedule-projection.ts";
+import {
+  hasUpdateAvailable,
+  isUpdateActionable,
+} from "../app/update-schedule-projection.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import {
   isUpdateAttentionForced,
@@ -53,13 +56,14 @@ export function resolveSidebarUpdateAttention(
   );
   const campaignPendingHydration =
     campaign && !snapshot.updateCampaignStatusHydrated && canHydrateCampaign;
+  const available = hasUpdateAvailable(snapshot.updateAvailable, snapshot.updateSchedule);
   const present =
     runVisible ||
     (snapshot.updateReconciliationPending
       ? true
       : campaignPendingHydration
         ? Boolean(snapshot.updateRunning || statusBanner)
-        : Boolean(snapshot.updateRunning || statusBanner || snapshot.updateAvailable || campaign));
+        : Boolean(snapshot.updateRunning || statusBanner || available || campaign));
   const dismissal =
     runVisible && run?.status !== "running"
       ? { kind: "updateAvailable" as const, signature: JSON.stringify(["run", run?.runId]) }
