@@ -1,0 +1,75 @@
+name: Proof blank message account CLI after fix
+
+on:
+  push:
+    branches:
+      - proof/message-blank-account-cli-after
+
+permissions:
+  contents: read
+
+jobs:
+  proof:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out proof commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4.2.0
+
+      - name: Set up Node and dependencies
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          install-deps: "true"
+
+      - name: Exercise real message CLI entry point
+        shell: bash
+        env:
+          OPENCLAW_CONFIG_PATH: ${{ runner.temp }}/openclaw-state/openclaw.json
+          OPENCLAW_STATE_DIR: ${{ runner.temp }}/openclaw-state
+        run: |
+          set -euo pipefail
+          mkdir -p "$OPENCLAW_STATE_DIR"
+
+          expect_blank_rejection() {
+            local label="$1"
+            shift
+            local output
+            local status
+            set +e
+            output="$("$@" 2>&1)"
+            status=$?
+            set -e
+            printf '%s\n%s\n' "== $label (exit $status) ==" "$output"
+            test "$status" -ne 0
+            grep -F -- "--account must not be blank" <<<"$output"
+          }
+
+          expect_not_blank_rejection() {
+            local label="$1"
+            shift
+            local output
+            local status
+            set +e
+            output="$("$@" 2>&1)"
+            status=$?
+            set -e
+            printf '%s\n%s\n' "== $label (exit $status) ==" "$output"
+            if grep -Fq -- "--account must not be blank" <<<"$output"; then
+              echo "unexpected blank-account rejection" >&2
+              exit 1
+            fi
+          }
+
+          expect_blank_rejection \
+            "message empty account" \
+            pnpm openclaw message send --channel definitely-not-a-channel --account "" --target room --message hi --dry-run --json
+          expect_blank_rejection \
+            "message whitespace account" \
+            pnpm openclaw message send --channel definitely-not-a-channel --account "   " --target room --message hi --dry-run --json
+          expect_not_blank_rejection \
+            "message omitted account" \
+            pnpm openclaw message send --channel definitely-not-a-channel --target room --message hi --dry-run --json
+          expect_not_blank_rejection \
+            "message nonblank account" \
+            pnpm openclaw message send --channel definitely-not-a-channel --account ops --target room --message hi --dry-run --json
