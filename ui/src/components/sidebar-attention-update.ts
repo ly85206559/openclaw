@@ -56,6 +56,8 @@ export function resolveSidebarUpdateAttention(
   );
   const campaignPendingHydration =
     campaign && !snapshot.updateCampaignStatusHydrated && canHydrateCampaign;
+  // Inbox presence must follow the card's refreshed availability decision;
+  // cached metadata alone would leave an invisible update entry behind.
   const available = hasUpdateAvailable(snapshot.updateAvailable, snapshot.updateSchedule);
   const present =
     runVisible ||
