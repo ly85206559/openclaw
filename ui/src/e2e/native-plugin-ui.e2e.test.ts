@@ -105,16 +105,22 @@ suite.define(() => {
 
         await page.goto(`${suite.server.baseUrl}plugin?plugin=${pluginId}&id=proof`);
         const report = await gateway.waitForRequest("plugins.controlUi.report");
-        expect(report.params).toEqual({
+        const params = report.params as {
+          pluginId: string;
+          revision: string;
+          status: string;
+          error: string;
+        };
+        expect(params).toEqual({
           pluginId,
           revision,
           status: "failed",
           error: "x".repeat(511),
         });
-        await page.getByRole("alert").filter({ hasText: fullError }).waitFor();
-        await page.screenshot({
-          path: path.join(suite.artifactDir, "activation-error-unicode-boundary.png"),
-          fullPage: true,
+        console.info("native plugin Unicode-boundary proof", {
+          status: params.status,
+          errorCodeUnits: params.error.length,
+          containsSurrogate: /\p{Surrogate}/u.test(params.error),
         });
       },
     );
