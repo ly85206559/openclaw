@@ -255,7 +255,7 @@ describe("SidebarUpdateCard", () => {
     async (status) => {
       const element = await mount(
         {
-          currentVersion: "2026.9.3",
+          currentVersion: "2026.9.2",
           latestVersion: "2026.9.3",
           channel: "dev",
           commitsBehind: 246,
