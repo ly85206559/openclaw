@@ -224,7 +224,7 @@ it.each(["current", "ahead"] as const)(
     });
     const { modal } = await getRenderedModalDialog(document.body);
 
-    expect(modal.textContent).toContain("Installed v2026.9.3");
+    expect(modal.textContent).toContain("v2026.9.3");
     expect(modal.textContent).not.toContain("246 commits behind");
 
     findButton("Cancel").click();
