@@ -135,12 +135,30 @@ export function isUpdateActionable(
   updateSchedule: UpdateScheduleState | null | undefined,
   updateBusy: boolean,
 ): boolean {
-  const target = updateSchedule?.target;
   return Boolean(
-    updateBusy ||
-    updateSchedule?.campaign ||
-    (updateAvailable && updateAvailable.latestVersion !== updateAvailable.currentVersion) ||
+    updateBusy || updateSchedule?.campaign || hasUpdateAvailable(updateAvailable, updateSchedule),
+  );
+}
+
+export function hasUpdateAvailable(
+  updateAvailable: UpdateAvailable | null | undefined,
+  updateSchedule: UpdateScheduleState | null | undefined,
+): boolean {
+  const target = updateSchedule?.target;
+  const git = updateSchedule?.install?.kind === "git" ? updateSchedule.install.git : undefined;
+  const cachedGitAvailable =
     (updateAvailable?.commitsBehind !== undefined && updateAvailable.commitsBehind > 0) ||
-    (target?.kind === "git" && target.commitsBehind > 0),
+    (target?.kind === "git" && target.commitsBehind > 0);
+  // A completed checkout comparison supersedes the cached announcement. Keep
+  // that fallback only when the refresh could not establish a current state.
+  const gitAvailable =
+    git?.status === "behind" || git?.status === "diverged"
+      ? git.commitsBehind > 0
+      : git?.status === "current" || git?.status === "ahead"
+        ? false
+        : cachedGitAvailable;
+  return Boolean(
+    (updateAvailable && updateAvailable.latestVersion !== updateAvailable.currentVersion) ||
+    gitAvailable,
   );
 }

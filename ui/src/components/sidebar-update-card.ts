@@ -12,6 +12,7 @@ import { projectUpdateRun } from "../app/update-run-projection.ts";
 import {
   formatUpdateCampaignLabel,
   formatUpdateTargetLabel,
+  hasUpdateAvailable,
   isUpdateActionable,
 } from "../app/update-schedule-projection.ts";
 import { t } from "../i18n/index.ts";
@@ -179,13 +180,7 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
   };
 
   private hasAvailableUpdate() {
-    const update = this.updateAvailable;
-    const gitTarget = this.updateSchedule?.target;
-    return (
-      (update !== null && update.latestVersion !== update.currentVersion) ||
-      (update?.commitsBehind !== undefined && update.commitsBehind > 0) ||
-      (gitTarget?.kind === "git" && gitTarget.commitsBehind > 0)
-    );
+    return hasUpdateAvailable(this.updateAvailable, this.updateSchedule);
   }
 
   private compactSummary() {
