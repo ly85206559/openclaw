@@ -108,16 +108,31 @@ export function formatUpdateCampaignLabel(
   });
 }
 
+function resolveComparedGitCommitsBehind(
+  schedule: UpdateScheduleState | null | undefined,
+): number | null | undefined {
+  const git = schedule?.install?.kind === "git" ? schedule.install.git : undefined;
+  if (git?.status === "behind" || git?.status === "diverged") {
+    return git.commitsBehind;
+  }
+  if (git?.status === "current" || git?.status === "ahead") {
+    return null;
+  }
+  return undefined;
+}
+
 /** Formats update availability using the refreshed checkout distance when present. */
 export function formatUpdateTargetLabel(
   schedule: UpdateScheduleState | null | undefined,
   updateAvailable: UpdateAvailable | null | undefined,
 ): string | null {
   const target = schedule?.target;
-  const git = schedule?.install?.git;
+  const comparedBehind = resolveComparedGitCommitsBehind(schedule);
   // Checkout refreshes update install status without replacing the announced target.
-  const comparedBehind =
-    git?.status === "behind" || git?.status === "diverged" ? git.commitsBehind : undefined;
+  // A completed comparison must therefore suppress the stale announcement entirely.
+  if (comparedBehind === null) {
+    return null;
+  }
   const commitsBehind =
     comparedBehind ??
     (target?.kind === "git" ? target.commitsBehind : updateAvailable?.commitsBehind);
@@ -145,18 +160,16 @@ export function hasUpdateAvailable(
   updateSchedule: UpdateScheduleState | null | undefined,
 ): boolean {
   const target = updateSchedule?.target;
-  const git = updateSchedule?.install?.kind === "git" ? updateSchedule.install.git : undefined;
+  const comparedBehind = resolveComparedGitCommitsBehind(updateSchedule);
   const cachedGitAvailable =
     (updateAvailable?.commitsBehind !== undefined && updateAvailable.commitsBehind > 0) ||
     (target?.kind === "git" && target.commitsBehind > 0);
-  // A completed checkout comparison supersedes the cached announcement. Keep
-  // that fallback only when the refresh could not establish a current state.
   const gitAvailable =
-    git?.status === "behind" || git?.status === "diverged"
-      ? git.commitsBehind > 0
-      : git?.status === "current" || git?.status === "ahead"
-        ? false
-        : cachedGitAvailable;
+    comparedBehind === null
+      ? false
+      : comparedBehind === undefined
+        ? cachedGitAvailable
+        : comparedBehind > 0;
   return Boolean(
     (updateAvailable && updateAvailable.latestVersion !== updateAvailable.currentVersion) ||
     gitAvailable,
