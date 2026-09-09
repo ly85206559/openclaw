@@ -76,6 +76,17 @@ describe("channelsResolveCommand", () => {
     });
   });
 
+  it.each(["", " \t\n "])("rejects a blank account selector before startup: %j", async (account) => {
+    await expect(
+      channelsResolveCommand({ account, channel: "telegram", entries: ["friends"] }, runtime),
+    ).rejects.toThrow("--account must not be blank");
+
+    expect(mocks.loadConfig).not.toHaveBeenCalled();
+    expect(mocks.resolveCommandSecretRefsViaGateway).not.toHaveBeenCalled();
+    expect(mocks.resolveInstallableChannelPlugin).not.toHaveBeenCalled();
+    expect(mocks.resolveMessageChannelSelection).not.toHaveBeenCalled();
+  });
+
   it("uses installed channel plugins for explicit target resolution without installing", async () => {
     mocks.loadConfig.mockReturnValue({
       agents: { list: [{ id: "main" }, { id: "ops" }] },
