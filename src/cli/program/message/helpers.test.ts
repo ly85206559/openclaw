@@ -227,6 +227,36 @@ describe("runMessageAction", () => {
   );
 
   it.each([
+    ["empty", ""],
+    ["whitespace-only", "   "],
+  ])("rejects a %s account before plugin preload", async (_name, account) => {
+    const program = new Command();
+    const message = program.command("message");
+    registerMessageSendCommand(message, createMessageCliHelpers("discord"));
+
+    await expect(
+      program.parseAsync(
+        [
+          "message",
+          "send",
+          "--channel",
+          "discord",
+          "--target",
+          "channel:123",
+          "--message",
+          "hi",
+          "--account",
+          account,
+        ],
+        { from: "user" },
+      ),
+    ).rejects.toThrow("--account must not be blank");
+
+    expect(loadPluginRegistryHandleMock).not.toHaveBeenCalled();
+    expect(messageCommandMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
     ["disabled reaction", "react", { ok: false, hint: "Reactions are disabled." }, 1],
     ["rejected added reaction", "react", { ok: false, warning: "Unavailable", added: "✅" }, 1],
     ["rejected delete", "delete", { ok: false, deleted: false, warning: "Not deleted" }, 1],
