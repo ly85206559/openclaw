@@ -169,8 +169,8 @@ export function hasUpdateAvailable(
     (target?.kind === "git" && target.commitsBehind > 0);
   const gitAvailable =
     comparedBehind === undefined ? cachedGitAvailable : comparedBehind > 0;
-  return Boolean(
+  return (
     (updateAvailable && updateAvailable.latestVersion !== updateAvailable.currentVersion) ||
-    gitAvailable,
+    gitAvailable
   );
 }
