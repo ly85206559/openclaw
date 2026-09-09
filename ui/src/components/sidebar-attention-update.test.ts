@@ -3,13 +3,19 @@ import type { ApplicationContext } from "../app/context.ts";
 import { buildUpdateInboxEntry } from "./sidebar-attention-entries.ts";
 import { resolveSidebarUpdateAttention } from "./sidebar-attention-update.ts";
 
-function contextWithGitStatus(status: "ahead" | "current" | "unavailable"): ApplicationContext {
+function contextWithGitStatus(
+  status: "ahead" | "behind" | "current" | "diverged" | "unavailable",
+): ApplicationContext {
   const git =
     status === "current"
       ? { status }
       : status === "ahead"
         ? { status, commitsAhead: 1 }
-        : { status, reason: "fetch-failed" };
+        : status === "behind"
+          ? { status, commitsBehind: 50 }
+          : status === "diverged"
+            ? { status, commitsAhead: 1, commitsBehind: 50 }
+            : { status, reason: "fetch-failed" };
   return {
     gateway: { snapshot: { phase: "connected" } },
     overlays: {
@@ -67,4 +73,13 @@ describe("update attention", () => {
     expect(state.present).toBe(true);
     expect(entry).not.toBeNull();
   });
+
+  it.each(["behind", "diverged"] as const)(
+    "keeps refreshed %s git availability in the Inbox",
+    (status) => {
+      const { entry, state } = resolveUpdateEntry(contextWithGitStatus(status));
+      expect(state.present).toBe(true);
+      expect(entry).not.toBeNull();
+    },
+  );
 });
