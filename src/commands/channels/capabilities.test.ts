@@ -137,16 +137,19 @@ describe("channelsCapabilitiesCommand", () => {
     });
   });
 
-  it.each(["", " \t\n "])("rejects a blank account selector before startup: %j", async (account) => {
-    await expect(
-      channelsCapabilitiesCommand({ channel: "slack", account }, runtime),
-    ).rejects.toThrow("--account must not be blank");
+  it.each(["", " \t\n "])(
+    "rejects a blank account selector before startup: %j",
+    async (account) => {
+      await expect(
+        channelsCapabilitiesCommand({ channel: "slack", account }, runtime),
+      ).rejects.toThrow("--account must not be blank");
 
-    expect(mocks.readConfigFileSnapshot).not.toHaveBeenCalled();
-    expect(mocks.readConfigFileSnapshotForWrite).not.toHaveBeenCalled();
-    expect(mocks.resolveCommandSecretRefsViaGateway).not.toHaveBeenCalled();
-    expect(mocks.resolveInstallableChannelPlugin).not.toHaveBeenCalled();
-  });
+      expect(mocks.readConfigFileSnapshot).not.toHaveBeenCalled();
+      expect(mocks.readConfigFileSnapshotForWrite).not.toHaveBeenCalled();
+      expect(mocks.resolveCommandSecretRefsViaGateway).not.toHaveBeenCalled();
+      expect(mocks.resolveInstallableChannelPlugin).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([undefined, "all"])("keeps %s capabilities listing read-only", async (channel) => {
     await channelsCapabilitiesCommand({ channel }, runtime);

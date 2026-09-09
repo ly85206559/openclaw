@@ -32,6 +32,7 @@ import {
   requireValidConfigFileSnapshot,
   requireValidConfigForWrite,
 } from "../config-validation.js";
+import { parseAccountSelector } from "./account-selector.js";
 import { persistChannelPluginConfig } from "./plugin-config-persistence.js";
 import { formatChannelAccountLabel } from "./shared.js";
 
@@ -279,6 +280,7 @@ export async function channelsCapabilitiesCommand(
   opts: ChannelsCapabilitiesOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ) {
+  parseAccountSelector(opts.account);
   const rawChannel = normalizeLowercaseStringOrEmpty(opts.channel);
   const canInstall = Boolean(rawChannel && rawChannel !== "all");
   const writeSnapshot = canInstall ? await requireValidConfigForWrite(runtime) : null;

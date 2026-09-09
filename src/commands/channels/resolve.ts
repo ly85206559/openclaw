@@ -18,6 +18,7 @@ import { danger } from "../../globals.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { resolveInstallableChannelPlugin } from "../channel-setup/channel-plugin-resolution.js";
+import { parseAccountSelector } from "./account-selector.js";
 
 export type ChannelsResolveOptions = {
   agent?: string;
@@ -124,6 +125,7 @@ export async function channelsResolveCommand(opts: ChannelsResolveOptions, runti
       `At least one entry is required. Example: ${formatCliCommand("openclaw channels resolve --channel discord <name-or-id>")}.`,
     );
   }
+  parseAccountSelector(opts.account);
 
   const loadedRaw = getRuntimeConfig();
   const requestedAgent = opts.agent?.trim();
