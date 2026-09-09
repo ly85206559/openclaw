@@ -284,13 +284,15 @@ describe("scripts/lib/plugin-npm-security-scan.mts", () => {
   });
 
   it("matches the recorded 2026.7.33 inert package scan inventory exactly", () => {
+    // syntheticResultsForFindings returns freshly built results that nothing else
+    // holds, so these are assigned in place rather than respread per element.
     const packageResults = syntheticResultsForFindings(frozen2026_7_33ReviewedFindings()).map(
-      (result) => ({
-        ...result,
-        expectedReviewedCriticalFindings: result.reviewedCriticalFindings.filter((finding) =>
-          finding.includes(".test.ts"),
-        ),
-      }),
+      (result) => {
+        result.expectedReviewedCriticalFindings = result.reviewedCriticalFindings.filter(
+          (finding) => finding.includes(".test.ts"),
+        );
+        return result;
+      },
     );
     const frozen = buildPluginNpmSecurityScanReport({
       candidateSha: CANDIDATE_SHA,
@@ -305,13 +307,16 @@ describe("scripts/lib/plugin-npm-security-scan.mts", () => {
       layout: "extended-stable-2026.7.33",
       status: "pass",
     });
-    const legacyPackageResults = packageResults.map((result) => ({
-      ...result,
-      expectedReviewedCriticalFindings:
-        result.packageName === "@openclaw/acpx"
-          ? result.expectedReviewedCriticalFindings.slice(0, 1)
-          : result.expectedReviewedCriticalFindings,
-    }));
+    // packageResults stays live for the assertion above, so this derives copies
+    // instead of mutating the elements in place.
+    const legacyPackageResults = packageResults.map((result) =>
+      Object.assign({}, result, {
+        expectedReviewedCriticalFindings:
+          result.packageName === "@openclaw/acpx"
+            ? result.expectedReviewedCriticalFindings.slice(0, 1)
+            : result.expectedReviewedCriticalFindings,
+      }),
+    );
     expect(
       buildPluginNpmSecurityScanReport({
         candidateSha: CANDIDATE_SHA,
@@ -407,6 +412,67 @@ describe("scripts/lib/plugin-npm-security-scan.mts", () => {
           ? []
           : [expect.stringContaining("reviewed critical inventory mismatch")],
       );
+    },
+  );
+
+  it.each([null, 0, 1, 2])(
+    "freezes release doctor-test counts while reviewing the current fixture: %s",
+    async (count) => {
+      const packageName = "@openclaw/codex";
+      const fixturePath = "src/doctor.test.ts";
+      const fixtureKey = `${packageName}:dangerous-exec:${fixturePath}`;
+      const spawnProbe =
+        'import { spawn } from "node:child_process";\nspawn(process.execPath, []);\n';
+      for (const context of ["", "release/2026.9.1", "release/2026.9.2", "release/2026.9.3"]) {
+        const requiresLegacyDoctor =
+          context === "release/2026.9.1" || context === "release/2026.9.2";
+        const artifact = writePluginArtifact({
+          extensionId: "codex",
+          packageName,
+          files: {
+            "src/app-server/transport-stdio.ts": spawnProbe,
+            "src/app-server/sandbox-exec-server/sandbox-child.ts": spawnProbe,
+            "src/app-server/transport-process-snapshot.ts": spawnProbe,
+            ...(requiresLegacyDoctor ? { "src/doctor.ts": spawnProbe } : {}),
+            ...(count === null
+              ? {}
+              : {
+                  [fixturePath]:
+                    'import { spawn } from "node:child_process";\n' +
+                    "spawn(process.execPath, []);\n".repeat(count),
+                }),
+          },
+        });
+        const scanned = await scanPublishablePluginPackages([artifact.artifact], context);
+        expect(scanned.scanErrors).toEqual([]);
+        const result = scanned.packageResults[0]!;
+        const current = context === "";
+        expect(
+          result.expectedReviewedCriticalFindings.filter((finding) => finding === fixtureKey),
+          context,
+        ).toEqual(current && count !== null ? [fixtureKey] : []);
+        expect(
+          result.reviewedCriticalFindings.filter((finding) => finding === fixtureKey),
+          context,
+        ).toEqual(current ? Array.from({ length: count ?? 0 }, () => fixtureKey) : []);
+        expect(
+          result.unexpectedCriticalFindings.filter((finding) => finding.path === fixturePath),
+          context,
+        ).toHaveLength(current ? 0 : (count ?? 0));
+
+        const report = buildPluginNpmSecurityScanReport({
+          candidateSha: CANDIDATE_SHA,
+          packageResults: scanned.packageResults,
+          targetContextRef: context,
+          toolingSha: TOOLING_SHA,
+        });
+        expect(
+          report.errors.filter((error) => error.startsWith(`${packageName}:`)),
+          context,
+        ).toHaveLength(
+          current ? (count === null || count === 1 ? 0 : 1) : count === null || count === 0 ? 0 : 1,
+        );
+      }
     },
   );
 
