@@ -1,6 +1,6 @@
 import type { UpdateRunRecord } from "../../../src/infra/update-run-record.ts";
 import type { ApplicationContext } from "../app/context.ts";
-import { hasUpdateAvailable, isUpdateActionable } from "../app/update-schedule-projection.ts";
+import { isUpdateActionable } from "../app/update-schedule-projection.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import {
   isUpdateAttentionForced,
@@ -53,16 +53,13 @@ export function resolveSidebarUpdateAttention(
   );
   const campaignPendingHydration =
     campaign && !snapshot.updateCampaignStatusHydrated && canHydrateCampaign;
-  // Inbox presence must follow the card's refreshed availability decision;
-  // cached metadata alone would leave an invisible update entry behind.
-  const available = hasUpdateAvailable(snapshot.updateAvailable, snapshot.updateSchedule);
-  const present =
+  const actionable = isUpdateActionable(snapshot.updateAvailable, snapshot.updateSchedule, busy);
+  const present = Boolean(
     runVisible ||
-    (snapshot.updateReconciliationPending
-      ? true
-      : campaignPendingHydration
-        ? Boolean(snapshot.updateRunning || statusBanner)
-        : Boolean(snapshot.updateRunning || statusBanner || available || campaign));
+    snapshot.updateReconciliationPending ||
+    statusBanner ||
+    (campaignPendingHydration ? snapshot.updateRunning : actionable),
+  );
   const dismissal =
     runVisible && run?.status !== "running"
       ? { kind: "updateAvailable" as const, signature: JSON.stringify(["run", run?.runId]) }
@@ -77,7 +74,7 @@ export function resolveSidebarUpdateAttention(
     campaign?.state === "applying" ||
     isUpdateAttentionForced(statusBanner?.tone);
   return {
-    actionable: isUpdateActionable(snapshot.updateAvailable, snapshot.updateSchedule, busy),
+    actionable,
     busy,
     canUpdate,
     dismissal,

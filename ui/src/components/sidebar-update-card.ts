@@ -12,7 +12,6 @@ import { projectUpdateRun } from "../app/update-run-projection.ts";
 import {
   formatUpdateCampaignLabel,
   formatUpdateTargetLabel,
-  hasUpdateAvailable,
   isUpdateActionable,
 } from "../app/update-schedule-projection.ts";
 import { t } from "../i18n/index.ts";
@@ -179,10 +178,6 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
     }
   };
 
-  private hasAvailableUpdate() {
-    return hasUpdateAvailable(this.updateAvailable, this.updateSchedule);
-  }
-
   private compactSummary() {
     if (this.refreshRequired) {
       return {
@@ -210,7 +205,7 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
     const campaign = this.updateSchedule?.campaign;
     const busy = this.updateBusy || campaign?.state === "applying";
     const statusBanner = this.updateRun ? null : this.statusBanner;
-    if (!campaign && !busy && !statusBanner && !this.hasAvailableUpdate()) {
+    if (!statusBanner && !isUpdateActionable(this.updateAvailable, this.updateSchedule, busy)) {
       return null;
     }
     const targetLabel = formatUpdateTargetLabel(this.updateSchedule, this.updateAvailable);
@@ -396,7 +391,8 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
     // metadata while it restarts, and the card must not vanish or fall back to
     // the stale "update available" call to action mid-install.
     const statusBanner = this.updateRun ? null : this.statusBanner;
-    if (!campaign && !busy && !statusBanner && !this.hasAvailableUpdate()) {
+    const actionable = isUpdateActionable(update, this.updateSchedule, busy);
+    if (!statusBanner && !actionable) {
       return nothing;
     }
     const title = this.nativeUpdateAvailable
@@ -419,7 +415,6 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
     const holdActive = campaign?.holdUntilMs !== undefined && campaign.holdUntilMs > Date.now();
     const showHold = Boolean(
       campaign &&
-      campaign.state !== "applying" &&
       this.canUpdate &&
       this.canHoldUpdate &&
       !busy &&
@@ -428,7 +423,6 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
     );
     // An outcome with nothing left to act on is the whole card: re-offering an
     // update the operator just ran would bury the reason it failed.
-    const actionable = isUpdateActionable(update, this.updateSchedule, this.updateBusy);
     const updateAction = html`<button
       class="sidebar-update-card__action ${busy ? "sidebar-update-card__action--busy" : ""}"
       type="button"

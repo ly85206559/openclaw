@@ -110,15 +110,13 @@ export function formatUpdateCampaignLabel(
 
 function resolveComparedGitCommitsBehind(
   schedule: UpdateScheduleState | null | undefined,
-): number | null | undefined {
-  const git = schedule?.install?.kind === "git" ? schedule.install.git : undefined;
-  if (git?.status === "behind" || git?.status === "diverged") {
-    return git.commitsBehind;
+  fallback?: number,
+): number | false | undefined {
+  const git = schedule?.install?.git;
+  if (!git || git.status === "unavailable") {
+    return fallback;
   }
-  if (git?.status === "current" || git?.status === "ahead") {
-    return null;
-  }
-  return undefined;
+  return "commitsBehind" in git && git.commitsBehind;
 }
 
 /** Formats update availability using the refreshed checkout distance when present. */
@@ -127,19 +125,18 @@ export function formatUpdateTargetLabel(
   updateAvailable: UpdateAvailable | null | undefined,
 ): string | null {
   const target = schedule?.target;
-  const comparedBehind = resolveComparedGitCommitsBehind(schedule);
+  const commitsBehind = resolveComparedGitCommitsBehind(
+    schedule,
+    target?.kind === "git" ? target.commitsBehind : updateAvailable?.commitsBehind,
+  );
   // Checkout refreshes update install status without replacing the announced target.
   // A completed comparison must therefore suppress the stale announcement entirely.
-  if (comparedBehind === null) {
-    return null;
-  }
-  const commitsBehind =
-    comparedBehind ??
-    (target?.kind === "git" ? target.commitsBehind : updateAvailable?.commitsBehind);
   if (commitsBehind !== undefined) {
-    return t(commitsBehind === 1 ? "updates.target.commitBehind" : "updates.target.commitsBehind", {
-      count: String(commitsBehind),
-    });
+    return commitsBehind === false
+      ? null
+      : t(commitsBehind === 1 ? "updates.target.commitBehind" : "updates.target.commitsBehind", {
+          count: String(commitsBehind),
+        });
   }
   const version = target?.kind === "package" ? target.version : updateAvailable?.latestVersion;
   return version ? t("updates.target.version", { version }) : null;
@@ -150,26 +147,15 @@ export function isUpdateActionable(
   updateSchedule: UpdateScheduleState | null | undefined,
   updateBusy: boolean,
 ): boolean {
-  return Boolean(
-    updateBusy || updateSchedule?.campaign || hasUpdateAvailable(updateAvailable, updateSchedule),
-  );
-}
-
-export function hasUpdateAvailable(
-  updateAvailable: UpdateAvailable | null | undefined,
-  updateSchedule: UpdateScheduleState | null | undefined,
-): boolean {
-  const comparedBehind = resolveComparedGitCommitsBehind(updateSchedule);
-  if (comparedBehind === null) {
-    return false;
-  }
   const target = updateSchedule?.target;
-  const cachedGitAvailable =
-    (updateAvailable?.commitsBehind !== undefined && updateAvailable.commitsBehind > 0) ||
-    (target?.kind === "git" && target.commitsBehind > 0);
-  const gitAvailable = comparedBehind === undefined ? cachedGitAvailable : comparedBehind > 0;
-  return (
-    (updateAvailable && updateAvailable.latestVersion !== updateAvailable.currentVersion) ||
-    gitAvailable
+  const commitsBehind = resolveComparedGitCommitsBehind(
+    updateSchedule,
+    updateAvailable?.commitsBehind || (target?.kind === "git" ? target.commitsBehind : 0),
+  );
+  return Boolean(
+    updateBusy ||
+    updateSchedule?.campaign ||
+    (commitsBehind !== false &&
+      (updateAvailable?.latestVersion !== updateAvailable?.currentVersion || commitsBehind)),
   );
 }
