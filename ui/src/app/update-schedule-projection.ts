@@ -159,17 +159,16 @@ export function hasUpdateAvailable(
   updateAvailable: UpdateAvailable | null | undefined,
   updateSchedule: UpdateScheduleState | null | undefined,
 ): boolean {
-  const target = updateSchedule?.target;
   const comparedBehind = resolveComparedGitCommitsBehind(updateSchedule);
+  if (comparedBehind === null) {
+    return false;
+  }
+  const target = updateSchedule?.target;
   const cachedGitAvailable =
     (updateAvailable?.commitsBehind !== undefined && updateAvailable.commitsBehind > 0) ||
     (target?.kind === "git" && target.commitsBehind > 0);
   const gitAvailable =
-    comparedBehind === null
-      ? false
-      : comparedBehind === undefined
-        ? cachedGitAvailable
-        : comparedBehind > 0;
+    comparedBehind === undefined ? cachedGitAvailable : comparedBehind > 0;
   return Boolean(
     (updateAvailable && updateAvailable.latestVersion !== updateAvailable.currentVersion) ||
     gitAvailable,
