@@ -164,11 +164,7 @@ export function projectUpdateSentinel(sentinel: UpdateRestartStatusResponse["sen
 
 function lastLogLine(tail: string | null | undefined): string | null {
   // Redact before clipping: a truncated URL can lose its credential delimiter.
-  const lines = formatUiExternalText(tail)
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean);
-  const last = lines.at(-1);
+  const last = formatUiExternalText(tail).trim().split("\n").at(-1)?.trim();
   return last ? truncateUtf16Safe(last, MAX_UPDATE_FAILURE_CAUSE_CHARS) : null;
 }
 
