@@ -1,3 +1,4 @@
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { UpdateRunRecord } from "../../../src/infra/update-run-record.js";
 import { renderUpdateRunReport } from "../../../src/infra/update-run-report.js";
 import { classifyUpdateOutcome } from "../../../src/shared/update-outcome.js";
@@ -168,7 +169,7 @@ function lastLogLine(tail: string | null | undefined): string | null {
     .map((line) => line.trim())
     .filter(Boolean);
   const last = lines.at(-1);
-  return last ? last.slice(0, MAX_UPDATE_FAILURE_CAUSE_CHARS) : null;
+  return last ? truncateUtf16Safe(last, MAX_UPDATE_FAILURE_CAUSE_CHARS) : null;
 }
 
 /**
