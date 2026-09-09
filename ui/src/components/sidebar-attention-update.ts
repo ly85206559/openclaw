@@ -1,9 +1,6 @@
 import type { UpdateRunRecord } from "../../../src/infra/update-run-record.ts";
 import type { ApplicationContext } from "../app/context.ts";
-import {
-  hasUpdateAvailable,
-  isUpdateActionable,
-} from "../app/update-schedule-projection.ts";
+import { hasUpdateAvailable, isUpdateActionable } from "../app/update-schedule-projection.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import {
   isUpdateAttentionForced,
