@@ -284,6 +284,36 @@ describe("runMessageAction", () => {
     },
   );
 
+  it.each([
+    ["empty", ""],
+    ["whitespace-only", "   "],
+  ])("rejects a %s account before plugin preload", async (_label, account) => {
+    const program = new Command();
+    const message = program.command("message");
+    registerMessageSendCommand(message, createMessageCliHelpers("discord"));
+
+    await expect(
+      program.parseAsync(
+        [
+          "message",
+          "send",
+          "--channel",
+          "discord",
+          "--account",
+          account,
+          "--target",
+          "channel:123",
+          "--message",
+          "hi",
+        ],
+        { from: "user" },
+      ),
+    ).rejects.toThrow("--account must not be blank");
+
+    expect(loadPluginRegistryHandleMock).not.toHaveBeenCalled();
+    expect(messageCommandMock).not.toHaveBeenCalled();
+  });
+
   it("loads configured channel plugins when no target channel is known yet", async () => {
     await runSendAction({ channel: undefined });
 
