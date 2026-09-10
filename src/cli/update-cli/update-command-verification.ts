@@ -1,6 +1,7 @@
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { resolveGatewayRestartLogPath } from "../../daemon/restart-logs.js";
 import { resolveGatewayService } from "../../daemon/service.js";
+import { createConfiguredGatewayLocalProbe } from "../../gateway/local-http-probe.js";
 import type { UpdateRepairValidation } from "../../infra/update-repair-protocol.js";
 import { recordUpdateRunStep, recordUpdateRunVerification } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
@@ -8,6 +9,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
 import { resolveGatewayRestartProbeContext } from "../daemon-cli/restart-health-probe.js";
 import {
+  inspectGatewayRestart,
   renderRestartDiagnostics,
   waitForGatewayHealthyRestart,
   waitForGatewayHttpReadiness,
@@ -141,6 +143,25 @@ export async function verifyUpdatedGateway(params: {
   });
   assertCurrent();
   const readyz = http.readyz === 200;
+  const finalHealth = await inspectGatewayRestart({
+    service,
+    port: params.gatewayPort,
+    env: params.serviceEnv,
+    expectedVersion: params.expectedVersion,
+    expectedBuildId: params.expectedBuildId,
+    probeContext: context,
+    configuredProbe: createConfiguredGatewayLocalProbe(context.config),
+    ...(params.signal ? { signal: params.signal } : {}),
+  });
+  assertCurrent();
+  const generationChanged =
+    health.runtime.pid !== finalHealth.runtime.pid ||
+    health.gatewayBootId !== finalHealth.gatewayBootId;
+  if (generationChanged) {
+    // The final HTTP response cannot validate a replacement process against the
+    // earlier settle window. Keep its current facts, but require a fresh verification.
+    health = { ...finalHealth, healthy: false };
+  }
   if (launchAgentRecovery?.attempted) {
     defaultRuntime.error(
       launchAgentRecovery.recovered ? launchAgentRecovery.message : launchAgentRecovery.detail,
@@ -173,6 +194,9 @@ export async function verifyUpdatedGateway(params: {
   recordUpdateGatewayHealth(proofOptions.run, health, params.gatewayPort, readyz);
   const diagnosticLines: [string, ...string[]] = [
     "Gateway did not become healthy after restart.",
+    ...(generationChanged
+      ? ["Gateway generation changed after the health settle; retry verification."]
+      : []),
     ...(!readyz ? ["Gateway /readyz did not return HTTP 200."] : []),
     ...(health.healthy && params.requireRunningService
       ? ["Gateway responded, but the managed service did not report running after restart."]
@@ -189,19 +213,21 @@ export async function verifyUpdatedGateway(params: {
     `Run \`${formatCliCommand("openclaw gateway status --deep")}\` for details.`,
     ...formatPostUpdateGatewayRecoveryInstructions(params.result),
   ];
-  const reason = health.versionMismatch
-    ? "version-mismatch"
-    : health.buildIdMismatch
-      ? "build-id-mismatch"
-      : health.activatedPluginErrors?.length
-        ? "plugin-errors"
-        : health.channelProbeErrors?.length
-          ? "channel-errors"
-          : !readyz
-            ? "readyz-unhealthy"
-            : !serviceRunning
-              ? "service-not-running"
-              : (health.waitOutcome ?? "restart-unhealthy");
+  const reason = generationChanged
+    ? "gateway-generation-changed"
+    : health.versionMismatch
+      ? "version-mismatch"
+      : health.buildIdMismatch
+        ? "build-id-mismatch"
+        : health.activatedPluginErrors?.length
+          ? "plugin-errors"
+          : health.channelProbeErrors?.length
+            ? "channel-errors"
+            : !readyz
+              ? "readyz-unhealthy"
+              : !serviceRunning
+                ? "service-not-running"
+                : (health.waitOutcome ?? "restart-unhealthy");
   if (params.opts.run) {
     recordUpdateRunStep(
       params.opts.run.runId,

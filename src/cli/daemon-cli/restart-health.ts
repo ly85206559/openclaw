@@ -339,7 +339,9 @@ export async function waitForGatewayHealthyRestart(params: {
   let postMigrationDeadlineMs: number | undefined;
   let migrationActive = false;
   let nextMigrationActivityPollMs = 0;
-  let healthyStreak: { pid: number | undefined; probes: number } | undefined;
+  let healthyStreak:
+    | { pid: number | undefined; gatewayBootId: string | undefined; probes: number }
+    | undefined;
 
   for (let attempt = 0; ; attempt += 1) {
     params.signal?.throwIfAborted();
@@ -354,10 +356,20 @@ export async function waitForGatewayHealthyRestart(params: {
         (snapshot.runtime.status === "running" &&
           (process.platform === "win32" || typeof snapshot.runtime.pid === "number")));
     if (healthy) {
-      if (healthyStreak && healthyStreak.pid === snapshot.runtime.pid) {
+      if (
+        healthyStreak &&
+        healthyStreak.pid === snapshot.runtime.pid &&
+        healthyStreak.gatewayBootId === snapshot.gatewayBootId
+      ) {
         healthyStreak.probes += 1;
       } else {
-        healthyStreak = { pid: snapshot.runtime.pid, probes: 1 };
+        // A supervisor can replace the Gateway under the same native PID.
+        // Boot identity keeps each settle window bound to one live generation.
+        healthyStreak = {
+          pid: snapshot.runtime.pid,
+          gatewayBootId: snapshot.gatewayBootId,
+          probes: 1,
+        };
       }
       if (healthyStreak.probes >= settleProbes) {
         return withWaitContext(snapshot, "healthy", elapsedMs);
