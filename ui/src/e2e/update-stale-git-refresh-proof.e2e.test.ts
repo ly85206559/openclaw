@@ -56,9 +56,13 @@ suite.define(() => {
           updateAvailable,
           updateSchedule: staleSchedule,
         });
+        expect((await page.goto(`${suite.server.baseUrl}settings/appearance`))?.status()).toBe(200);
+        await waitForControlUiRoute(page, {
+          pathname: "/settings/appearance",
+          routeId: "appearance",
+        });
         await gateway.deferNext("update.status");
-
-        expect((await page.goto(`${suite.server.baseUrl}settings/updates`))?.status()).toBe(200);
+        await page.locator('a[href="/settings/updates"]').click();
         await waitForControlUiRoute(page, {
           pathname: "/settings/updates",
           routeId: "updates",
