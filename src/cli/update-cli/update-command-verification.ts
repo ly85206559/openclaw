@@ -161,11 +161,9 @@ export async function verifyUpdatedGateway(params: {
     generationChanged =
       health.runtime.pid !== finalHealth.runtime.pid ||
       health.gatewayBootId !== finalHealth.gatewayBootId;
-    if (generationChanged) {
-      // The final HTTP response cannot validate a replacement process against the
-      // earlier settle window. Keep its current facts, but require a fresh verification.
-      health = { ...finalHealth, healthy: false };
-    }
+    // The final inspection is authoritative even for the same generation: service,
+    // plugin, or channel health can deteriorate after the settle window.
+    health = generationChanged ? { ...finalHealth, healthy: false } : finalHealth;
   }
   if (launchAgentRecovery?.attempted) {
     defaultRuntime.error(
