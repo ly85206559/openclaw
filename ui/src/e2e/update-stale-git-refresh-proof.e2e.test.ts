@@ -56,6 +56,7 @@ suite.define(() => {
           updateAvailable,
           updateSchedule: staleSchedule,
         });
+        await gateway.deferNext("update.status");
 
         expect((await page.goto(`${suite.server.baseUrl}settings/updates`))?.status()).toBe(200);
         await waitForControlUiRoute(page, {
@@ -69,17 +70,6 @@ suite.define(() => {
           animations: "disabled",
           path: path.join(proofDir, "01-stale-update-status.png"),
         });
-        const checkStatus = page.getByRole("button", { name: "Check status", exact: true });
-        const statusRequestCount = (await gateway.getRequests("update.status")).length;
-        await gateway.setMethodResponse("update.status", {
-          sentinel: null,
-          schedule: currentSchedule,
-          updateAvailable,
-        });
-        await checkStatus.click();
-        await expect
-          .poll(async () => (await gateway.getRequests("update.status")).length)
-          .toBe(statusRequestCount + 1);
         const refreshRequest = (await gateway.getRequests("update.status")).at(-1);
         const refreshCheckoutRequested =
           typeof refreshRequest?.params === "object" &&
@@ -87,6 +77,11 @@ suite.define(() => {
           "refreshCheckout" in refreshRequest.params &&
           refreshRequest.params.refreshCheckout === true;
         expect(refreshCheckoutRequested).toBe(true);
+        await gateway.resolveDeferred("update.status", {
+          sentinel: null,
+          schedule: currentSchedule,
+          updateAvailable,
+        });
         await page.getByText("Up to date", { exact: true }).waitFor();
         expect(await staleStatus.count()).toBe(0);
         await page.screenshot({
@@ -94,9 +89,6 @@ suite.define(() => {
           path: path.join(proofDir, "02-current-after-refresh.png"),
         });
 
-        // "Up to date" is published before the refresh promise releases its
-        // busy interlock; wait for the real control to settle before teardown.
-        await expect.poll(() => checkStatus.isEnabled()).toBe(true);
         console.info("stale Git update refresh proof", {
           refreshCheckoutRequested,
           refreshedStatus: currentSchedule.install.git.status,
