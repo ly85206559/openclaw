@@ -143,24 +143,29 @@ export async function verifyUpdatedGateway(params: {
   });
   assertCurrent();
   const readyz = http.readyz === 200;
-  const finalHealth = await inspectGatewayRestart({
-    service,
-    port: params.gatewayPort,
-    env: params.serviceEnv,
-    expectedVersion: params.expectedVersion,
-    expectedBuildId: params.expectedBuildId,
-    probeContext: context,
-    configuredProbe: createConfiguredGatewayLocalProbe(context.config),
-    ...(params.signal ? { signal: params.signal } : {}),
-  });
-  assertCurrent();
-  const generationChanged =
-    health.runtime.pid !== finalHealth.runtime.pid ||
-    health.gatewayBootId !== finalHealth.gatewayBootId;
-  if (generationChanged) {
-    // The final HTTP response cannot validate a replacement process against the
-    // earlier settle window. Keep its current facts, but require a fresh verification.
-    health = { ...finalHealth, healthy: false };
+  const candidateServiceRunning =
+    !params.requireRunningService || health.runtime.status === "running";
+  let generationChanged = false;
+  if (health.healthy && candidateServiceRunning && readyz) {
+    const finalHealth = await inspectGatewayRestart({
+      service,
+      port: params.gatewayPort,
+      env: params.serviceEnv,
+      expectedVersion: params.expectedVersion,
+      expectedBuildId: params.expectedBuildId,
+      probeContext: context,
+      configuredProbe: createConfiguredGatewayLocalProbe(context.config),
+      ...(params.signal ? { signal: params.signal } : {}),
+    });
+    assertCurrent();
+    generationChanged =
+      health.runtime.pid !== finalHealth.runtime.pid ||
+      health.gatewayBootId !== finalHealth.gatewayBootId;
+    if (generationChanged) {
+      // The final HTTP response cannot validate a replacement process against the
+      // earlier settle window. Keep its current facts, but require a fresh verification.
+      health = { ...finalHealth, healthy: false };
+    }
   }
   if (launchAgentRecovery?.attempted) {
     defaultRuntime.error(

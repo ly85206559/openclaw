@@ -221,7 +221,7 @@ describe("maybeRestartService", () => {
       verifyUpdatedGateway({
         opts: { json: true },
         result: { status: "ok", mode: "npm", steps: [], durationMs: 0 },
-        serviceEnv: {},
+        serviceEnv: { HOME: "/home/operator" },
         gatewayPort: 18789,
         expectedVersion: gateway.version,
         expectedBuildId: gateway.buildId,
