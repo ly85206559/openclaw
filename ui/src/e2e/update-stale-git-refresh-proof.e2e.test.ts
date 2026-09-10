@@ -34,13 +34,6 @@ const currentSchedule = {
   ...staleSchedule,
   install: { kind: "git", git: { status: "current" } },
 } as const;
-const failedStatus = {
-  kind: "update",
-  status: "error",
-  ts: 1_787_860_000_000,
-  stats: { mode: "git", reason: "status-check-failed" },
-} as const;
-
 suite.define(() => {
   it("retires stale update prompts after a completed checkout refresh", async () => {
     const proofDir = createControlUiE2eArtifactDir("update-stale-git-refresh");
@@ -54,7 +47,7 @@ suite.define(() => {
         const gateway = await installMockGateway(page, {
           methodResponses: {
             "update.status": {
-              sentinel: failedStatus,
+              sentinel: null,
               schedule: staleSchedule,
               updateAvailable,
             },
