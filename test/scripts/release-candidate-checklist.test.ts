@@ -11,7 +11,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { createRequire, stripTypeScriptTypes } from "node:module";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -21,7 +21,8 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { parse } from "yaml";
 import { releaseBranchForTag } from "../../scripts/lib/release-context.mjs";
-import { parseReleaseVersion } from "../../scripts/lib/release-version.mjs";
+import { classifyReleaseTrain, parseReleaseVersion } from "../../scripts/lib/release-version.mjs";
+import { validateReleaseButtonInputs } from "../../scripts/openclaw-release-ready.mjs";
 import {
   buildReleaseCandidateState,
   buildPublishCommand,
@@ -51,6 +52,7 @@ import {
   validateTrustedToolingPin,
   validateWindowsSourceRelease,
 } from "../../scripts/release-candidate-checklist.mts";
+import { stripNodeTypeScriptTypes } from "../helpers/node-toolchain.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -154,7 +156,7 @@ describe("release candidate checklist", () => {
         pluginSdkApi: {},
       };
       // Run the real coordinator and evidence writers; unrelated remote release gates are fixtures.
-      const completion = runInNewContext(stripTypeScriptTypes(`${android}\n${main}\nmain();`), {
+      const completion = runInNewContext(stripNodeTypeScriptTypes(`${android}\n${main}\nmain();`), {
         process: { argv: [], cwd: () => targetRoot, env: {} },
         console: { log, warn: log },
         TOOLING_ROOT: "/trusted/tooling",
@@ -180,6 +182,7 @@ describe("release candidate checklist", () => {
         run: (command: string, args: string[]) =>
           args[0] === "fetch" ? "" : run(command, args, { cwd: targetRoot, capture: true }),
         parseReleaseVersion,
+        classifyReleaseTrain,
         isRecord,
         requireString: (value: string) => value,
         releaseNotesVersionForTag: () => "2026.9.1",
@@ -356,7 +359,7 @@ describe("release candidate checklist", () => {
       let childOutput = "";
       const execute = () =>
         runInNewContext(
-          stripTypeScriptTypes(
+          stripNodeTypeScriptTypes(
             `${jsonReader}\n${owner}\nrunFromTrustedTooling(argv, { targetRoot, workflowRef: "main" });`,
           ),
           {
@@ -438,7 +441,7 @@ describe("release candidate checklist", () => {
       JSON.stringify({ args, options, all: [{ packageName: "@openclaw/example" }], warnings }),
     );
     const result = runInNewContext(
-      stripTypeScriptTypes(
+      stripNodeTypeScriptTypes(
         `${summary}\n${owner}\ncollectPluginPlan("scripts/plugin-npm-release-plan.ts", {})`,
       ),
       {
@@ -1719,7 +1722,7 @@ describe("release candidate checklist", () => {
       }));
       // Execute the private owner and its real caller without exporting a test-only API.
       const result = (await runInNewContext(
-        stripTypeScriptTypes(
+        stripNodeTypeScriptTypes(
           `async function fixture() {\n${telegramOwner}\n${telegramCall}\nreturn npmTelegram;\n}\nfixture();`,
         ),
         {
@@ -1862,6 +1865,69 @@ describe("release candidate checklist", () => {
     for (const input of emittedInputs) {
       expect(workflow.on.workflow_dispatch.inputs).toHaveProperty(input);
     }
+  });
+
+  it("round-trips the prepared command into the full release button contract", () => {
+    const preparedWorkflowRef = "release-publish/bbbbbbbbbbbb-123";
+    const windowsNodeInstallerDigests = JSON.stringify({
+      "OpenClawCompanion-Setup-x64.exe": `sha256:${"a".repeat(64)}`,
+      "OpenClawCompanion-Setup-arm64.exe": `sha256:${"b".repeat(64)}`,
+    });
+    const options = {
+      ...parseArgs([
+        "--tag",
+        "v2026.9.2",
+        "--npm-dist-tag",
+        "latest",
+        "--publish-workflow-ref",
+        preparedWorkflowRef,
+        "--full-release-run",
+        "111",
+        "--npm-preflight-run",
+        "222",
+        "--plugin-sdk-api-acknowledgement",
+        "a1b2c3d4",
+        "--windows-node-tag",
+        "v0.6.3",
+      ]),
+      fullReleaseRunAttempt: 2,
+      windowsNodeInstallerDigests,
+    };
+    const command = buildPublishCommand(options, undefined, "prepare");
+    // A shell-local gh captures real argument decoding without dispatching anything.
+    const args = execFileSync("bash", ["-c", `gh() { printf '%s\\0' "$@"; }\n${command}`], {
+      encoding: "utf8",
+      timeout: 10_000,
+    })
+      .split("\0")
+      .filter(Boolean);
+    expect(args.slice(0, 7)).toEqual([
+      "workflow",
+      "run",
+      "openclaw-release-prepare.yml",
+      "--repo",
+      "openclaw/openclaw",
+      "--ref",
+      preparedWorkflowRef,
+    ]);
+    const field = args[args.indexOf("-f") + 1] ?? "";
+    expect(field.startsWith("publish_inputs=")).toBe(true);
+    const preparedInputs = validateReleaseButtonInputs(
+      JSON.parse(field.slice("publish_inputs=".length)),
+    );
+    expect(preparedInputs).toMatchObject({
+      tag: "v2026.9.2",
+      npm_dist_tag: "latest",
+      preflight_run_id: "222",
+      full_release_validation_run_id: "111",
+      full_release_validation_run_attempt: "2",
+      plugin_sdk_api_acknowledgement: "a1b2c3d4",
+      windows_node_tag: "v0.6.3",
+      windows_node_installer_digests: windowsNodeInstallerDigests,
+      plugin_publish_scope: "all-publishable",
+      release_evidence_mode: "full-release-validation",
+      wait_for_clawhub: "true",
+    });
   });
 
   it("validates Plugin SDK acknowledgement digests", () => {

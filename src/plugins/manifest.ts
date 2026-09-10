@@ -3,6 +3,7 @@ import path from "node:path";
 import { normalizeModelCatalog } from "@openclaw/model-catalog-core/model-catalog-normalize";
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import { normalizeTrimmedStringList } from "../../packages/normalization-core/src/string-normalization.js";
+import { validatePluginCategories } from "../../packages/plugin-package-contract/src/index.js";
 import { matchRootFileOpenFailure } from "../infra/boundary-file-read.js";
 import { isRecord } from "../utils.js";
 import { coerceDoctorSessionRouteStateOwners } from "./doctor-session-route-state-owner-types.js";
@@ -207,6 +208,14 @@ export function loadPluginManifest(
       diagnosticCode: "backup-resource-declaration-invalid",
     });
   }
+  const categories = validatePluginCategories(raw.categories);
+  if (!categories.ok) {
+    return cacheResult({
+      ok: false,
+      error: `invalid plugin manifest categories: ${categories.error}`,
+      manifestPath,
+    });
+  }
 
   const requiresPlugins = normalizeTrimmedStringList(raw.requiresPlugins);
   const enabledByDefaultOnPlatforms = setupNormalizers.normalizeManifestDefaultPlatforms(
@@ -217,6 +226,7 @@ export function loadPluginManifest(
     raw.autoEnableWhenConfiguredProviders,
   );
   const providers = normalizeTrimmedStringList(raw.providers);
+  const contracts = capabilityNormalizers.normalizeManifestContracts(raw.contracts);
   const cliBackends = normalizeTrimmedStringList(raw.cliBackends);
   const rawDoctorContract = isRecord(raw.doctorContract) ? raw.doctorContract : undefined;
   const stateMigrations = parseDoctorStateMigrationDescriptors(rawDoctorContract?.stateMigrations);
@@ -234,6 +244,7 @@ export function loadPluginManifest(
   const manifestBeforeDashboard = {
     id,
     configSchema,
+    ...("categories" in categories ? { categories: categories.categories } : {}),
     ...(backupResources.resources !== undefined
       ? { backupResources: backupResources.resources }
       : {}),
@@ -280,7 +291,7 @@ export function loadPluginManifest(
     providerUsageAuthEnvVars: capabilityNormalizers.normalizeStringListRecord(
       raw.providerUsageAuthEnvVars,
     ),
-    providerAuthAliases: capabilityNormalizers.normalizeManifestStringRecord(
+    providerAuthAliases: capabilityNormalizers.normalizeManifestProviderAuthAliases(
       raw.providerAuthAliases,
     ),
     providerAuthChoices: setupNormalizers.normalizeProviderAuthChoices(raw.providerAuthChoices),
@@ -324,7 +335,11 @@ export function loadPluginManifest(
       catalog: capabilityNormalizers.normalizeManifestCatalog(raw.catalog),
       version: normalizeOptionalString(raw.version),
       uiHints: setupNormalizers.normalizeConfigUiHints(raw.uiHints),
-      contracts: capabilityNormalizers.normalizeManifestContracts(raw.contracts),
+      contracts,
+      transcriptSources: capabilityNormalizers.normalizeManifestTranscriptSources(
+        raw.transcriptSources,
+        contracts?.transcriptSourceProviders,
+      ),
       mediaUnderstandingProviderMetadata:
         capabilityNormalizers.normalizeMediaUnderstandingProviderMetadata(
           raw.mediaUnderstandingProviderMetadata,

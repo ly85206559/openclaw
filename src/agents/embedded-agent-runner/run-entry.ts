@@ -34,6 +34,7 @@ import type {
   ModelFallbackRouteResolution,
 } from "../model-fallback.types.js";
 import type { ModelManifestNormalizationContext } from "../model-ref-shared.js";
+import { isProviderModelRerouted } from "../provider-model-route.js";
 import { resolveAgentRunAbortLifecycleFields } from "../run-termination.js";
 import {
   classifyEmbeddedAgentRunResultForModelFallback,
@@ -248,8 +249,7 @@ function mergeRunEntryExecutionTrace<T extends EmbeddedAgentRunResult>(params: {
           requested,
           rerouted:
             terminalReceipt.rerouted ||
-            terminalReceipt.effective.provider !== requested.provider ||
-            terminalReceipt.effective.model !== requested.model,
+            isProviderModelRerouted(requested, terminalReceipt.effective),
         },
       }
     : params.result.meta.agentMeta;
@@ -313,9 +313,10 @@ function buildTerminal(params: {
           },
           successfulToolNames: ["message"],
           sourceReplyDelivered: true as const,
-          rerouted:
-            agentMeta.provider !== params.requested.provider ||
-            agentMeta.model !== params.requested.model,
+          rerouted: isProviderModelRerouted(params.requested, {
+            provider: agentMeta.provider,
+            model: agentMeta.model,
+          }),
         }
       : undefined);
   const terminalReceipt =
@@ -377,6 +378,7 @@ export async function runEmbeddedAgentEntry<T extends EmbeddedAgentRunResult>(
   params: EmbeddedAgentRunEntryParams<T>,
 ): Promise<EmbeddedAgentRunEntryResult<T>> {
   const contextEngineLogicalTurnLease = await createContextEngineLogicalTurnLease({
+    identity: params.identity,
     config: params.selection.cfg,
     agentDir: params.selection.agentDir,
     workspaceDir: params.harness.workspaceDir,
@@ -496,7 +498,10 @@ export async function runEmbeddedAgentEntry<T extends EmbeddedAgentRunResult>(
       ...(params.behavior.kind === "maintenance"
         ? {}
         : {
-            classifyResult: ({ result }: { result: RunEntryCandidate<T> }) => result.classification,
+            classifyResult: ({ result }: { result: RunEntryCandidate<T> }) =>
+              result.result.meta.modelFallbackStopReason
+                ? { stopReason: result.result.meta.modelFallbackStopReason }
+                : result.classification,
           }),
       ...(canFallbackAfterError ? { canFallbackAfterError } : {}),
       ...(params.behavior.kind === "maintenance"

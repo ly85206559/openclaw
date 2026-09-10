@@ -268,6 +268,7 @@ export const validateSessionsObserverVisibilityParams = compile(
   S.SessionsObserverVisibilityParamsSchema,
 );
 export const validateSessionVisibilitySetParams = compile(S.SessionVisibilitySetParamsSchema);
+export const validateSessionPublicShareSetParams = compile(S.SessionPublicShareSetParamsSchema);
 export const validateSessionMembersListParams = compile(S.SessionMembersListParamsSchema);
 export const validateSessionMemberAddParams = compile(S.SessionMemberAddParamsSchema);
 export const validateSessionMemberRemoveParams = compile(S.SessionMemberRemoveParamsSchema);
@@ -335,6 +336,7 @@ export const validateTaskSuggestionsAcceptParams = compile(S.TaskSuggestionsAcce
 export const validateTaskSuggestionsDismissParams = compile(S.TaskSuggestionsDismissParamsSchema);
 export const validateTasksListParams = compile(S.TasksListParamsSchema);
 export const validateTasksGetParams = compile(S.TasksGetParamsSchema);
+export const validateTasksHistoryParams = compile(S.TasksHistoryParamsSchema);
 export const validateTasksCancelParams = compile(S.TasksCancelParamsSchema);
 export const validateTasksRecoveryParams = compile(S.TasksRecoveryParamsSchema);
 export const validateConfigGetParams = compile(S.ConfigGetParamsSchema);
@@ -440,6 +442,7 @@ export const validateSkillsDetailParams = compile(S.SkillsDetailParamsSchema);
 export const validateSkillsCuratorStatusParams = compile(S.SkillsCuratorStatusParamsSchema);
 export const validateSkillsCuratorActionParams = compile(S.SkillsCuratorActionParamsSchema);
 export const validateSkillsProposalsListParams = compile(S.SkillsProposalsListParamsSchema);
+export const validateSkillsWorkshopReadParams = compile(S.SkillsWorkshopReadParamsSchema);
 export const validateSkillsProposalInspectParams = compile(S.SkillsProposalInspectParamsSchema);
 export const validateSkillsProposalCreateParams = compile(S.SkillsProposalCreateParamsSchema);
 export const validateSkillsProposalUpdateParams = compile(S.SkillsProposalUpdateParamsSchema);
@@ -501,6 +504,11 @@ export const validatePluginsListParams = compile(S.PluginsListParamsSchema);
 export const validatePluginsInspectParams = compile(S.PluginsInspectParamsSchema);
 export const validatePluginsRefreshParams = compile(S.PluginsRefreshParamsSchema);
 export const validatePluginsSearchParams = compile(S.PluginsSearchParamsSchema);
+export const validatePluginsCatalogBrowseParams = compile(S.PluginsCatalogBrowseParamsSchema);
+export const validatePluginsCatalogCategoriesParams = compile(
+  S.PluginsCatalogCategoriesParamsSchema,
+);
+export const validatePluginsCatalogGetParams = compile(S.PluginsCatalogGetParamsSchema);
 export const validatePluginsInstallParams = compile(S.PluginsInstallParamsSchema);
 export const validatePluginsSetEnabledParams = compile(S.PluginsSetEnabledParamsSchema);
 export const validatePluginsUninstallParams = compile(S.PluginsUninstallParamsSchema);
@@ -537,9 +545,13 @@ export const validateUpdateRunsGetResult = compile(S.UpdateRunsGetResultSchema);
 export const validateUpdateRunsListParams = compile(S.UpdateRunsListParamsSchema);
 export const validateUpdateRunsListResult = compile(S.UpdateRunsListResultSchema);
 export const validateUpdateRunChangedEvent = compile(S.UpdateRunChangedEventSchema);
+export const validateUpdateReportParams = compile(S.UpdateReportParamsSchema);
+export const validateUpdateReportResult = compile(S.UpdateReportResultSchema);
 export const validateUiCommandParams = compile(S.UiCommandParamsSchema);
 export const validateWebLoginStartParams = compile(S.WebLoginStartParamsSchema);
 export const validateWebLoginWaitParams = compile(S.WebLoginWaitParamsSchema);
 
 export const validateTranscriptsListParams = compile(S.TranscriptsListParamsSchema);
 export const validateTranscriptsGetParams = compile(S.TranscriptsGetParamsSchema);
+export const validateTranscriptsExportParams = compile(S.TranscriptsExportParamsSchema);
+export const validateTranscriptsStatusParams = compile(S.TranscriptsStatusParamsSchema);

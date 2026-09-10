@@ -1,5 +1,6 @@
 {
   "id": "discord",
+  "categories": ["channels", "voice"],
   "doctorContract": {
     "configRepair": true,
     "stateMigrations": [{ "id": "discord-legacy-state" }]
@@ -19,6 +20,16 @@
     "transcriptSourceProviders": [
       "discord-voice"
     ]
+  },
+  "transcriptSources": {
+    "discord-voice": {
+      "name": "Discord Voice",
+      "autoStart": {
+        "accountId": "optional",
+        "guildId": "required",
+        "channelId": "required"
+      }
+    }
   },
   "configSchema": {
     "type": "object",

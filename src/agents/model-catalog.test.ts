@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import {
@@ -14,6 +15,7 @@ import {
   modelSupportsVision,
 } from "./model-catalog.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
+import { createModelVisibilityPolicy } from "./model-visibility-policy.js";
 import type { ModelRegistry } from "./sessions/index.js";
 
 type AugmentModelCatalogWithProviderPlugins =
@@ -367,6 +369,28 @@ describe("prepared model catalog builder", () => {
     ]);
   });
 
+  it("ranks distinct registry identities only from their own manifest row", async () => {
+    const snapshot = await build({
+      entries: ["reader", "anchor", "Reader"].map((id) => ({
+        provider: "custom",
+        id,
+        name: id,
+      })),
+      metadataSnapshot: providerManifestSnapshot({
+        provider: "custom",
+        discovery: "runtime",
+        modelIds: ["Reader", "anchor"],
+      }),
+      includeProviderPluginAugmentation: false,
+    });
+
+    expect(snapshot.entries.map(({ id, providerOrder }) => ({ id, providerOrder }))).toEqual([
+      { id: "Reader", providerOrder: 0 },
+      { id: "anchor", providerOrder: 1 },
+      { id: "reader", providerOrder: undefined },
+    ]);
+  });
+
   it("does not augment an account with undiscovered runtime-provider models", async () => {
     mocks.augmentModelCatalogWithProviderPlugins.mockResolvedValueOnce([
       { id: "gpt-5.4", name: "GPT-5.4", provider: "openai" },
@@ -571,54 +595,131 @@ describe("prepared model catalog builder", () => {
     ]);
   });
 
-  it("overlays configured metadata onto discovered rows", async () => {
-    const config: OpenClawConfig = {
-      plugins: { enabled: false },
-      models: {
-        providers: {
-          custom: {
-            baseUrl: "https://example.test/v1",
-            api: "openai-completions",
-            models: [
-              {
-                id: "demo",
-                name: "Configured Demo",
-                contextWindow: 32_000,
-                maxTokens: 4_096,
-                reasoning: true,
-                thinkingLevelMap: { off: null, xhigh: "xhigh" },
-                input: ["text", "image"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  it.each([
+    { discovered: false, reversed: false },
+    { discovered: false, reversed: true },
+    { discovered: true, reversed: false },
+    { discovered: true, reversed: true },
+  ])(
+    "overlays exact configured metadata (discovered=$discovered, reversed=$reversed)",
+    async ({ discovered, reversed }) => {
+      const models = ["Reader", "reader"].map<ModelDefinitionConfig>((id, index) => ({
+        id,
+        name: `Configured ${id}`,
+        contextWindow: 32_000 * (index + 1),
+        maxTokens: 4_096,
+        reasoning: index === 0,
+        thinkingLevelMap: { off: null, xhigh: "xhigh" },
+        input: index === 0 ? ["text", "image"] : ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      }));
+      const snapshot = await build({
+        config: {
+          plugins: { enabled: false },
+          models: {
+            providers: {
+              custom: {
+                baseUrl: "https://example.test/v1",
+                api: "openai-completions",
+                models: reversed ? models.toReversed() : models,
               },
-            ],
+            },
           },
         },
-      },
-    };
-    const snapshot = await build({
-      config,
-      entries: [
-        {
-          id: "demo",
-          name: "Discovered Demo",
-          provider: "custom",
-          input: ["text"],
-        },
-      ],
-    });
+        entries: discovered
+          ? models.map(({ id }) => ({
+              id,
+              name: `Discovered ${id}`,
+              provider: "custom",
+              input: ["text"],
+            }))
+          : [],
+      });
 
-    expect(
-      findModelCatalogEntry(snapshot.entries, { provider: "custom", modelId: "demo" }),
-    ).toMatchObject({
-      name: "Discovered Demo",
-      api: "openai-completions",
-      contextWindow: 32_000,
-      reasoning: true,
-      thinkingLevelMap: { off: null, xhigh: "xhigh" },
-      input: ["text", "image"],
-    });
-    expect(snapshot.routeVariants).toHaveLength(2);
-  });
+      expect(snapshot.entries).toHaveLength(models.length);
+      for (const model of models) {
+        const expected = {
+          id: model.id,
+          api: "openai-completions",
+          contextWindow: model.contextWindow,
+          reasoning: model.reasoning,
+          configuredReasoning: model.reasoning,
+          thinkingLevelMap: model.thinkingLevelMap,
+          input: model.input,
+        };
+        expect(
+          findModelCatalogEntry(snapshot.entries, { provider: "custom", modelId: model.id }),
+        ).toMatchObject({
+          ...expected,
+          name: discovered ? `Discovered ${model.id}` : model.name,
+        });
+        expect(snapshot.routeVariants).toEqual(
+          expect.arrayContaining([expect.objectContaining({ ...expected, name: model.name })]),
+        );
+      }
+      expect(snapshot.routeVariants).toHaveLength(discovered ? 4 : 2);
+    },
+  );
+
+  it.each([
+    { accepted: false, pinned: false },
+    { accepted: true, pinned: false },
+    { accepted: true, pinned: true },
+  ])(
+    "preserves captured routes unless the model pins them (accepted=$accepted, pinned=$pinned)",
+    async ({ accepted, pinned }) => {
+      const defaults = {
+        api: "openai-completions",
+        baseUrl: "https://provider.example.test/v1",
+      } as const;
+      const captured = {
+        api: "openai-responses",
+        baseUrl: "https://account.example.test/v1",
+      } as const;
+      const configured: ModelDefinitionConfig = {
+        id: "demo",
+        name: "Configured Demo",
+        contextWindow: 32_000,
+        maxTokens: 4096,
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        ...(pinned ? defaults : {}),
+      };
+      const config: OpenClawConfig = {
+        plugins: { enabled: false },
+        models: { providers: { custom: { ...defaults, models: [configured] } } },
+      };
+      const snapshot = await build({
+        config,
+        entries: accepted
+          ? [{ provider: "custom", id: "demo", name: "Captured Demo", ...captured }]
+          : [],
+      });
+      const expectedRoute = accepted && !pinned ? captured : defaults;
+      const policy = createModelVisibilityPolicy({
+        cfg: config,
+        catalog: snapshot.entries,
+        defaultProvider: "custom",
+        manifestPlugins: metadataSnapshot,
+      });
+
+      for (const catalog of [snapshot.entries, policy.configuredCatalog]) {
+        expect(catalog).toEqual([
+          expect.objectContaining({
+            provider: "custom",
+            id: "demo",
+            ...expectedRoute,
+            contextWindow: 32_000,
+            reasoning: true,
+            input: ["text", "image"],
+          }),
+        ]);
+      }
+      expect(snapshot.routeVariants).toContainEqual(expect.objectContaining(expectedRoute));
+      expect(snapshot.routeVariants).toHaveLength(accepted && pinned ? 2 : 1);
+    },
+  );
 
   it.each([false, true])(
     "keeps the first matching catalog route with borrowed-row retargeting %s",
@@ -691,6 +792,7 @@ describe("prepared model catalog builder", () => {
       });
 
       const selectedRoute = {
+        name: retarget ? "Earlier Route A" : "Route A",
         api: "openai-responses",
         baseUrl: "https://route-a.example.test/v1",
         thinkingLevelMap: retarget ? { xhigh: "high", max: "max" } : { xhigh: null, max: null },

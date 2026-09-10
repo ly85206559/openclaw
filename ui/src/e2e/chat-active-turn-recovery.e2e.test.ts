@@ -306,7 +306,7 @@ suite.define(() => {
       await sidebar.getByRole("link", { name: "Home" }).click();
       await waitForControlUiRoute(page, { pathname: "/chat/main", routeId: "chat" });
       await assertActiveTurnVisible(page, streamText);
-      expect(await readWorkingStartedAts(page)).toContain(startedAt);
+      await expect.poll(() => readWorkingStartedAts(page)).toContain(startedAt);
       await expect(
         page.locator(".chat-working-indicator openclaw-elapsed-time").filter({ hasText: "10m" }),
       ).not.toHaveCount(0);
@@ -349,7 +349,7 @@ suite.define(() => {
   it.each([true, false])(
     "keeps an owned reconnect prompt before a durable reply while history recovery is pending (active=%s)",
     async (active) => {
-      const { context, page, gateway } = await openActiveTurn();
+      const { context, page, gateway } = await openActiveTurn({ deferredMethods: ["chat.send"] });
       const readPane = () =>
         page.locator("openclaw-chat-pane").evaluate((element) => {
           const state = (element as HTMLElement & { state: ChatPageHost }).state;
@@ -378,6 +378,8 @@ suite.define(() => {
         if (typeof runId !== "string") {
           throw new Error("chat.send did not carry its generated run ID");
         }
+        // This scenario commits the user below while disconnected, after acceptance.
+        await gateway.resolveDeferred("chat.send", { runId, status: "started" });
         await expect.poll(readPane).toMatchObject({
           runId,
           sending: false,

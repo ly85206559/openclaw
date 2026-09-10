@@ -1,7 +1,5 @@
 // Media-understanding runner resolves providers/models, local roots, auth, and
 // per-capability execution decisions for message attachments.
-import path from "node:path";
-import { mergeInboundPathRoots } from "@openclaw/media-core/inbound-path-policy";
 import { findNormalizedProviderValue } from "@openclaw/model-catalog-core/provider-id";
 import { ok } from "@openclaw/normalization-core/result";
 import {
@@ -37,9 +35,6 @@ import type {
 } from "../config/types.tools.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { logWarn } from "../logger.js";
-import { resolveChannelInboundAttachmentRoots } from "../media/channel-inbound-roots.js";
-import { getDefaultMediaLocalRoots } from "../media/local-roots.js";
-import { normalizeMediaFacts } from "../media/media-facts.js";
 import { classifyMediaReferenceSource } from "../media/media-reference.js";
 import { createLazyRuntimeModule, createLazyRuntimeNamedExport } from "../shared/lazy-runtime.js";
 import { MediaAttachmentCache, selectAttachments } from "./attachments.js";
@@ -79,12 +74,16 @@ import type {
   MediaUnderstandingProvider,
 } from "./types.js";
 
-export { createMediaAttachmentCache, normalizeMediaAttachments } from "./runner.attachments.js";
+export {
+  createMediaAttachmentCache,
+  normalizeMediaAttachments,
+  resolveMediaAttachmentLocalRoots,
+} from "./runner.attachments.js";
 
 type ProviderRegistry = Map<string, MediaUnderstandingProvider>;
 type ModelCatalogApi = typeof import("../agents/model-catalog.js") &
   typeof import("../agents/prepared-model-catalog.js");
-type ModelCatalog = Awaited<ReturnType<ModelCatalogApi["loadPreparedModelCatalog"]>>;
+type ModelCatalog = Awaited<ReturnType<ModelCatalogApi["readPreparedModelCatalog"]>>;
 
 type RunCapabilityResult = {
   outputs: MediaUnderstandingOutput[];
@@ -220,9 +219,9 @@ async function explicitImageModelVisionStatus(params: {
   if (configured?.id?.trim() === params.model && configured.input?.includes("image")) {
     return "supported";
   }
-  const { findModelInCatalog, loadPreparedModelCatalog, modelSupportsVision } =
+  const { findModelInCatalog, readPreparedModelCatalog, modelSupportsVision } =
     await loadPreparedModelCatalogApi();
-  const catalog = await loadPreparedModelCatalog({
+  const catalog = await readPreparedModelCatalog({
     config: params.cfg,
     ...(params.agentId ? { agentId: params.agentId } : {}),
     ...(params.agentDir ? { agentDir: params.agentDir } : {}),
@@ -283,8 +282,8 @@ async function resolveAutoImageModelId(params: {
   if (bundledDefaultModel) {
     return bundledDefaultModel;
   }
-  const { loadPreparedModelCatalog, modelSupportsVision } = await loadPreparedModelCatalogApi();
-  const catalog = await loadPreparedModelCatalog({
+  const { readPreparedModelCatalog, modelSupportsVision } = await loadPreparedModelCatalogApi();
+  const catalog = await readPreparedModelCatalog({
     config: params.cfg,
     ...(params.agentId ? { agentId: params.agentId } : {}),
     ...(params.agentDir ? { agentDir: params.agentDir } : {}),
@@ -302,22 +301,6 @@ export function buildProviderRegistry(
   cfg?: OpenClawConfig,
 ): ProviderRegistry {
   return buildMediaUnderstandingRegistry(overrides, cfg);
-}
-
-export function resolveMediaAttachmentLocalRoots(params: {
-  cfg: OpenClawConfig;
-  ctx: MsgContext;
-  workspaceDir?: string;
-}): readonly string[] {
-  const workspaceDirs = normalizeMediaFacts(params.ctx.media).flatMap((fact) =>
-    fact.workspaceDir ? [path.resolve(fact.workspaceDir)] : [],
-  );
-  return mergeInboundPathRoots(
-    getDefaultMediaLocalRoots(),
-    workspaceDirs,
-    params.workspaceDir ? [path.resolve(params.workspaceDir)] : undefined,
-    resolveChannelInboundAttachmentRoots(params),
-  );
 }
 
 function clearMediaUnderstandingBinaryCacheForTests(): void {
@@ -431,7 +414,6 @@ function hasExplicitImageUnderstandingConfig(params: {
   return (params.cfg.tools?.media?.models ?? []).some((entry) =>
     matchesMediaEntryCapability({
       entry,
-      source: "shared",
       capability: "image",
       providerRegistry: params.providerRegistry,
     }),
@@ -467,9 +449,9 @@ async function activeModelSupportsNativeVision(params: {
   ) {
     return false;
   }
-  const { findModelInCatalog, loadPreparedModelCatalog, modelSupportsVision } =
+  const { findModelInCatalog, readPreparedModelCatalog, modelSupportsVision } =
     await loadPreparedModelCatalogApi();
-  const catalog = await loadPreparedModelCatalog({
+  const catalog = await readPreparedModelCatalog({
     config: params.cfg,
     ...(params.agentId ? { agentId: params.agentId } : {}),
     ...(params.agentDir ? { agentDir: params.agentDir } : {}),

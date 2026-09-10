@@ -419,7 +419,7 @@ export function resolveFollowupDeliveryContextKey(run: FollowupRun): string {
   ]);
 }
 
-export function resolveFollowupReplyAnchor(run: FollowupRun): string | undefined {
+function resolveFollowupReplyAnchor(run: FollowupRun): string | undefined {
   if (run.originatingReplyToMode === "off") {
     return undefined;
   }
@@ -706,6 +706,9 @@ function resolveAggregateOwner(items: readonly FollowupRun[]): FollowupRun | und
 
 function requiresIndividualCollectDrain(item: FollowupRun): boolean {
   return (
+    // A definitive native rejection can return an already-committed source.
+    // Keep its original recorder/event; only unconsumed sources may regroup.
+    item.userTurnTranscriptRecorder?.hasPersisted() === true ||
     item.disableCollectBatching === true ||
     item.run.skillWorkshopProposalRevision !== undefined ||
     item.run.skillLibraryAuthoring !== undefined ||
@@ -814,6 +817,10 @@ function collectCurrentInboundContext(items: FollowupRun[]): FollowupRun["curren
   return {
     text,
     ...(resumableText ? { resumableText } : {}),
+    fragments: contexts.flatMap(
+      ({ context }) =>
+        context.fragments ?? [{ kind: "conversation-data" as const, text: context.text }],
+    ),
     promptJoiner: "\n\n",
     ...(injectedGoalContexts.length > 0 ? { injectedGoalContexts } : {}),
   };

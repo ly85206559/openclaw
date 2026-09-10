@@ -1,18 +1,71 @@
+import { isDeepStrictEqual } from "node:util";
+import type { LegacyConfigUpdatePlan } from "../../commands/doctor/legacy-config-repair.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
+import { captureTargetDatabaseSchemaContext } from "./schema-preflight.js";
+import { UpdatePreMutationError } from "./shared.js";
+import type { PreManagedServiceStop } from "./update-command-service-context-types.js";
 import {
   resolveOwnedManagedUpdateEnv,
   stripGatewayServiceMarkerEnv,
 } from "./update-command-service-env.js";
-import type { PreManagedServiceStop } from "./update-command-service.js";
 
 export type OwnedManagedUpdateContext = {
   env: NodeJS.ProcessEnv;
   configSnapshot: ConfigFileSnapshot;
   pluginInstallRecords: Record<string, PluginInstallRecord>;
 };
+
+/** Inspection uses the same service selectors as finalization, without activating config/plugins. */
+export async function captureOwnedManagedUpdatePreflightContext(params: {
+  stopState: PreManagedServiceStop | undefined;
+  processEnv: NodeJS.ProcessEnv;
+  invocationCwd?: string;
+  legacyConfigPlan?: LegacyConfigUpdatePlan;
+}) {
+  const state = params.stopState;
+  if (state?.serviceUpdateVerdict?.kind !== "owned" || !state.serviceEnv) {
+    return undefined;
+  }
+  return captureTargetDatabaseSchemaContext(
+    stripGatewayServiceMarkerEnv(
+      resolveOwnedManagedUpdateEnv({
+        processEnv: params.processEnv,
+        serviceEnv: state.serviceEnv,
+        serviceDefinitionEnv: state.serviceDefinitionEnv,
+        invocationCwd: params.invocationCwd,
+      }),
+    ),
+    { legacyConfigPlan: params.legacyConfigPlan },
+  );
+}
+
+export async function revalidateUpdateDatabaseContext(
+  expected: Awaited<ReturnType<typeof captureTargetDatabaseSchemaContext>>,
+) {
+  const current = await captureTargetDatabaseSchemaContext(expected.readEnv, {
+    legacyConfigPlan: expected.legacyConfigPlan,
+  });
+  const before = expected.configSnapshot;
+  const after = current.configSnapshot;
+  if (
+    before.path !== after.path ||
+    before.exists !== after.exists ||
+    before.raw !== after.raw ||
+    before.hash !== after.hash ||
+    !isDeepStrictEqual(before.includedPaths ?? [], after.includedPaths ?? []) ||
+    !isDeepStrictEqual(before.includeProvenance ?? [], after.includeProvenance ?? []) ||
+    !isDeepStrictEqual(before.sourceConfig, after.sourceConfig)
+  ) {
+    throw new UpdatePreMutationError(
+      "database-schema-preflight",
+      `Update refused: configuration changed during database admission at ${before.path}. Retry against the current configuration.`,
+    );
+  }
+  return current;
+}
 
 /** Run one update phase under the managed Gateway's authoritative environment. */
 export async function withOwnedManagedUpdateEnv<T>(
@@ -29,7 +82,13 @@ export async function withOwnedManagedUpdateEnv<T>(
     delete process.env[key];
   }
   // A caller may pass process.env itself; clearing it must not erase the supplied scope.
-  Object.assign(process.env, env === process.env ? previousEnv : env);
+  const phaseEnv = env === process.env ? previousEnv : env;
+  for (const [key, value] of Object.entries(phaseEnv)) {
+    // Node stringifies undefined on assignment; unset selectors must remain absent.
+    if (value !== undefined) {
+      process.env[key] = value;
+    }
+  }
   try {
     return await run();
   } finally {

@@ -430,6 +430,7 @@ function buildRecord(params: {
   );
   return {
     id: pluginId,
+    categories: params.manifest.categories,
     backupResources: params.manifest.backupResources,
     doctorContract: params.manifest.doctorContract,
     doctorHealthChecks: params.manifest.doctorHealthChecks,
@@ -522,6 +523,7 @@ function buildRecord(params: {
       params.manifest.contracts,
       officialCatalogManifest?.contracts,
     ),
+    transcriptSources: params.manifest.transcriptSources,
     mediaUnderstandingProviderMetadata: params.manifest.mediaUnderstandingProviderMetadata,
     imageGenerationProviderMetadata: params.manifest.imageGenerationProviderMetadata,
     videoGenerationProviderMetadata: params.manifest.videoGenerationProviderMetadata,

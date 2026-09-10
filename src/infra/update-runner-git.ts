@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { resolveControlUiAssetHealth } from "./control-ui-assets.js";
 import { readPackageVersion } from "./package-json.js";
 import { resolveStableNodePath } from "./stable-node-path.js";
@@ -18,6 +19,9 @@ import {
   prepareGitMutation,
   readBranchName,
   resolveChannelTag,
+  resolveReleaseTagRemote,
+  selectGitInspectionTarget,
+  withGitTargetInspectionRoot,
 } from "./update-runner-git-target.js";
 import type {
   CommandRunner,
@@ -35,7 +39,14 @@ export async function updateGitCheckout(params: {
   timeoutMs: number;
   startedAt: number;
 }): Promise<UpdateRunResult> {
-  const { opts, gitRoot, runCommand, defaultCommandEnv, timeoutMs, startedAt } = params;
+  const { opts, defaultCommandEnv, timeoutMs, startedAt } = params;
+  let gitRoot = params.gitRoot;
+  const runCommand: CommandRunner = (argv, options) =>
+    params.runCommand(argv, {
+      ...options,
+      // Read-only status must not refresh the installed index before admission.
+      ...(argv[0] === "git" ? { env: { ...options.env, GIT_OPTIONAL_LOCKS: "0" } } : {}),
+    });
   const channel: UpdateChannel = opts.channel ?? "dev";
   if (channel === "extended-stable") {
     return {
@@ -95,10 +106,24 @@ export async function updateGitCheckout(params: {
   let runtimePromotion: Awaited<ReturnType<typeof prepareGitRuntimePromotion>> | undefined;
   let stateMigrationStarted = false;
   let recovery = await verifyGitUpdateRecovery({ root: gitRoot, sha: beforeSha });
-  const prepareMutation = async (revision: string) => {
+  const prepareMutation = async (revision: string, root = gitRoot, runner = runCommand) => {
+    if (mutationPrepared) {
+      // Remote transport can outlive the earlier service inspection. Recheck
+      // its frozen contexts before checkout without repeating stop/preparation.
+      if (opts.inspectGitTarget) {
+        await prepareGitMutation({
+          runCommand: runner,
+          root,
+          revision,
+          timeoutMs,
+          beforeGitMutation: opts.inspectGitTarget,
+        });
+      }
+      return;
+    }
     const preparation = await prepareGitMutation({
-      runCommand,
-      root: gitRoot,
+      runCommand: runner,
+      root,
       revision,
       timeoutMs,
       beforeGitMutation: opts.beforeGitMutation,
@@ -174,6 +199,10 @@ export async function updateGitCheckout(params: {
         "-fd",
         "-e",
         "dist/control-ui/",
+        ...(runtimePromotion?.sourceTreeStagingPaths.flatMap((relative) => [
+          "-e",
+          `/${relative}/`,
+        ]) ?? []),
       ])) && restored;
     if (branch && branch !== "HEAD") {
       const checkedOut = await appendRecoveryStep("git rollback checkout", [
@@ -264,6 +293,66 @@ export async function updateGitCheckout(params: {
     }
     return mutationPrepared ? rollbackError(reason) : buildError(reason);
   };
+  const fetchTarget = async (root: string, targetStep: typeof step, name: string) => {
+    const fetch = await runStep(
+      targetStep(
+        name,
+        ["git", "-C", root, "fetch", "--all", "--prune", "--no-tags", "--no-prune-tags"],
+        root,
+      ),
+    );
+    if (fetch.exitCode !== 0 || channel === "dev") {
+      return fetch.exitCode === 0;
+    }
+    const remote = await runStep(targetStep("git remote", ["git", "-C", root, "remote"], root));
+    if (remote.exitCode !== 0) {
+      return false;
+    }
+    const remotes = normalizeStringEntries((remote.stdoutTail ?? "").split("\n"));
+    const tracked = await runStep(
+      targetStep(
+        "git config update upstream",
+        ["git", "-C", root, "config", "--get", `branch.${DEV_BRANCH}.remote`],
+        root,
+      ),
+    );
+    if (tracked.exitCode !== 0 && tracked.exitCode !== 1) {
+      return false;
+    }
+    const tagRemote = resolveReleaseTagRemote(remotes, (tracked.stdoutTail ?? "").trim());
+    if (!tagRemote) {
+      steps.push({
+        name: "git release remote",
+        command: "git remote",
+        cwd: root,
+        durationMs: 0,
+        exitCode: 1,
+        stderrTail:
+          "Cannot determine the release remote. Set branch.main.remote to the remote that publishes releases.",
+      });
+      return false;
+    }
+    // Only the release authority may replace shared tag refs. Disable pruning
+    // even when Git config enables it, so operator-only tags survive.
+    const tags = await runStep(
+      targetStep(
+        `git fetch tags ${tagRemote}`,
+        [
+          "git",
+          "-C",
+          root,
+          "fetch",
+          "--no-tags",
+          "--no-prune",
+          "--no-prune-tags",
+          tagRemote,
+          "+refs/tags/*:refs/tags/*",
+        ],
+        root,
+      ),
+    );
+    return tags.exitCode === 0;
+  };
 
   const statusCheck = await runStep(step("clean check", gitCleanCheckArgs(gitRoot), gitRoot));
   if (statusCheck.exitCode !== 0) {
@@ -272,66 +361,17 @@ export async function updateGitCheckout(params: {
   if (statusCheck.stdoutTail?.trim()) {
     return buildError("dirty", "skipped");
   }
-
-  try {
-    const fetchFailure = await runRequiredStep(
-      "git fetch",
-      [
-        "git",
-        "-C",
-        gitRoot,
-        "fetch",
-        "--all",
-        "--prune",
-        channel === "dev" ? "--no-tags" : "--tags",
-      ],
-      "fetch-failed",
-    );
-    if (fetchFailure) {
-      return fetchFailure;
-    }
-    const tag =
-      channel === "dev"
-        ? undefined
-        : await resolveChannelTag(runCommand, gitRoot, timeoutMs, channel);
-    if (channel !== "dev" && !tag) {
-      return buildError("no-release-tag");
-    }
-    const preflight = await runGitCandidatePreflight({
-      gitRoot,
-      devTarget,
-      targetRevision: tag ?? undefined,
-      beforeSha,
-      needsCheckoutMain,
-      runCommand,
-      timeoutMs,
-      defaultCommandEnv,
-      steps,
-      step,
-      validateCandidate: opts.validateCandidate,
-      prepareGitExposure: opts.prepareGitExposure,
-      prepareCandidate: async (root, cleanupRoot) => {
-        runtimePromotion = await prepareGitRuntimePromotion(
-          gitRoot,
-          root,
-          runCommand,
-          timeoutMs,
-          cleanupRoot,
-        );
-      },
-    });
-    if (preflight.status !== "ok") {
-      return buildError(preflight.reason, preflight.status);
-    }
-    // Candidate validation and worktree cleanup finish while the old gateway serves.
-    // Its exact build is retained on this filesystem; activation never installs or builds.
+  const checkSourceUnchanged = async () => {
     const currentHead = await runCommand(["git", "-C", gitRoot, "rev-parse", "HEAD"], {
       cwd: gitRoot,
       timeoutMs,
     });
-    const currentStatus = await runCommand(gitCleanCheckArgs(gitRoot), { cwd: gitRoot, timeoutMs });
+    const currentStatus = await runCommand(
+      gitCleanCheckArgs(gitRoot, runtimePromotion?.sourceTreeStagingPaths),
+      { cwd: gitRoot, timeoutMs },
+    );
     if (currentHead.code !== 0 || currentStatus.code !== 0) {
-      return buildError("clean-check-failed");
+      return { status: "error" as const, reason: "clean-check-failed" as const };
     }
     const currentBranch = await readBranchName(runCommand, gitRoot, timeoutMs);
     if (
@@ -339,7 +379,190 @@ export async function updateGitCheckout(params: {
       currentBranch !== branch ||
       currentStatus.stdout.trim()
     ) {
-      return buildError("dirty", "skipped");
+      return { status: "skipped" as const, reason: "dirty" as const };
+    }
+    return undefined;
+  };
+
+  try {
+    const inspectAndPrepare = async (
+      inspectionRoot: string,
+      runInspectionCommand: CommandRunner,
+    ) => {
+      let publishedCandidate = false;
+      const inspectionStep: typeof step = (...args) => ({
+        ...step(...args),
+        runCommand: runInspectionCommand,
+      });
+      if (!(await fetchTarget(inspectionRoot, inspectionStep, "git target inspection fetch"))) {
+        return { status: "error" as const, reason: "fetch-failed" };
+      }
+      const inspectTarget = async (revision: string, root = inspectionRoot) => {
+        if (opts.inspectGitTarget) {
+          await prepareGitMutation({
+            runCommand: runInspectionCommand,
+            root,
+            revision,
+            timeoutMs,
+            beforeGitMutation: opts.inspectGitTarget,
+          });
+        }
+      };
+      const selected = await selectGitInspectionTarget({
+        gitRoot: inspectionRoot,
+        runCommand: runInspectionCommand,
+        step: inspectionStep,
+        channel,
+        devTarget,
+        beforeSha,
+        needsCheckoutMain,
+        timeoutMs,
+        defaultCommandEnv,
+        steps,
+        beforeCandidate: inspectTarget,
+        validateCandidate: opts.validateCandidate,
+        prepareGitExposure: opts.prepareGitExposure,
+        prepareCandidate: async (root, cleanupRoot) => {
+          const candidate = await runInspectionCommand(["git", "-C", root, "rev-parse", "HEAD"], {
+            cwd: root,
+            timeoutMs,
+          });
+          if (candidate.code !== 0 || !candidate.stdout.trim()) {
+            throw new Error("Cannot inspect the validated Git candidate");
+          }
+          if (opts.inspectGitTarget) {
+            await inspectTarget(candidate.stdout.trim(), root);
+          }
+          if (opts.publishGitCheckout) {
+            // A new checkout must settle its destination before runtime relocation
+            // records absolute paths. Candidate build/validation has already finished.
+            const sourceChanged = await checkSourceUnchanged();
+            if (sourceChanged) {
+              throw new Error(`Cannot publish Git candidate: ${sourceChanged.reason}`);
+            }
+            await prepareMutation(candidate.stdout.trim(), root, runInspectionCommand);
+            const imported = await runStep(
+              step(
+                "git import admitted target",
+                [
+                  "git",
+                  "-C",
+                  gitRoot,
+                  "fetch",
+                  "--no-tags",
+                  inspectionRoot,
+                  candidate.stdout.trim(),
+                ],
+                gitRoot,
+              ),
+            );
+            if (imported.exitCode !== 0) {
+              throw new Error("Cannot import the admitted Git candidate");
+            }
+            gitRoot = await opts.publishGitCheckout();
+            publishedCandidate = true;
+          }
+          runtimePromotion = await prepareGitRuntimePromotion(
+            gitRoot,
+            root,
+            runInspectionCommand,
+            timeoutMs,
+            cleanupRoot,
+          );
+        },
+      });
+      if (selected.status !== "ok") {
+        return selected;
+      }
+      if (!publishedCandidate) {
+        const sourceChanged = await checkSourceUnchanged();
+        if (sourceChanged) {
+          return sourceChanged;
+        }
+        await prepareMutation(selected.candidateSha, inspectionRoot, runInspectionCommand);
+        const upstreamRef = selected.selectedDevUpstream
+          ? `refs/remotes/${selected.selectedDevUpstream}`
+          : undefined;
+        const imported = await runStep(
+          step(
+            "git import admitted target",
+            [
+              "git",
+              "-C",
+              gitRoot,
+              "fetch",
+              "--no-tags",
+              inspectionRoot,
+              selected.candidateSha,
+              // Import the admitted upstream for both existing and newly created branches.
+              ...(upstreamRef ? [`+${upstreamRef}:${upstreamRef}`] : []),
+            ],
+            gitRoot,
+          ),
+        );
+        if (imported.exitCode !== 0) {
+          return { status: "error" as const, reason: "fetch-failed" };
+        }
+      }
+      return selected;
+    };
+    const inspectedTarget = opts.inspectGitTarget
+      ? await withGitTargetInspectionRoot(
+          { root: gitRoot, runCommand, timeoutMs },
+          inspectAndPrepare,
+        )
+      : undefined;
+    if (inspectedTarget && inspectedTarget.status !== "ok") {
+      return buildError(inspectedTarget.reason, inspectedTarget.status);
+    }
+    if (!inspectedTarget && opts.publishGitCheckout) {
+      return buildError("target-metadata-preflight");
+    }
+    if (!inspectedTarget) {
+      if (!(await fetchTarget(gitRoot, step, "git fetch"))) {
+        return buildError("fetch-failed");
+      }
+    }
+    const tag =
+      inspectedTarget || channel === "dev"
+        ? undefined
+        : await resolveChannelTag(runCommand, gitRoot, timeoutMs, channel);
+    if (!inspectedTarget && channel !== "dev" && !tag) {
+      return buildError("no-release-tag");
+    }
+    const preflight =
+      inspectedTarget ??
+      (await runGitCandidatePreflight({
+        gitRoot,
+        devTarget,
+        targetRevision: tag ?? undefined,
+        beforeSha,
+        needsCheckoutMain,
+        runCommand,
+        timeoutMs,
+        defaultCommandEnv,
+        steps,
+        step,
+        validateCandidate: opts.validateCandidate,
+        prepareGitExposure: opts.prepareGitExposure,
+        prepareCandidate: async (root, cleanupRoot) => {
+          runtimePromotion = await prepareGitRuntimePromotion(
+            gitRoot,
+            root,
+            runCommand,
+            timeoutMs,
+            cleanupRoot,
+          );
+        },
+      }));
+    if (preflight.status !== "ok") {
+      return buildError(preflight.reason, preflight.status);
+    }
+    // Candidate validation and worktree cleanup finish while the old gateway serves.
+    // Its exact build is retained on this filesystem; activation never installs or builds.
+    const sourceChanged = await checkSourceUnchanged();
+    if (sourceChanged) {
+      return buildError(sourceChanged.reason, sourceChanged.status);
     }
     await prepareMutation(preflight.candidateSha);
     const activateBranch = channel === "dev" && !hasDevTarget;
