@@ -118,6 +118,38 @@ describe("restart health", () => {
     expect(callGateway).toHaveBeenCalledTimes(reachable.length);
   });
 
+  it("restarts settling when the Gateway boot changes under the same process", async () => {
+    const service = makeGatewayService({ status: "running", pid: 8000 });
+    vi.mocked(service.readRuntime).mockResolvedValue({ status: "running", pid: 8000 });
+    for (const bootId of ["boot-a", "boot-a", "boot-b", "boot-b", "boot-b"]) {
+      callGateway.mockImplementationOnce(
+        gatewayHealthResponse({ server: { version: "2026.8.1", bootId } }),
+      );
+    }
+    inspectPortUsage.mockResolvedValue({
+      port: 18789,
+      status: "busy",
+      listeners: [{ pid: 8000, commandLine: "openclaw-gateway" }],
+      hints: [],
+    });
+
+    const { waitForGatewayHealthyRestart } = await import("./restart-health.js");
+    const snapshot = await waitForGatewayHealthyRestart({
+      service,
+      port: 18789,
+      expectedVersion: "2026.8.1",
+      requireRunningService: true,
+      attempts: 6,
+      delayMs: 500,
+      settle: { probes: 3 },
+    });
+
+    expect(snapshot.waitOutcome).toBe("healthy");
+    expect(snapshot.gatewayBootId).toBe("boot-b");
+    expect(snapshot.elapsedMs).toBe(2_000);
+    expect(callGateway).toHaveBeenCalledTimes(5);
+  });
+
   it("waits for the managed service when running service proof is required", async () => {
     callGateway.mockImplementation(
       gatewayHealthResponse({

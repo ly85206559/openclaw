@@ -208,6 +208,32 @@ describe("maybeRestartService", () => {
     expect(loadUpdateRecovery(record.runId, options)).toEqual(record);
   });
 
+  it("refuses a replacement Gateway generation after the final readiness wait", async () => {
+    const settled = await mocks.waitForGatewayHealthyRestart();
+    mocks.inspectGatewayRestart.mockResolvedValueOnce({
+      ...settled,
+      runtime: { status: "running", pid: 9000 },
+      gatewayBootId: "replacement-boot",
+    });
+    const onVerified = vi.fn();
+
+    await expect(
+      verifyUpdatedGateway({
+        opts: { json: true },
+        result: { status: "ok", mode: "npm", steps: [], durationMs: 0 },
+        serviceEnv: {},
+        gatewayPort: 18789,
+        expectedVersion: gateway.version,
+        expectedBuildId: gateway.buildId,
+        requireRunningService: true,
+        onVerified,
+      }),
+    ).resolves.toMatchObject({ ok: false, summary: "gateway-generation-changed" });
+
+    expect(mocks.inspectGatewayRestart).toHaveBeenCalledOnce();
+    expect(onVerified).not.toHaveBeenCalled();
+  });
+
   it.each(["seal refused", "target install failed", "missing entrypoint"])(
     "never falls back to restart after gated install failure: %s",
     async (reason) => {
