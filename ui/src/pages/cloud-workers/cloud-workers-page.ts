@@ -37,6 +37,7 @@ import {
   type CloudWorkerProfileDraft,
   type ConfiguredCloudWorkerProfile,
 } from "./cloud-worker-config.ts";
+import { renderCloudWorkerRepositories } from "./cloud-worker-repositories.ts";
 
 registerSettingsEnglish();
 
@@ -445,15 +446,24 @@ class CloudWorkersPage extends OpenClawLightDomElement {
                   aria-label=${t("cloudWorkersPage.fields.operatingSystem")}
                   .value=${this.draft.target}
                   ?disabled=${busy}
-                  @change=${(event: Event) => this.patchDraft({ target: formControlValue(event) })}
+                  @change=${(event: Event) => {
+                    const target = formControlValue(event);
+                    if (!operatingSystems.find((system) => system.id === target)?.disabledReason) {
+                      this.patchDraft({ target });
+                    }
+                  }}
                 >
                   <option value="" ?selected=${!this.draft.target}>
                     ${t("cloudWorkersPage.fields.providerDefault")}
                   </option>
                   ${operatingSystems.map(
                     (system) => html`
-                      <option value=${system.id} ?selected=${this.draft.target === system.id}>
-                        ${system.label}
+                      <option
+                        value=${system.id}
+                        ?selected=${this.draft.target === system.id}
+                        ?disabled=${Boolean(system.disabledReason)}
+                      >
+                        ${system.label}${system.disabledReason ? ` — ${system.disabledReason}` : ""}
                       </option>
                     `,
                   )}
@@ -545,6 +555,50 @@ class CloudWorkersPage extends OpenClawLightDomElement {
             @input=${(event: Event) => this.patchDraft({ binary: formControlValue(event) })}
           />`,
         }),
+        renderSettingsSection({ title: t("cloudWorkersPage.advanced") }, [
+          renderSettingsRow({
+            title: t("cloudWorkersPage.fields.warmImage"),
+            description: t("cloudWorkersPage.fields.warmImageHelp"),
+            control: html`<select
+              class="settings-select"
+              aria-label=${t("cloudWorkersPage.fields.warmImage")}
+              .value=${this.draft.warmImage}
+              ?disabled=${busy}
+              @change=${(event: Event) => {
+                const value = formControlValue(event);
+                if (value === "auto" || value === "on" || value === "off") {
+                  this.patchDraft({ warmImage: value });
+                }
+              }}
+            >
+              ${(["auto", "on", "off"] as const).map(
+                (value) => html`
+                  <option value=${value} ?selected=${this.draft.warmImage === value}>
+                    ${t(`cloudWorkersPage.warmImage.${value}`)}
+                  </option>
+                `,
+              )}
+            </select>`,
+          }),
+          ...(["setupEnv", "readyWorkers", "suspendAfter"] as const).map((field) =>
+            renderSettingsRow({
+              title: t(`cloudWorkersPage.fields.${field}`),
+              description: t(`cloudWorkersPage.fields.${field}Help`),
+              control: html`<input
+                class="settings-input mono"
+                aria-label=${t(`cloudWorkersPage.fields.${field}`)}
+                type=${field === "readyWorkers" ? "number" : "text"}
+                min=${field === "readyWorkers" ? "0" : nothing}
+                step=${field === "readyWorkers" ? "1" : nothing}
+                autocomplete="off"
+                spellcheck="false"
+                .value=${this.draft[field]}
+                ?disabled=${busy}
+                @input=${(event: Event) => this.patchDraft({ [field]: formControlValue(event) })}
+              />`,
+            }),
+          ),
+        ]),
         ...(this.formError
           ? [
               renderSettingsRow({
@@ -619,7 +673,7 @@ class CloudWorkersPage extends OpenClawLightDomElement {
         },
         rows,
       )}
-      ${this.renderEditor()}
+      ${this.renderEditor()} ${renderCloudWorkerRepositories(canManage)}
     `);
     return html`
       ${renderSettingsPageHeader({
