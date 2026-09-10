@@ -1,0 +1,36 @@
+name: Proof update Gateway generation
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_ref:
+        description: Exact product commit to validate
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  focused:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.target_ref }}
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24.19.0
+      - name: Enable pinned pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@12.3.4 --activate
+          pnpm --version
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Run focused replacement-generation regressions
+        run: |
+          node scripts/run-vitest.mjs src/cli/daemon-cli/restart-health-wait.test.ts
+          node scripts/run-vitest.mjs src/cli/update-cli/update-command-service.test.ts
