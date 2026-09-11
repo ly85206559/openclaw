@@ -150,3 +150,118 @@ describe("Fireworks manifest provider alias", () => {
     },
   );
 });
+
+describe("Kilocode manifest provider alias", () => {
+  const modelId = "kilo-auto/balanced";
+  const providerBaseUrl = "https://kilocode-proxy.example/v1";
+  const modelBaseUrl = "https://kilocode-proxy.example/model";
+
+  beforeEach(() => {
+    const rootDir = path.dirname(
+      resolveBundledPluginPublicModulePath({
+        pluginId: "kilocode",
+        artifactBasename: "openclaw.plugin.json",
+      }),
+    );
+    const loaded = loadPluginManifest(rootDir);
+    if (!loaded.ok) {
+      throw new Error(loaded.error);
+    }
+    const snapshot = createPluginMetadataSnapshotFixture({
+      plugins: [{ ...loaded.manifest, origin: "bundled", rootDir }],
+    });
+    manifestMocks.getCurrentPluginMetadataSnapshot.mockReturnValue(snapshot);
+    manifestMocks.loadPluginManifestRegistryCore.mockReturnValue(snapshot.manifestRegistry);
+  });
+
+  function resolveKilocodeModel(provider: string, cfg?: OpenClawConfig) {
+    const catalogModel = resolveBundledStaticCatalogModel({
+      provider: "kilocode",
+      modelId,
+      includeRuntimeDiscovery: true,
+    });
+    if (!catalogModel) {
+      throw new Error("Missing Kilocode catalog model");
+    }
+    return resolveModelWithRegistry({
+      provider,
+      modelId,
+      cfg,
+      modelRegistry: {
+        getAll: () => [catalogModel],
+        getAvailable: () => [],
+        hasConfiguredAuth: () => false,
+        find: (candidateProvider, candidateId) =>
+          candidateProvider === catalogModel.provider && candidateId === catalogModel.id
+            ? catalogModel
+            : undefined,
+      },
+      runtimeHooks: resolveRuntimeHooks({ skipProviderRuntimeHooks: true }),
+      authProfileMode: "api_key",
+    });
+  }
+
+  it("finds the models.dev alias owner before runtime loading and resolves the canonical catalog model", () => {
+    expect(resolveOwningPluginIdsForProviderRef({ provider: "kilo" })).toEqual(["kilocode"]);
+    const canonical = resolveKilocodeModel("kilocode");
+    expect(canonical).toMatchObject({
+      provider: "kilocode",
+      id: modelId,
+      api: "openai-completions",
+      baseUrl: "https://api.kilo.ai/api/gateway/",
+    });
+    expect(resolveKilocodeModel("kilo")).toEqual(canonical);
+  });
+
+  it.each([
+    ["omitted API", undefined, undefined, undefined, "openai-completions"],
+    ["provider API", "openai-responses", undefined, undefined, "openai-responses"],
+    [
+      "model API and URL",
+      "openai-responses",
+      "anthropic-messages",
+      modelBaseUrl,
+      "anthropic-messages",
+    ],
+  ] as const)(
+    "preserves explicit kilo alias configuration with %s",
+    (_name, providerApi, modelApi, configuredModelBaseUrl, expectedApi) => {
+      const cfg: OpenClawConfig = {
+        models: {
+          providers: {
+            kilo: {
+              baseUrl: providerBaseUrl,
+              api: providerApi,
+              headers: { "X-Kilo-Route": "custom" },
+              models: [
+                {
+                  id: modelId,
+                  name: "Configured Kilo Auto",
+                  api: modelApi,
+                  baseUrl: configuredModelBaseUrl,
+                  reasoning: false,
+                  input: ["text", "image"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 4096,
+                  maxTokens: 512,
+                },
+              ],
+            },
+          },
+        },
+      };
+
+      expect(resolveKilocodeModel("kilo", cfg)).toMatchObject({
+        provider: "kilo",
+        id: modelId,
+        api: expectedApi,
+        baseUrl: configuredModelBaseUrl ?? providerBaseUrl,
+        headers: { "X-Kilo-Route": "custom" },
+        reasoning: false,
+        input: ["text", "image"],
+        contextWindow: 4096,
+        maxTokens: 512,
+      });
+    },
+  );
+});
