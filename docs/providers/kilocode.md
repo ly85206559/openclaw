@@ -8,12 +8,12 @@ read_when:
 
 Kilo Gateway routes requests to many models behind a single OpenAI-compatible endpoint and API key.
 
-| Property | Value                                  |
-| -------- | -------------------------------------- |
-| Provider | `kilocode` (alias: `kilo`)             |
-| Auth     | `KILOCODE_API_KEY`                     |
-| API      | OpenAI-compatible                      |
-| Base URL | `https://api.kilo.ai/api/gateway/`     |
+| Property | Value                              |
+| -------- | ---------------------------------- |
+| Provider | `kilocode` (alias: `kilo`)         |
+| Auth     | `KILOCODE_API_KEY`                 |
+| API      | OpenAI-compatible                  |
+| Base URL | `https://api.kilo.ai/api/gateway/` |
 
 ## Install plugin
 
