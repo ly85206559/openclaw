@@ -229,24 +229,13 @@ describe("runMessageAction", () => {
   it.each(["", "   "])(
     "rejects an explicitly blank message channel before command startup (%j)",
     async (channel) => {
-      const program = new Command()
-        .exitOverride()
-        .configureOutput({ writeErr: () => undefined });
+      const program = new Command().exitOverride().configureOutput({ writeErr: () => undefined });
       const message = program.command("message");
       registerMessageSendCommand(message, createMessageCliHelpers("discord"));
 
       await expect(
         program.parseAsync(
-          [
-            "message",
-            "send",
-            "--channel",
-            channel,
-            "--target",
-            "channel:123",
-            "--message",
-            "hi",
-          ],
+          ["message", "send", "--channel", channel, "--target", "channel:123", "--message", "hi"],
           { from: "user" },
         ),
       ).rejects.toThrow("--channel must not be blank");
