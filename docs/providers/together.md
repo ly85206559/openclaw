@@ -12,7 +12,7 @@ OpenClaw bundles it as the `together` provider.
 
 | Property | Value                         |
 | -------- | ----------------------------- |
-| Provider | `together`                    |
+| Provider | `together` (alias: `togetherai`) |
 | Auth     | `TOGETHER_API_KEY`            |
 | API      | OpenAI-compatible             |
 | Base URL | `https://api.together.xyz/v1` |
