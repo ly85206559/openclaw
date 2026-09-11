@@ -17,7 +17,7 @@ import {
   type DiscordGuildEntryResolved,
 } from "../monitor/allow-list.js";
 import type { DiscordReactOpts, DiscordSendResult } from "../send.types.js";
-import { discordMessagingActionRuntime } from "./runtime.messaging.runtime.js";
+import * as discordMessagingActionRuntime from "./runtime.messaging.runtime.js";
 import { createDiscordActionOptions } from "./runtime.shared.js";
 
 type ConversationReadInvocationOrigin = NonNullable<
