@@ -184,6 +184,10 @@ describe("listGatewayMethods", () => {
       "claws.monitors",
       ...pluginDiscoveryMethods,
       "tasks.history",
+      "environments.prepare",
+      "models.authRefresh",
+      "models.authLogin",
+      "models.authSetApiKey",
     ];
     expect(listGatewayMethods().slice(-expectedSuffix.length)).toEqual(expectedSuffix);
     const methods = listGatewayMethods();
@@ -208,6 +212,10 @@ describe("listGatewayMethods", () => {
       "claws.monitors",
       ...pluginDiscoveryMethods,
       "tasks.history",
+      "environments.prepare",
+      "models.authRefresh",
+      "models.authLogin",
+      "models.authSetApiKey",
     ]);
   });
 
@@ -359,6 +367,10 @@ describe("listGatewayMethods", () => {
       "claws.monitors",
       ...pluginDiscoveryMethods,
       "tasks.history",
+      "environments.prepare",
+      "models.authRefresh",
+      "models.authLogin",
+      "models.authSetApiKey",
     ];
     expect(coreMethods.slice(-expectedCoreSuffix.length)).toEqual(expectedCoreSuffix);
     expect(methods.indexOf("approval.get")).toBeGreaterThan(methods.indexOf("tts.speak"));
@@ -412,6 +424,16 @@ describe("listGatewayMethods", () => {
     );
   });
 
+  it("advertises API-key saving as an administrator control-plane write", () => {
+    expect(listGatewayMethods()).toContain("models.authSetApiKey");
+    expect(coreGatewayHandlers["models.authSetApiKey"]).toBeTypeOf("function");
+    expect(
+      createCoreGatewayMethodDescriptors(coreGatewayHandlers).find(
+        (descriptor) => descriptor.name === "models.authSetApiKey",
+      ),
+    ).toMatchObject({ scope: "operator.admin", controlPlaneWrite: true });
+  });
+
   it("advertises the versioned Talk session RPCs", () => {
     const methods = listGatewayMethods();
     expect(methods).toContain("talk.client.create");
@@ -429,7 +451,11 @@ describe("listGatewayMethods", () => {
   });
 
   it("advertises and wires cloud worker environment mutations", () => {
-    const methods = ["environments.create", "environments.destroy"] as const;
+    const methods = [
+      "environments.create",
+      "environments.destroy",
+      "environments.prepare",
+    ] as const;
     const advertisedMethods = listGatewayMethods();
     const descriptors = createCoreGatewayMethodDescriptors(coreGatewayHandlers);
 

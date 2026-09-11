@@ -50,7 +50,6 @@ import { readUpdateChannelConfig } from "./update-command-config.js";
 import { printUpdateDryRun } from "./update-command-dry-run.js";
 import type { UpdateCommandExecutor } from "./update-command-executor.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
-import { withOwnedManagedUpdateEnv } from "./update-command-managed-context.js";
 import {
   reportPreMutationUpdateFailure,
   UpdateCommandFailure,
@@ -65,7 +64,11 @@ import {
   withUpdatePreviewSignals,
 } from "./update-command-run.js";
 import { preflightUpdateCommandSchemas } from "./update-command-schema.js";
-import { resolveServiceRefreshEnv, withUpdateInProgressEnv } from "./update-command-service-env.js";
+import {
+  resolveServiceRefreshEnv,
+  withUpdateInProgressEnv,
+  withOwnedManagedUpdateEnv,
+} from "./update-command-service-env.js";
 import {
   gatewayServiceCommandUsesRoot,
   resolveManagedServicePackageUpdatePlan,
@@ -73,6 +76,7 @@ import {
   type ManagedServiceRootRedirect,
 } from "./update-command-service-plan.js";
 import type { UpdateCommandRecoveryState } from "./update-command-service.js";
+import { withUpdateCommandTerminalResult } from "./update-command-terminal.js";
 import { withUpdateFailureTriage } from "./update-command-triage.js";
 import { withUpdateCommandRecoveryUnwind } from "./update-command-unwind.js";
 
@@ -121,15 +125,17 @@ export async function updateCommand(inputOpts: UpdateCommandOptions): Promise<vo
       withUpdateFailureTriage({ ...opts, invocationCwd }, recoveryState.triageTarget, async () => {
         await withUpdateInProgressEnv(invocationCwd, async () => {
           executionStarted = true;
-          await withUpdateCommandExecutor(run.runId, (executor) =>
-            withUpdateCommandRecoveryUnwind(opts, recoveryState, () =>
-              updateCommandInternal(
-                opts,
-                recoveryState,
-                invocationCwd,
-                prepared,
-                presentation,
-                executor,
+          await withUpdateCommandTerminalResult(run, () =>
+            withUpdateCommandExecutor(run.runId, (executor) =>
+              withUpdateCommandRecoveryUnwind(opts, recoveryState, () =>
+                updateCommandInternal(
+                  opts,
+                  recoveryState,
+                  invocationCwd,
+                  prepared,
+                  presentation,
+                  executor,
+                ),
               ),
             ),
           );

@@ -4,6 +4,7 @@ import type { TranslationMap } from "../lib/types.ts";
 import * as agentEn from "./en-agents.ts";
 
 export const en: TranslationMap & {
+  browser: TranslationMap & { errors: TranslationMap };
   configPage: TranslationMap;
   connection: TranslationMap;
   configView: TranslationMap;
@@ -268,6 +269,9 @@ export const en: TranslationMap & {
     workspaceLabel: "Workspace",
     branchLabel: "Branch",
     runsOn: "Runs on {providerId} · {profileId}",
+    machineLabel: "Machine",
+    machineCpu: "{cpu} vCPU",
+    machineMemory: "{memory} GB",
     more: "+{count} more",
     changedFile: "{count} file",
     changedFiles: "{count} files",
@@ -1005,7 +1009,7 @@ export const en: TranslationMap & {
     browse: "Browse folders",
     browseRequiresAdmin:
       "To browse outside agent workspaces, open Inbox, select Limited access, request admin, then approve in Devices.",
-    connectMachine: "Connect a machine…",
+    connectMachine: "Connect a machine",
     browserUp: "Parent folder",
     browserUse: "Use this folder",
     browserEmpty: "No subfolders",
@@ -2329,15 +2333,7 @@ export const en: TranslationMap & {
       "Remove a browser annotation before retrying (maximum 4 cards and 8,000 characters of generated context).",
     inspectUnavailable: "Element inspection is disabled (browser.evaluateEnabled=false).",
     annotationSent: "Annotation added to the chat composer.",
-    errors: {
-      requestFailed: "Browser request failed: {error}",
-      screenshotPathMissing: "Browser screenshot did not return a media path.",
-      screenshotFetchTimedOut: "Screenshot fetch timed out.",
-      screenshotFetchFailed: "Screenshot fetch failed ({status}).",
-      screenshotReadFailed: "Screenshot read failed.",
-      screenshotDecodeFailed: "Screenshot decode failed.",
-      canvasUnavailable: "Canvas 2D context unavailable.",
-    },
+    errors: {},
     annotatePrompt: {
       browserTarget: "Browser target: {target}",
       // introTitled/elementDetail (not intro/element): translated keys never
@@ -4064,8 +4060,7 @@ export const en: TranslationMap & {
       dismissing: "Dismissing…",
       emptyTitle: "No mentions yet",
       emptyBody: "When someone mentions you in a chat, it appears here.",
-      retention:
-        "Mentions are kept for up to seven days. Gateway restarts preserve your Inbox and dismissals.",
+      retention: "Mentions expire after 7 days.",
       notifications: "Notification settings",
       loading: "Loading mentions…",
       unavailable: "Sign in and connect to the Gateway to see your mentions.",
@@ -4649,6 +4644,7 @@ export const en: TranslationMap & {
       tokensWrittenToCache: "Tokens written to cache",
       tokensReadFromCache: "Tokens read from cache",
       noContextData: "No context data",
+      contextOutOfDate: "These context details are out of date. Refresh usage and try again.",
       systemPromptBreakdown: "System Prompt Breakdown",
       collapse: "Collapse",
       collapseAll: "Collapse All",
@@ -5483,7 +5479,8 @@ export const en: TranslationMap & {
       modes: {
         "read-only": {
           label: "Read Only",
-          description: "Read within the session root; writes and commands are blocked.",
+          description:
+            "Agent tools can read within the session root, but cannot write or run commands.",
         },
         guarded: {
           label: "Guarded",
@@ -5547,6 +5544,7 @@ export const en: TranslationMap & {
       editFile: "Edit file",
       searchInFile: "Search in file",
       showInFiles: "Show in Files",
+      unavailable: "Unable to open",
       previousMatch: "Previous match",
       nextMatch: "Next match",
       overwrite: "Overwrite",
@@ -5959,6 +5957,9 @@ export const en: TranslationMap & {
       statusRunningMany: "{count} running tasks",
       statusPreviewMore: "+{count} more",
       stopTask: "Stop {title}",
+      now: "Now",
+      toolCallsOne: "1 tool call",
+      toolCallsMany: "{count} tool calls",
       toolUseOne: "1 tool use",
       toolUseMany: "{count} tool uses",
       detailLoading: "Loading task details…",
@@ -6070,11 +6071,11 @@ export const en: TranslationMap & {
       truncated: "Showing the first matching files. Refine the search to narrow results.",
       session: "Session",
       missing: "Missing",
-      summary: "Session workspace summary",
+      filterAll: "All",
+      filters: "Filter files",
       changedCount: "{count} changed",
       readCount: "{count} read",
       artifactCount: "{count} artifacts",
-      browserCount: "{count} shown",
       actions: "Workspace file actions",
       preview: "Preview",
       copyPath: "Copy path",
