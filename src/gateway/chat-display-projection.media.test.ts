@@ -7,11 +7,11 @@ import {
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { applyAssistantDeliveryDirectives } from "../config/sessions/transcript-assistant-delivery.js";
-import { createNestedToolActivity } from "../sessions/nested-tool-activity.js";
 import {
   appendAssistantMirrorMessageByIdentity,
   appendSessionTranscriptMessageByIdentity,
 } from "../plugin-sdk/session-transcript-runtime.js";
+import { createNestedToolActivity } from "../sessions/nested-tool-activity.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
