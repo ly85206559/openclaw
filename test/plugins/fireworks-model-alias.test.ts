@@ -150,3 +150,118 @@ describe("Fireworks manifest provider alias", () => {
     },
   );
 });
+
+describe("Together manifest provider alias", () => {
+  const modelId = "moonshotai/Kimi-K2.6";
+  const providerBaseUrl = "https://together-proxy.example/v1";
+  const modelBaseUrl = "https://together-proxy.example/model";
+
+  beforeEach(() => {
+    const rootDir = path.dirname(
+      resolveBundledPluginPublicModulePath({
+        pluginId: "together",
+        artifactBasename: "openclaw.plugin.json",
+      }),
+    );
+    const loaded = loadPluginManifest(rootDir);
+    if (!loaded.ok) {
+      throw new Error(loaded.error);
+    }
+    const snapshot = createPluginMetadataSnapshotFixture({
+      plugins: [{ ...loaded.manifest, origin: "bundled", rootDir }],
+    });
+    manifestMocks.getCurrentPluginMetadataSnapshot.mockReturnValue(snapshot);
+    manifestMocks.loadPluginManifestRegistryCore.mockReturnValue(snapshot.manifestRegistry);
+  });
+
+  function resolveTogetherKimi(provider: string, cfg?: OpenClawConfig) {
+    const catalogModel = resolveBundledStaticCatalogModel({
+      provider: "together",
+      modelId,
+      includeRuntimeDiscovery: true,
+    });
+    if (!catalogModel) {
+      throw new Error("Missing Together Kimi catalog model");
+    }
+    return resolveModelWithRegistry({
+      provider,
+      modelId,
+      cfg,
+      modelRegistry: {
+        getAll: () => [catalogModel],
+        getAvailable: () => [],
+        hasConfiguredAuth: () => false,
+        find: (candidateProvider, candidateId) =>
+          candidateProvider === catalogModel.provider && candidateId === catalogModel.id
+            ? catalogModel
+            : undefined,
+      },
+      runtimeHooks: resolveRuntimeHooks({ skipProviderRuntimeHooks: true }),
+      authProfileMode: "api_key",
+    });
+  }
+
+  it("finds the alias owner before runtime loading and resolves the canonical catalog model", () => {
+    expect(resolveOwningPluginIdsForProviderRef({ provider: "togetherai" })).toEqual(["together"]);
+    const canonical = resolveTogetherKimi("together");
+    expect(canonical).toMatchObject({
+      provider: "together",
+      id: modelId,
+      api: "openai-completions",
+      baseUrl: "https://api.together.xyz/v1",
+    });
+    expect(resolveTogetherKimi("togetherai")).toEqual(canonical);
+  });
+
+  it.each([
+    ["omitted API", undefined, undefined, undefined, "openai-completions"],
+    ["provider API", "openai-responses", undefined, undefined, "openai-responses"],
+    [
+      "model API and URL",
+      "openai-responses",
+      "anthropic-messages",
+      modelBaseUrl,
+      "anthropic-messages",
+    ],
+  ] as const)(
+    "preserves explicit alias configuration with %s",
+    (_name, providerApi, modelApi, configuredModelBaseUrl, expectedApi) => {
+      const cfg: OpenClawConfig = {
+        models: {
+          providers: {
+            togetherai: {
+              baseUrl: providerBaseUrl,
+              api: providerApi,
+              headers: { "X-Together-Route": "custom" },
+              models: [
+                {
+                  id: modelId,
+                  name: "Configured Kimi",
+                  api: modelApi,
+                  baseUrl: configuredModelBaseUrl,
+                  reasoning: false,
+                  input: ["text", "image"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 4096,
+                  maxTokens: 512,
+                },
+              ],
+            },
+          },
+        },
+      };
+
+      expect(resolveTogetherKimi("togetherai", cfg)).toMatchObject({
+        provider: "togetherai",
+        id: modelId,
+        api: expectedApi,
+        baseUrl: configuredModelBaseUrl ?? providerBaseUrl,
+        headers: { "X-Together-Route": "custom" },
+        reasoning: false,
+        input: ["text", "image"],
+        contextWindow: 4096,
+        maxTokens: 512,
+      });
+    },
+  );
+});
