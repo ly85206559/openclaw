@@ -1,0 +1,105 @@
+name: Proof blank message channel CLI after fix
+
+on:
+  push:
+    branches:
+      - proof/message-blank-channel-cli-after
+
+permissions:
+  contents: read
+
+jobs:
+  proof:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out proof commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4.2.0
+
+      - name: Set up Node and dependencies
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          install-deps: "true"
+
+      - name: Exercise real message CLI entry point
+        shell: bash
+        env:
+          OPENCLAW_CONFIG_PATH: ${{ runner.temp }}/openclaw-state/openclaw.json
+          OPENCLAW_STATE_DIR: ${{ runner.temp }}/openclaw-state
+        run: |
+          set -euo pipefail
+          mkdir -p "$OPENCLAW_STATE_DIR"
+
+          expect_blank_rejection() {
+            local label="$1"
+            shift
+            local output
+            local status
+            set +e
+            output="$("$@" 2>&1)"
+            status=$?
+            set -e
+            printf '%s\n%s\n' "== $label (exit $status) ==" "$output"
+            test "$status" -ne 0
+            grep -F -- "--channel must not be blank" <<<"$output"
+          }
+
+          expect_other_result() {
+            local label="$1"
+            shift
+            local output
+            local status
+            set +e
+            output="$("$@" 2>&1)"
+            status=$?
+            set -e
+            printf '%s\n%s\n' "== $label (exit $status) ==" "$output"
+            if grep -Fq -- "--channel must not be blank" <<<"$output"; then
+              echo "unexpected blank-channel rejection" >&2
+              exit 1
+            fi
+          }
+
+          expect_dry_run_channel() {
+            local label="$1"
+            shift
+            local output
+            output="$("$@" 2>&1)"
+            printf '%s\n%s\n' "== $label (exit 0) ==" "$output"
+            grep -F -- '"channel": "discord"' <<<"$output"
+          }
+
+          expect_blank_rejection \
+            "fresh setup: empty channel" \
+            pnpm openclaw message send --channel "" --target channel:123 --message hi --dry-run --json
+          expect_blank_rejection \
+            "fresh setup: whitespace channel" \
+            pnpm openclaw message send --channel "   " --target channel:123 --message hi --dry-run --json
+          expect_other_result \
+            "fresh setup: omitted channel follows ordinary resolution" \
+            pnpm openclaw message send --target channel:123 --message hi --dry-run --json
+
+          cat >"$OPENCLAW_CONFIG_PATH" <<'JSON'
+          {
+            "channels": {
+              "discord": {
+                "enabled": true,
+                "token": "proof-placeholder-token"
+              }
+            }
+          }
+          JSON
+
+          expect_blank_rejection \
+            "existing setup: empty channel" \
+            pnpm openclaw message send --channel "" --target channel:123 --message hi --dry-run --json
+          expect_blank_rejection \
+            "existing setup: whitespace channel" \
+            pnpm openclaw message send --channel "   " --target channel:123 --message hi --dry-run --json
+          expect_dry_run_channel \
+            "existing setup: omitted channel selects sole configured channel" \
+            pnpm openclaw message send --target channel:123 --message hi --dry-run --json
+          expect_dry_run_channel \
+            "existing setup: named channel is preserved" \
+            pnpm openclaw message send --channel discord --target channel:123 --message hi --dry-run --json
