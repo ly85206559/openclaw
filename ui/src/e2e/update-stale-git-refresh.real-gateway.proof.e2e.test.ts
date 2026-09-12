@@ -255,7 +255,7 @@ suite.define(() => {
           expect(
             (await page.goto(new URL("chat", suite.server.baseUrl).toString()))?.status(),
           ).toBe(200);
-          await waitForControlUiRoute(page, { pathname: "/chat", routeId: "chat" });
+          await waitForControlUiRoute(page, { pathname: "/chat/main", routeId: "chat" });
           expect(await page.locator(".sidebar-issues-button:visible").count()).toBe(0);
           expect(
             await page
