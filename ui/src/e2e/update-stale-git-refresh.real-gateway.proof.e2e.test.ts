@@ -172,6 +172,17 @@ suite.define(() => {
           expect((await page.goto(gatewayPageUrl("chat", port)))?.status()).toBe(200);
           await confirmGatewayUrl(page);
 
+          await expect
+            .poll(() =>
+              page.locator("openclaw-app").evaluate((element) => {
+                const runtime = Reflect.get(element, "runtime") as
+                  | { context?: { gateway?: { snapshot?: { phase?: string } } } }
+                  | undefined;
+                return runtime?.context?.gateway?.snapshot?.phase;
+              }),
+            )
+            .toBe("connected");
+
           const initialState = await captureInitialUpdateState(page);
           await writeFile(
             path.join(suite.artifactDir, "00-initial-update-state.json"),
