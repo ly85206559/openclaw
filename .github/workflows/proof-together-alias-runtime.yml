@@ -17,7 +17,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
-      PR_SOURCE_HEAD: 1e684d83dce67807131b049529e919a773ab6dab
+      PR_SOURCE_HEAD: 83bb6e9518f09f2922b8c9b6779771294465b880
       RESULTS_DIR: artifacts/together-alias-runtime
     steps:
       - name: Checkout immutable proof branch
