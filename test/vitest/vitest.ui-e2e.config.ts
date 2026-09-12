@@ -17,12 +17,15 @@ const openClawDelegationRealGatewayTest =
   "extensions/qa-lab/src/control-ui-openclaw-delegation.real-gateway.e2e.test.ts";
 const automationManagementRealGatewayTest =
   "extensions/qa-lab/src/control-ui-automation-management.real-gateway.e2e.test.ts";
+const updateStaleGitRefreshProofTest =
+  "ui/src/e2e/update-stale-git-refresh.real-gateway.proof.e2e.test.ts";
 const uiE2eIncludePatterns = [
   ...controlUiE2eTestGlobs,
   mediaTranscriptRealGatewayTest,
   sessionHostCommandStateRealGatewayTest,
   openClawDelegationRealGatewayTest,
   automationManagementRealGatewayTest,
+  updateStaleGitRefreshProofTest,
 ];
 export const uiE2eRealGatewayTestFiles = [
   "ui/src/e2e/model-api-keys.real-gateway.e2e.test.ts",
@@ -52,6 +55,7 @@ export const uiE2eRealGatewayTestFiles = [
   mediaTranscriptRealGatewayTest,
   openClawDelegationRealGatewayTest,
   automationManagementRealGatewayTest,
+  updateStaleGitRefreshProofTest,
 ];
 
 // These files own their server instead of leasing the global production bundle.
@@ -95,6 +99,7 @@ export const uiE2ePrivateServerTestFiles = [
   "ui/src/e2e/settings-loading-skeletons.e2e.test.ts",
   "ui/src/e2e/sidebar-account-footer.e2e.test.ts",
   "ui/src/e2e/terminal-runtime.e2e.test.ts",
+  updateStaleGitRefreshProofTest,
 ];
 
 export const uiE2eRuntimeBudgetTestFile = "ui/src/e2e/chat-stream-runtime-budgets.e2e.test.ts";

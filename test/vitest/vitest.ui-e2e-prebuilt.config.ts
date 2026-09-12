@@ -4,15 +4,7 @@ import {
   type TestUserConfig,
 } from "vitest/config";
 import { intersectIncludePatterns } from "./vitest.pattern-file.ts";
-import {
-  createUiE2eVitestConfig,
-  uiE2eRealGatewayTestFiles as canonicalRealGatewayTestFiles,
-} from "./vitest.ui-e2e.config.ts";
-
-const uiE2eRealGatewayTestFiles = [
-  ...canonicalRealGatewayTestFiles,
-  "ui/src/e2e/update-stale-git-refresh.real-gateway.proof.e2e.test.ts",
-];
+import { createUiE2eVitestConfig, uiE2eRealGatewayTestFiles } from "./vitest.ui-e2e.config.ts";
 
 // New real-Gateway files stay serial until their shared readers/writers are audited.
 const parallelFiles = new Set([
