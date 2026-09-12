@@ -15,6 +15,7 @@ export {
   ensureOpenClawAgentDatabaseSchema,
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
+  withOpenClawAgentDatabaseAsync,
 } from "../state/openclaw-agent-db.js";
 export { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 export { assertOpenClawAgentDatabaseForMaintenance } from "../state/openclaw-agent-db-maintenance.js";
@@ -26,6 +27,7 @@ export {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
+  prepareSqliteQuerySync,
   sqliteStringSet,
 } from "../infra/kysely-sync.js";
 export { openNodeSqliteDatabase } from "../infra/node-sqlite.js";

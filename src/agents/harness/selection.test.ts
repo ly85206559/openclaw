@@ -76,9 +76,11 @@ import type { ContextEngineLogicalTurnLease } from "./context-engine-logical-tur
 import { resolveAgentHarnessPolicy } from "./policy.js";
 import { clearAgentHarnesses, registerAgentHarness } from "./registry.js";
 import { ensureSelectedAgentHarnessPlugin } from "./runtime-plugin.js";
+import { resolveAgentHarnessDeliveryDefaults } from "./selection-decision.js";
 import {
   agentHarnessBuildsOpenClawTools,
   agentHarnessExposesOpenClawTools,
+  resolveAgentHarnessNativeToolPolicyRestricted,
   resolveAvailableAgentHarnessPolicy,
   resolvePluginHarnessPolicyToolsAllow,
   runAgentHarnessAttempt,
@@ -1880,23 +1882,29 @@ describe("runAgentHarnessAttempt", () => {
     expect(received[0]?.safeDeniedTools).toEqual(["image_generate"]);
   });
 
-  it("isolates collector runs and explicit restrictive policy layers for plugin harnesses", async () => {
+  it("isolates native capabilities restricted by effective profiles or explicit policy", async () => {
     const received: boolean[] = [];
     const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async (attempt) => {
       received.push(attempt.pluginHarnessToolPolicyRestricted === true);
       return createAttemptResult("codex");
     });
-    registerAgentHarness(
-      {
-        id: "codex",
-        label: "Codex",
-        conversationToolPolicySupport: "exact",
-        supports: (ctx) =>
-          ctx.provider === "codex" ? { supported: true, priority: 100 } : { supported: false },
-        runAttempt,
-      },
-      { ownerPluginId: "codex" },
-    );
+    const harness: AgentHarness = {
+      id: "codex",
+      label: "Codex",
+      conversationToolPolicySupport: "exact",
+      conversationToolPolicyNativeTools: [
+        "exec",
+        "process",
+        "read",
+        "write",
+        "edit",
+        "apply_patch",
+      ],
+      supports: (ctx) =>
+        ctx.provider === "codex" ? { supported: true, priority: 100 } : { supported: false },
+      runAttempt,
+    };
+    registerAgentHarness(harness, { ownerPluginId: "codex" });
 
     const cases: Array<{
       config?: OpenClawConfig;
@@ -1907,6 +1915,38 @@ describe("runAgentHarnessAttempt", () => {
     }> = [
       {},
       { config: { tools: { profile: "coding" } } as OpenClawConfig },
+      { config: { tools: { profile: "full" } } },
+      { config: { tools: { profile: "messaging" } } },
+      { config: { tools: { profile: "minimal" } } },
+      {
+        config: {
+          tools: { profile: "coding" },
+          agents: { entries: { worker: { tools: { profile: "messaging" } } } },
+        },
+        agentId: "worker",
+        sessionKey: "agent:worker:session-1",
+      },
+      {
+        config: {
+          tools: { profile: "messaging" },
+          agents: { entries: { worker: { tools: { profile: "coding" } } } },
+        },
+        agentId: "worker",
+        sessionKey: "agent:worker:session-1",
+      },
+      { config: { tools: { profile: "coding", byProvider: { codex: { profile: "messaging" } } } } },
+      {
+        config: {
+          tools: { profile: "full" },
+          agents: {
+            entries: { worker: { tools: { byProvider: { codex: { profile: "minimal" } } } } },
+          },
+        },
+        agentId: "worker",
+        sessionKey: "agent:worker:session-1",
+      },
+      { config: { tools: { profile: "messaging", alsoAllow: ["group:fs", "group:runtime"] } } },
+      { config: { tools: { profile: "minimal", alsoAllow: ["exec"] } } },
       { conversationToolPolicy: {} },
       { conversationToolPolicy: { allow: ["*"] } },
       { swarmCollector: false },
@@ -1925,18 +1965,42 @@ describe("runAgentHarnessAttempt", () => {
         conversationToolPolicy: {},
       },
     ];
+    const nativeRestrictions: boolean[] = [];
 
     for (const testCase of cases) {
-      await runAgentHarnessAttempt({
+      const params = {
         ...createAttemptParams(testCase.config),
         conversationToolPolicy: testCase.conversationToolPolicy,
         agentId: testCase.agentId,
         sessionKey: testCase.sessionKey,
         swarmCollector: testCase.swarmCollector,
-      });
+      };
+      nativeRestrictions.push(resolveAgentHarnessNativeToolPolicyRestricted(params, harness));
+      await runAgentHarnessAttempt(params);
     }
 
-    expect(received).toEqual([false, false, false, false, false, true, true, true, true, true]);
+    expect(received).toEqual([
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      false,
+      true,
+      true,
+      false,
+      true,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+    ]);
+    expect(nativeRestrictions).toEqual(received);
   });
 
   it.each([
@@ -2179,29 +2243,34 @@ describe("runAgentHarnessAttempt", () => {
 });
 
 describe("selectAgentHarness", () => {
-  it("rejects a harness replaced during its support probe", () => {
-    const replacement: AgentHarness = {
-      id: "codex",
-      label: "Replacement",
-      supports: () => ({ supported: true }),
-      runAttempt: async () => createAttemptResult("replacement"),
-    };
-    registerAgentHarness({
-      ...replacement,
-      supports: () => {
-        registerAgentHarness(replacement);
-        return { supported: true };
-      },
-    });
+  it.each(["runtime", "delivery"] as const)(
+    "rejects a harness replaced during its %s support probe",
+    (surface) => {
+      const replacement: AgentHarness = {
+        id: "codex",
+        label: "Replacement",
+        supports: () => ({ supported: true }),
+        runAttempt: async () => createAttemptResult("replacement"),
+      };
+      registerAgentHarness({
+        ...replacement,
+        supports: () => {
+          registerAgentHarness(replacement);
+          return { supported: true };
+        },
+      });
 
-    expect(() =>
-      selectAgentHarness({
-        provider: "openai",
-        modelId: "gpt-5.6-sol",
-        agentHarnessRuntimeOverride: "codex",
-      }),
-    ).toThrow("changed during owner resolution");
-  });
+      const select =
+        surface === "runtime" ? selectAgentHarness : resolveAgentHarnessDeliveryDefaults;
+      expect(() =>
+        select({
+          provider: "openai",
+          modelId: "gpt-5.6-sol",
+          agentHarnessRuntimeOverride: "codex",
+        }),
+      ).toThrow("changed during owner resolution");
+    },
+  );
 
   it("does not select Codex from a non-OpenAI model name", () => {
     registerSuccessfulCodexHarness();

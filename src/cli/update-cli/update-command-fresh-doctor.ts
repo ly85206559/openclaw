@@ -9,6 +9,7 @@ import { readConfigFileSnapshot } from "../../config/config.js";
 import { resolveStateDir } from "../../config/paths.js";
 import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
+import { hasDeferredUpdateModelRetirement } from "../../infra/update-deferred-model-retirement.js";
 import {
   consumeUpdatePostInstallDoctorResult,
   createUpdatePostInstallDoctorResultPath,
@@ -247,7 +248,7 @@ export async function completePostCorePluginUpdate(params: {
       if (!entryPath) {
         throw new Error("Updated OpenClaw entrypoint not found for post-plugin doctor");
       }
-      if (params.freshDoctorRequired) {
+      if (params.freshDoctorRequired || hasDeferredUpdateModelRetirement()) {
         await params.beforeDoctor?.();
         await runUpdateFinalizationDoctorInFreshProcess({
           ...params,
@@ -261,7 +262,11 @@ export async function completePostCorePluginUpdate(params: {
     }
   }
 
-  const configSnapshot = await withNormalConfigValidation(() => readConfigFileSnapshot());
+  // Only the target runtime may write state after a version switch: observing
+  // config here could migrate its database back to the parent's newer schema.
+  const configSnapshot = await withNormalConfigValidation(() =>
+    readConfigFileSnapshot({ observe: false }),
+  );
   if (entryPath) {
     const checkTimeoutMs = params.timeoutMs ?? POST_PLUGIN_CHECK_TIMEOUT_MS;
     // No authored file is a valid unconfigured install, not an invalid config.
