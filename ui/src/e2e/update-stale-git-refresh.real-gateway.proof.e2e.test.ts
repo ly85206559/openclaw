@@ -48,6 +48,49 @@ function gatewayPageUrl(route: string, gatewayPort: number) {
   return url.toString();
 }
 
+async function captureInitialUpdateState(page: Page) {
+  return await page.locator("openclaw-app").evaluate(async (element) => {
+    const runtime = Reflect.get(element, "runtime") as
+      | {
+          context?: {
+            gateway?: {
+              snapshot?: {
+                client?: { request(method: string, params: object): Promise<unknown> };
+                hello?: { snapshot?: { updateAvailable?: unknown; updateSchedule?: unknown } };
+                phase?: string;
+              };
+            };
+            overlays?: { snapshot?: Record<string, unknown> };
+          };
+        }
+      | undefined;
+    const gateway = runtime?.context?.gateway?.snapshot;
+    const overlays = runtime?.context?.overlays?.snapshot;
+    const directStatus = gateway?.client
+      ? await gateway.client.request("update.status", {})
+      : null;
+    return {
+      bodyText: document.body.innerText.slice(0, 4_000),
+      directStatus,
+      gateway: {
+        helloUpdateAvailable: gateway?.hello?.snapshot?.updateAvailable,
+        helloUpdateSchedule: gateway?.hello?.snapshot?.updateSchedule,
+        phase: gateway?.phase,
+      },
+      overlays: overlays
+        ? {
+            controlUiRefreshRequired: overlays.controlUiRefreshRequired,
+            updateAvailable: overlays.updateAvailable,
+            updateReconciliationPending: overlays.updateReconciliationPending,
+            updateRunning: overlays.updateRunning,
+            updateSchedule: overlays.updateSchedule,
+            updateStatusBanner: overlays.updateStatusBanner,
+          }
+        : null,
+    };
+  });
+}
+
 suite.define(() => {
   it("removes stale update surfaces after a real checkout fast-forward and status refresh", async () => {
     const expectedInitialSha = process.env.UI_PROOF_INITIAL_SHA;
@@ -128,6 +171,17 @@ suite.define(() => {
         async ({ page }) => {
           expect((await page.goto(gatewayPageUrl("chat", port)))?.status()).toBe(200);
           await confirmGatewayUrl(page);
+
+          const initialState = await captureInitialUpdateState(page);
+          await writeFile(
+            path.join(suite.artifactDir, "00-initial-update-state.json"),
+            `${JSON.stringify(initialState, null, 2)}\n`,
+            "utf8",
+          );
+          await page.screenshot({
+            animations: "disabled",
+            path: path.join(suite.artifactDir, "00-initial-update-state.png"),
+          });
 
           const inboxButton = page.locator(".sidebar-issues-button:visible");
           await inboxButton.waitFor();
