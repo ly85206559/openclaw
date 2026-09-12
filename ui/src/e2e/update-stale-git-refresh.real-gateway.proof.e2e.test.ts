@@ -213,9 +213,13 @@ suite.define(() => {
           await git("merge", "--ff-only", "@{upstream}");
           expect(await git("rev-parse", "HEAD")).toBe(expectedUpstreamSha);
 
-          expect((await page.goto(new URL("settings/appearance", suite.server.baseUrl)))?.status()).toBe(
-            200,
-          );
+          expect(
+            (
+              await page.goto(
+                new URL("settings/appearance", suite.server.baseUrl).toString(),
+              )
+            )?.status(),
+          ).toBe(200);
           await waitForControlUiRoute(page, {
             pathname: "/settings/appearance",
             routeId: "appearance",
@@ -248,7 +252,9 @@ suite.define(() => {
             path: path.join(suite.artifactDir, "02-real-gateway-current-after-refresh.png"),
           });
 
-          expect((await page.goto(new URL("chat", suite.server.baseUrl)))?.status()).toBe(200);
+          expect(
+            (await page.goto(new URL("chat", suite.server.baseUrl).toString()))?.status(),
+          ).toBe(200);
           await waitForControlUiRoute(page, { pathname: "/chat", routeId: "chat" });
           expect(await page.locator(".sidebar-issues-button:visible").count()).toBe(0);
           expect(
