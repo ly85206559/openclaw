@@ -33,9 +33,10 @@ jobs:
           git merge-base --is-ancestor "$PR_SOURCE_HEAD" HEAD
           mapfile -t changed < <(git diff --name-only "$PR_SOURCE_HEAD"...HEAD)
           printf '%s\n' "${changed[@]}"
-          test "${#changed[@]}" -eq 2
+          test "${#changed[@]}" -eq 3
           test "${changed[0]}" = ".github/workflows/proof-update-stale-git-refresh-runtime.yml"
-          test "${changed[1]}" = "ui/src/e2e/update-stale-git-refresh.real-gateway.proof.e2e.test.ts"
+          test "${changed[1]}" = "test/vitest/vitest.ui-e2e-prebuilt.config.ts"
+          test "${changed[2]}" = "ui/src/e2e/update-stale-git-refresh.real-gateway.proof.e2e.test.ts"
 
       - name: Set up exact PR source dependencies
         uses: ./.github/actions/setup-node-env
