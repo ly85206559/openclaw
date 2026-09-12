@@ -60,6 +60,7 @@ async function proveScenario(scenario) {
       requests.push({
         path: new URL(request.url ?? "/", "http://127.0.0.1").pathname,
         authorization: request.headers.authorization,
+        routeHeader: request.headers["x-stepfun-proof"],
         model: body.model,
         stream: body.stream,
       });
@@ -145,6 +146,7 @@ async function proveScenario(scenario) {
       {
         path: "/v1/chat/completions",
         authorization: "Bearer proof-placeholder",
+        routeHeader: scenario.provider,
         model: scenario.model,
         stream: true,
       },

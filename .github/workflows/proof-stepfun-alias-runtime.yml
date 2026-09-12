@@ -70,7 +70,7 @@ jobs:
             "",
             `- Exact PR head: \`${result.exactHead}\``,
             ...result.results.map((item) =>
-              `- \`${item.provider}\`: models status/list accepted the alias; local agent reached \`${item.resolvedTransport.path}\` with model \`${item.resolvedTransport.model}\` and returned \`${item.responseObserved}\`.`),
+              `- \`${item.provider}\`: models status/list accepted the alias; local agent preserved the saved route header \`${item.resolvedTransport.routeHeader}\`, reached \`${item.resolvedTransport.path}\` with model \`${item.resolvedTransport.model}\`, and returned \`${item.responseObserved}\`.`),
             "- Secretless: loopback provider only; no StepFun API call or repository secret.",
           ];
           fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${lines.join("\n")}\n`);
