@@ -669,7 +669,7 @@ function chatHtml(opts: ChatFixtureOptions = {}, mobileNavLayout = false) {
                       <footer class="agent-chat__input chat-session-rail__composer" data-composer-layout="multiline">
                         <div class="agent-chat__composer-input-row">
                           <label class="agent-chat__composer-combobox chat-session-rail__prompt">
-                            <input class="chat-session-rail__input" type="text" placeholder="What should I know?" />
+                            <textarea class="chat-session-rail__input" rows="1" placeholder="What should I know?"></textarea>
                           </label>
                         </div>
                         <div class="agent-chat__composer-footer">
@@ -1145,75 +1145,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     }
   });
 
-  it("keeps the native gateway picker as compact as sidebar menus", async () => {
-    const page = await openBrowserPage(800, 600);
-    try {
-      const splitViewCss = readStyleSheet("ui/src/styles/chat/split-view.css");
-      await page.setContent(
-        `<!doctype html><html><head><style>${readUiCss()}\n${splitViewCss}</style></head><body>
-          <wa-dropdown class="chat-pane__gateway-menu">
-            <template shadowrootmode="open"><div part="menu">Gateways<slot></slot></div></template>
-            <wa-dropdown-item class="chat-pane__gateway-menu-item">Local Gateway</wa-dropdown-item>
-          </wa-dropdown>
-        </body></html>`,
-      );
-
-      const readGatewayMenuStyles = () =>
-        page.evaluate(() => {
-          const dropdown = document.querySelector<HTMLElement>(".chat-pane__gateway-menu")!;
-          const menu = dropdown.shadowRoot!.querySelector<HTMLElement>('[part="menu"]')!;
-          const item = dropdown.querySelector<HTMLElement>(".chat-pane__gateway-menu-item")!;
-          const menuStyle = getComputedStyle(menu);
-          const itemStyle = getComputedStyle(item);
-          return {
-            menu: {
-              borderRadius: menuStyle.borderRadius,
-              padding: menuStyle.padding,
-            },
-            item: {
-              borderRadius: itemStyle.borderRadius,
-              fontSize: itemStyle.fontSize,
-              minHeight: itemStyle.minHeight,
-              padding: itemStyle.padding,
-            },
-          };
-        });
-
-      const styles = await readGatewayMenuStyles();
-      const menuRadius = 10 * (await readCornerScale(page));
-
-      expect(styles).toEqual({
-        menu: { borderRadius: `${menuRadius}px`, padding: "4px" },
-        item: {
-          // Item radius plus the 4px menu padding equals the panel radius, so
-          // the item edge stays optically parallel to the menu edge.
-          borderRadius: `${menuRadius - 4}px`,
-          fontSize: "13px",
-          minHeight: "28px",
-          padding: "0px 8px",
-        },
-      });
-
-      const session = await page.context().newCDPSession(page);
-      try {
-        await session.send("Emulation.setTouchEmulationEnabled", {
-          enabled: true,
-          maxTouchPoints: 1,
-        });
-        await session.send("Emulation.setEmulatedMedia", {
-          media: "screen",
-          features: [{ name: "pointer", value: "coarse" }],
-        });
-        expect(await page.evaluate(() => matchMedia("(pointer: coarse)").matches)).toBe(true);
-        expect((await readGatewayMenuStyles()).item.minHeight).toBe("44px");
-      } finally {
-        await session.detach();
-      }
-    } finally {
-      await closeBrowserPage(page);
-    }
-  });
-
   it("insets the collapsed session rail from the pane header edge", async () => {
     const page = await openBrowserPage(922, 282);
     try {
@@ -1319,12 +1250,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
               <wa-dropdown class="chat-pane__branches-menu">
                 <button class="btn btn--ghost btn--icon chat-icon-btn chat-pane__branches-trigger" type="button">R</button>
               </wa-dropdown>
-              <wa-dropdown class="chat-pane__gateway-menu">
-                <button class="chat-pane__gateway-chip" type="button">
-                  <span class="chat-pane__gateway-health"></span>
-                  <span class="chat-pane__gateway-name">A long native gateway name</span>
-                </button>
-              </wa-dropdown>
               <div class="chat-pane__actions">
                 <button class="btn btn--ghost btn--icon chat-icon-btn chat-side-panel-toggle" type="button">L</button>
                 <button class="btn btn--ghost btn--icon chat-icon-btn chat-pane__split-down" type="button">V</button>
@@ -1342,7 +1267,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         ".chat-side-panel-toggle",
         ".chat-pane__sharing-menu",
         ".chat-pane__branches-menu",
-        ".chat-pane__gateway-menu",
         ".chat-pane__nav-toggle",
         ".chat-pane__palette-open",
         ".chat-pane__split-down",
@@ -1721,7 +1645,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     }
   });
 
-  it("insets only the bundled logo inside the unchanged avatar box", async () => {
+  it("insets only the bundled logo and keeps the user edge neutral", async () => {
     const page = await openBrowserPage(430, 720);
     try {
       await page.setContent(`<!doctype html><html><head><style>${readUiCss()}</style></head><body>
@@ -1771,6 +1695,38 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           borderWidth: "1px",
         },
       ]);
+
+      for (const theme of ["dark", "light"]) {
+        const edge = await page.evaluate((mode) => {
+          document.documentElement.dataset.themeMode = mode;
+          const probe = document.createElement("span");
+          probe.style.border = "1px solid var(--border)";
+          document.body.append(probe);
+          const neutralColor = getComputedStyle(probe).borderTopColor;
+          probe.style.borderColor = "color-mix(in srgb, var(--accent) 20%, transparent)";
+          const accentColor = getComputedStyle(probe).borderTopColor;
+          const avatar = document.querySelector("img.chat-avatar.user");
+          if (!avatar) {
+            throw new Error("Expected user avatar fixture");
+          }
+          const avatarStyle = getComputedStyle(avatar);
+          const result = {
+            accentColor,
+            borderColor: avatarStyle.borderTopColor,
+            borderStyle: avatarStyle.borderTopStyle,
+            borderWidth: avatarStyle.borderTopWidth,
+            neutralColor,
+            outlineStyle: avatarStyle.outlineStyle,
+          };
+          probe.remove();
+          return result;
+        }, theme);
+        expect(edge.borderColor).toBe(edge.neutralColor);
+        expect(edge.borderColor).not.toBe(edge.accentColor);
+        expect(edge.borderStyle).toBe("solid");
+        expect(edge.borderWidth).toBe("1px");
+        expect(edge.outlineStyle).toBe("none");
+      }
     } finally {
       await closeBrowserPage(page);
     }
@@ -4306,27 +4262,49 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         await page.locator(".agent-chat__input").evaluate((node) => {
           node.scrollTop = 0;
         });
-        const input = await getBoundingBox(
-          page,
-          ".agent-chat__composer-shell > .agent-chat__input",
+        // Ancestor entrance animations move these boxes together; compare one frame.
+        const { input, preview, attachment, remove, topHits, textStart } = await page.evaluate(
+          () => {
+            const elementFor = (selector: string) => {
+              const [element, ...others] = document.querySelectorAll(selector);
+              if (!element || others.length > 0) {
+                throw new Error(`Expected one layout element: ${selector}`);
+              }
+              return element;
+            };
+            const rectFor = (selector: string) => {
+              const {
+                x,
+                y,
+                width: rectWidth,
+                height: rectHeight,
+              } = elementFor(selector).getBoundingClientRect();
+              return { x, y, width: rectWidth, height: rectHeight };
+            };
+            const removeNode = elementFor(".chat-attachment-remove");
+            const removeRect = rectFor(".chat-attachment-remove");
+            const textarea = elementFor(".agent-chat__composer-combobox > textarea");
+            return {
+              input: rectFor(".agent-chat__composer-shell > .agent-chat__input"),
+              preview: rectFor(".chat-attachments-preview"),
+              attachment: rectFor(".chat-attachment-thumb"),
+              remove: removeRect,
+              topHits: [1, 3].map(
+                (offset) =>
+                  document.elementFromPoint(
+                    removeRect.x + removeRect.width / 2,
+                    removeRect.y + offset,
+                  ) === removeNode,
+              ),
+              textStart:
+                textarea.getBoundingClientRect().x +
+                Number.parseFloat(getComputedStyle(textarea).paddingLeft),
+            };
+          },
         );
-        const preview = await getBoundingBox(page, ".chat-attachments-preview");
-        const attachment = await getBoundingBox(page, ".chat-attachment-thumb");
-        const remove = await getBoundingBox(page, ".chat-attachment-remove");
-        const topHits = await page.locator(".chat-attachment-remove").evaluate((node) => {
-          const bounds = node.getBoundingClientRect();
-          return [1, 3].map(
-            (offset) =>
-              document.elementFromPoint(bounds.x + bounds.width / 2, bounds.y + offset) === node,
-          );
-        });
-        const textStart = await page
-          .locator(".agent-chat__composer-combobox > textarea")
-          .evaluate(
-            (node) =>
-              node.getBoundingClientRect().x +
-              Number.parseFloat(getComputedStyle(node).paddingLeft),
-          );
+        for (const rect of [input, preview, attachment, remove]) {
+          expectFiniteRect(rect);
+        }
 
         expect(attachment.x - input.x).toBeGreaterThanOrEqual(9.5);
         expect(Math.abs(attachment.x - textStart)).toBeLessThanOrEqual(0.5);
@@ -5551,7 +5529,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           <form class="agent-chat__input chat-session-rail__composer">
             <div class="agent-chat__composer-input-row">
               <label class="agent-chat__composer-combobox chat-session-rail__prompt">
-                <input class="chat-session-rail__input" type="text" placeholder="Ask a question" />
+                <textarea class="chat-session-rail__input" rows="1" placeholder="Ask a question"></textarea>
               </label>
             </div>
             <div class="agent-chat__composer-footer">

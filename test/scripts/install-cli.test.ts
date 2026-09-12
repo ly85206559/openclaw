@@ -20,7 +20,11 @@ import { isSupportedOpenClawNodeVersion } from "../../node-version.mjs";
 import { requireNodeTool } from "../helpers/node-toolchain.js";
 import { NODE_RELEASE_VERSION_CASES } from "../helpers/node-version-cases.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { createInstallGitCommitFixtureScript } from "./install-git-fixtures.js";
+import {
+  createInstallGitBranchFallbackFixtureScript,
+  createInstallGitCommitFixtureScript,
+  createInstallGitTagPreferenceFixtureScript,
+} from "./install-git-fixtures.js";
 import {
   writeNpmBeforePolicyFixture,
   writeNpmFreshnessConflictFixture,
@@ -66,6 +70,35 @@ function writeInstalledOpenClawEntry(nodeDir: string) {
 
 describe("install-cli.sh", () => {
   const script = readFileSync(SCRIPT_PATH, "utf8");
+
+  it("installs only Node into the requested prefix without entering package or service setup", () => {
+    const result = runInstallCliShell(`
+      source ${SCRIPT_PATH}
+      is_musl_linux() { return 1; }
+      os_detect() { echo linux; }
+      arch_detect() { echo x64; }
+      install_node() { printf 'node:%s:%s:%s\\n' "$1" "$2" "$PREFIX"; }
+      preflight_fresh_git_disk_space() { exit 91; }
+      install_openclaw_from_git() { exit 92; }
+      install_openclaw() { exit 93; }
+      refresh_gateway_service_if_loaded() { exit 94; }
+      main --node-only --prefix '/tmp/private node' --git --onboard
+    `);
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout.trim()).toBe("node:linux:x64:/tmp/private node");
+  });
+
+  it("refuses musl Node-only recovery before an installer can invoke system package changes", () => {
+    const result = runInstallCliShell(`
+      source ${SCRIPT_PATH}
+      is_musl_linux() { return 0; }
+      install_node() { echo unexpected-node-install; }
+      main --node-only
+    `);
+    expect(result.status).toBe(1);
+    expect(result.stdout + result.stderr).toContain("unavailable on musl Linux");
+    expect(result.stdout).not.toContain("unexpected-node-install");
+  });
 
   it("re-execs a streamed installer on Darwin Bash 5.3+ without leaving a temp file", (context) => {
     const bash = findDarwinReexecBash();
@@ -679,38 +712,58 @@ describe("install-cli.sh", () => {
     expect(wrapperIndex).toBeGreaterThan(compatibilityIndex);
   });
 
-  it("does not restart a gateway again after force-install activates it", () => {
-    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-cli-gateway-refresh-"));
-    const prefix = join(tmp, "prefix");
-    const bin = join(prefix, "bin");
-    const commandLog = join(tmp, "commands.log");
-    const openclaw = join(bin, "openclaw");
-    mkdirSync(bin, { recursive: true });
-    writeFileSync(openclaw, '#!/bin/bash\nprintf "%s\\n" "$*" >> "$COMMAND_LOG"\n');
-    chmodSync(openclaw, 0o755);
-
-    try {
-      const result = runInstallCliShell(
+  it.each(["none", "unsupported", "missing"])(
+    "reports a successful runtime replacement (%s) without restarting again",
+    (replaced) => {
+      const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-cli-gateway-refresh-"));
+      const prefix = join(tmp, "prefix");
+      const bin = join(prefix, "bin");
+      const commandLog = join(tmp, "commands.log");
+      const openclaw = join(bin, "openclaw");
+      mkdirSync(bin, { recursive: true });
+      writeFileSync(
+        openclaw,
         [
-          "set -euo pipefail",
-          `cd ${JSON.stringify(process.cwd())}`,
-          `source ${JSON.stringify(SCRIPT_PATH)}`,
-          `PREFIX=${JSON.stringify(prefix)}`,
-          "is_gateway_daemon_loaded() { return 0; }",
-          "refresh_gateway_service_if_loaded",
+          "#!/bin/bash",
+          'printf "%s\\n" "$*" >> "$COMMAND_LOG"',
+          'if [[ "$*" == "gateway install --force" ]]; then',
+          '  printf "%s\\n" "incidental-output-canary"',
+          '  if [[ "$REPLACED" == unsupported ]]; then printf "%s\\n" "Replacing unsupported Gateway service Node 22.23.1 (/old/node) with /new/node; refreshing the install."; fi',
+          '  if [[ "$REPLACED" == missing ]]; then printf "%s\\n" "Replacing missing Gateway service Node (/old/node) with /new/node; refreshing the install."; fi',
+          "fi",
         ].join("\n"),
-        { COMMAND_LOG: commandLog },
       );
+      chmodSync(openclaw, 0o755);
 
-      expect(result.status).toBe(0);
-      expect(readFileSync(commandLog, "utf8").trim().split("\n")).toEqual([
-        "gateway install --force",
-        "gateway status --probe --json",
-      ]);
-    } finally {
-      rmSync(tmp, { force: true, recursive: true });
-    }
-  });
+      try {
+        const result = runInstallCliShell(
+          [
+            "set -euo pipefail",
+            `cd ${JSON.stringify(process.cwd())}`,
+            `source ${JSON.stringify(SCRIPT_PATH)}`,
+            `PREFIX=${JSON.stringify(prefix)}`,
+            "is_gateway_daemon_loaded() { return 0; }",
+            "refresh_gateway_service_if_loaded",
+          ].join("\n"),
+          { COMMAND_LOG: commandLog, REPLACED: replaced },
+        );
+
+        expect(result.status).toBe(0);
+        expect(result.stderr.includes("Gateway service Node runtime replaced.")).toBe(
+          replaced !== "none",
+        );
+        expect(result.stdout + result.stderr).not.toContain("incidental-output-canary");
+        expect(result.stdout + result.stderr).not.toContain("/old/node");
+        expect(result.stdout + result.stderr).not.toContain("/new/node");
+        expect(readFileSync(commandLog, "utf8").trim().split("\n")).toEqual([
+          "gateway install --force",
+          "gateway status --probe --json",
+        ]);
+      } finally {
+        rmSync(tmp, { force: true, recursive: true });
+      }
+    },
+  );
 
   it.each([
     { error: "SERVICE_DEFINITION_SEALED: protected", args: "", stream: "stderr" },
@@ -731,6 +784,7 @@ describe("install-cli.sh", () => {
         'printf "%s\\n" "$*" >> "$COMMAND_LOG"',
         'if [[ "$1" == "--version" ]]; then printf "OpenClaw 2026.8.25\\n"; exit 0; fi',
         'if [[ "$*" == "gateway install --force" ]]; then',
+        '  printf "%s\\n" "Replacing unsupported Gateway service Node 22.23.1 (/old/node) with /new/node; refreshing the install."',
         '  if [[ "$SERVICE_STREAM" == stdout ]]; then printf "%s\\n" "$SERVICE_ERROR"; else printf "%s\\n" "$SERVICE_ERROR" >&2; fi',
         '  printf "%s\\n" "$SECRET_CANARY" >&2; exit 1',
         "fi",
@@ -760,6 +814,7 @@ describe("install-cli.sh", () => {
     expect(result.status).toBe(0);
     expect(result.stderr).toContain("+ main");
     expect(result.stdout + result.stderr).not.toContain(secretCanary);
+    expect(result.stdout + result.stderr).not.toContain("Gateway service Node runtime replaced");
     if (denied) {
       expect(result.stderr).toContain("gateway service definition left unchanged");
       expect(result.stderr).toContain(
@@ -1018,38 +1073,7 @@ describe("install-cli.sh", () => {
   });
 
   it("prefers a release tag over a same-named branch", () => {
-    const result = runInstallCliShell(`
-      set -euo pipefail
-      source "${SCRIPT_PATH}"
-      tmp="$(mktemp -d)"
-      trap 'rm -rf "$tmp"' EXIT
-      remote="$tmp/remote.git"
-      seed="$tmp/seed"
-      repo="$tmp/repo"
-      ref=v2026.5.12
-      git init --bare -q "$remote"
-      git init -q --initial-branch=main "$seed"
-      git -C "$seed" config user.email test@example.invalid
-      git -C "$seed" config user.name test
-      printf 'tag\n' > "$seed/state.txt"
-      git -C "$seed" add state.txt
-      git -C "$seed" commit -qm tag
-      tag_head="$(git -C "$seed" rev-parse HEAD)"
-      git -C "$seed" remote add origin "$remote"
-      git -C "$seed" push -q -u origin main
-      git -C "$seed" tag "$ref"
-      git -C "$seed" push -q origin "refs/tags/$ref"
-      git -C "$seed" checkout -qb "$ref"
-      printf 'branch\n' > "$seed/state.txt"
-      git -C "$seed" commit -qam branch
-      branch_head="$(git -C "$seed" rev-parse HEAD)"
-      git -C "$seed" push -q origin "refs/heads/$ref"
-      git clone -q "$remote" "$repo"
-      checkout_git_openclaw_ref "$repo" "$ref"
-      selected="$(git -C "$repo" rev-parse HEAD)"
-      printf 'selected=%s tag=%s branch=%s kind=%s\n' "$selected" "$tag_head" "$branch_head" "$GIT_REF_KIND"
-      [[ "$selected" == "$tag_head" && "$selected" != "$branch_head" && "$GIT_REF_KIND" == "immutable" ]]
-    `);
+    const result = runInstallCliShell(createInstallGitTagPreferenceFixtureScript(SCRIPT_PATH));
 
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("kind=immutable");
@@ -1057,35 +1081,7 @@ describe("install-cli.sh", () => {
   });
 
   it("falls back to a v-prefixed branch when no matching release tag exists", () => {
-    const result = runInstallCliShell(`
-      set -euo pipefail
-      source "${SCRIPT_PATH}"
-      tmp="$(mktemp -d)"
-      trap 'rm -rf "$tmp"' EXIT
-      remote="$tmp/remote.git"
-      seed="$tmp/seed"
-      repo="$tmp/repo"
-      ref=v2-hotfix
-      git init --bare -q "$remote"
-      git init -q --initial-branch=main "$seed"
-      git -C "$seed" config user.email test@example.invalid
-      git -C "$seed" config user.name test
-      printf 'base\\n' > "$seed/state.txt"
-      git -C "$seed" add state.txt
-      git -C "$seed" commit -qm base
-      git -C "$seed" remote add origin "$remote"
-      git -C "$seed" push -q -u origin main
-      git -C "$seed" checkout -qb "$ref"
-      printf 'branch\\n' > "$seed/state.txt"
-      git -C "$seed" commit -qam branch
-      branch_head="$(git -C "$seed" rev-parse HEAD)"
-      git -C "$seed" push -q origin "refs/heads/$ref"
-      git clone -q "$remote" "$repo"
-      checkout_git_openclaw_ref "$repo" "$ref"
-      selected="$(git -C "$repo" rev-parse HEAD)"
-      printf 'selected=%s branch=%s kind=%s\\n' "$selected" "$branch_head" "$GIT_REF_KIND"
-      [[ "$selected" == "$branch_head" && "$GIT_REF_KIND" == "moving" ]]
-    `);
+    const result = runInstallCliShell(createInstallGitBranchFallbackFixtureScript(SCRIPT_PATH));
 
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("kind=moving");

@@ -186,10 +186,6 @@ export async function sendMessageDiscord(
     configured: accountInfo.config.suppressEmbeds,
     override: opts.suppressEmbeds,
   });
-  const textLimit =
-    typeof opts.textLimit === "number" && Number.isFinite(opts.textLimit)
-      ? Math.max(1, Math.min(Math.floor(opts.textLimit), 2000))
-      : undefined;
   const mediaMaxBytes = Math.floor(
     (typeof accountInfo.config.mediaMaxMb === "number"
       ? accountInfo.config.mediaMaxMb
@@ -197,10 +193,11 @@ export async function sendMessageDiscord(
       1024 *
       1024,
   );
-  const { renderedText, textWithMentions } = prepareDiscordOutboundText(text ?? "", {
+  const { renderedText, textWithMentions, textLimit } = prepareDiscordOutboundText(text ?? "", {
     cfg,
     account: accountInfo,
     tableMode: opts.tableMode,
+    textLimit: opts.textLimit,
   });
   const recipient = await parseAndResolveChannelRecipient(to, cfg, accountInfo.accountId);
   const { channelId } = await resolveChannelId(rest, recipient, request);

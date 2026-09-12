@@ -6,10 +6,7 @@ import {
   listChannelPlugins,
 } from "../channels/plugins/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  getActivePluginHttpRouteRegistry,
-  getActivePluginHttpRouteRegistryVersion,
-} from "../plugins/runtime.js";
+import { getActivePluginRegistry, getActivePluginRegistryVersion } from "../plugins/runtime.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/account-id.js";
 import { isTranscriptTitleOnlyConfigChange } from "../transcripts/config-reload.js";
 import { isPlainObject } from "../utils.js";
@@ -281,7 +278,7 @@ const DEFAULT_RELOAD_POLICIES: ReloadPolicy[] = [
 
 let cachedCatalog:
   | {
-      registry: ReturnType<typeof getActivePluginHttpRouteRegistry>;
+      registry: ReturnType<typeof getActivePluginRegistry>;
       version: number;
       rules: ReloadRule[];
       refinementPrefixes: string[];
@@ -289,8 +286,8 @@ let cachedCatalog:
   | undefined;
 
 function getReloadPolicyCatalog() {
-  const registry = getActivePluginHttpRouteRegistry();
-  const version = getActivePluginHttpRouteRegistryVersion();
+  const registry = getActivePluginRegistry();
+  const version = getActivePluginRegistryVersion();
   // Only process-root registry publication changes plugin/channel policy.
   if (cachedCatalog?.registry === registry && cachedCatalog.version === version) {
     return cachedCatalog;
@@ -452,7 +449,7 @@ function extractAccountIdFromPath(channel: ChannelId, path: string): string | nu
   return id && id !== DEFAULT_ACCOUNT_ID ? id : null;
 }
 
-function isResolvableChannelAccount(params: {
+function isInspectableChannelAccount(params: {
   plugin: ChannelPlugin;
   accountId: string;
   config: OpenClawConfig;
@@ -461,7 +458,9 @@ function isResolvableChannelAccount(params: {
     if (!params.plugin.config.listAccountIds(params.config).includes(params.accountId)) {
       return false;
     }
-    params.plugin.config.resolveAccount(params.config, params.accountId);
+    const inspectAccount =
+      params.plugin.config.inspectAccount ?? params.plugin.config.resolveAccount;
+    inspectAccount(params.config, params.accountId);
     return true;
   } catch {
     return false;
@@ -545,7 +544,7 @@ export function buildGatewayReloadPlan(
       if (
         accountId === null ||
         (options.candidateConfig &&
-          !isResolvableChannelAccount({ plugin, accountId, config: options.candidateConfig }))
+          !isInspectableChannelAccount({ plugin, accountId, config: options.candidateConfig }))
       ) {
         plan.restartChannels.add(plugin.id);
         continue;

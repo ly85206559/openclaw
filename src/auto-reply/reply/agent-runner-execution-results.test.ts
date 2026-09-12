@@ -8,6 +8,7 @@ import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
 import type { GetReplyOptions } from "../types.js";
 import {
+  createAgentTurnExecutionDefaults,
   setupAgentRunnerExecutionTestState,
   getExecuteAgentTurnForTest,
   createMockTypingSignaler,
@@ -18,6 +19,7 @@ import {
   requireMockCall,
   expectMockCallArgFields,
   createMinimalRunAgentTurnParams,
+  createRunAgentTurnParams,
   NON_DIRECT_FAILURE_SURFACE_CASES,
   createNonDirectFailureSessionCtx,
 } from "./agent-runner-execution.test-support.js";
@@ -86,18 +88,8 @@ describe("executeAgentTurn: result and tool delivery", () => {
         onToolResult,
       } satisfies GetReplyOptions,
       typingSignals,
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
+      ...createAgentTurnExecutionDefaults(),
       pendingToolTasks,
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
     });
 
     await Promise.all(pendingToolTasks);
@@ -161,28 +153,7 @@ describe("executeAgentTurn: result and tool delivery", () => {
     followupRun.run.provider = "openai";
     followupRun.run.model = "gpt-5.5";
 
-    const result = await executeAgentTurn({
-      commandBody: "hello",
-      followupRun,
-      sessionCtx: {
-        Provider: "whatsapp",
-        MessageSid: "msg",
-      } as unknown as TemplateContext,
-      opts: {},
-      typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
-    });
+    const result = await executeAgentTurn(createRunAgentTurnParams(followupRun));
 
     expect(state.runWithModelFallbackMock).toHaveBeenCalledTimes(1);
     expect(result).toEqual({
@@ -482,18 +453,8 @@ describe("executeAgentTurn: result and tool delivery", () => {
         onToolResult,
       } satisfies GetReplyOptions,
       typingSignals,
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
+      ...createAgentTurnExecutionDefaults(),
       pendingToolTasks,
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
     });
 
     await Promise.all(pendingToolTasks);
@@ -528,18 +489,8 @@ describe("executeAgentTurn: result and tool delivery", () => {
       } as unknown as TemplateContext,
       opts: { onToolResult } satisfies GetReplyOptions,
       typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
+      ...createAgentTurnExecutionDefaults(),
       pendingToolTasks,
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
     });
 
     await Promise.all(pendingToolTasks);
@@ -620,18 +571,8 @@ describe("executeAgentTurn: result and tool delivery", () => {
       } as unknown as TemplateContext,
       opts: { onToolResult } satisfies GetReplyOptions,
       typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
+      ...createAgentTurnExecutionDefaults(),
       pendingToolTasks,
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
     });
 
     await Promise.all(pendingToolTasks);

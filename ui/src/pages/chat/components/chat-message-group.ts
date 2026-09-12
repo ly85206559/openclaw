@@ -17,7 +17,7 @@ import {
   resolveToolApprovalReviewOutcome,
 } from "../../../lib/chat/tool-approval-reviews.ts";
 import { summarizeToolGroup } from "../../../lib/chat/tool-call-grouping.ts";
-import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
+import { extractToolCardsCached, isToolCardError } from "../../../lib/chat/tool-cards.ts";
 import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
 import { resolveIdentityHue } from "../../../lib/identity-avatar.ts";
 import { renderChatAvatar, renderForwardedAvatar } from "../chat-avatar.ts";
@@ -34,6 +34,7 @@ import { renderForwardedAttribution } from "./chat-forwarded-attribution.ts";
 import { renderGroupedMessage } from "./chat-message-bubble.ts";
 import { renderRewindButton } from "./chat-message-confirmation.ts";
 import {
+  FULL_MESSAGE_RETRY_REVISION_LIMIT,
   renderMessageActionButtons,
   renderReplyButton,
   prepareChatMessageRender,
@@ -56,6 +57,7 @@ import {
   shouldToggleSelectableDisclosure,
   syncToolDisclosureOverflow,
 } from "./chat-tool-cards.ts";
+import { renderToolFailures } from "./chat-tool-failure.ts";
 import { shouldAnimateUserTurnEntry } from "./chat-user-turn-entry.ts";
 import { renderTurnRecapRow } from "./chat-working-indicator.ts";
 
@@ -108,10 +110,6 @@ type RenderMessageGroupOptions = Omit<
     frameActionOwner?: MessageGroup["messages"][number] | null;
     latestAssistant?: boolean;
   };
-
-// Each automatic load attempt costs 2 revisions (loading, then error), so
-// this bounds auto-retries to 3 before the manual retry affordance takes over.
-const FULL_MESSAGE_RETRY_REVISION_LIMIT = 6;
 
 function prepareGroupMessage(
   group: MessageGroup,
@@ -212,7 +210,7 @@ export function renderActivityGroup(
     : undefined;
   const groupSummaryLabel = runningCard
     ? `${resolveToolRowText(runningCard, opts.runActive)}…`
-    : summarizeToolGroup(cards.map((card) => ({ name: card.name, args: card.args })));
+    : summarizeToolGroup(cards.map((card) => ({ ...card, isError: isToolCardError(card) })));
   const activityDisclosureId = `activity:${firstGroup.key}`;
   const activityBodyId = `activity-body-${fnv1aUtf16(firstGroup.key).toString(16)}`;
   const activityExpanded = opts.isToolMessageExpanded?.(activityDisclosureId) ?? false;
@@ -268,6 +266,7 @@ export function renderActivityGroup(
         }
         <span class="chat-tool-row__chevron" aria-hidden="true">${icons.chevronRight}</span>
       </button>
+      ${activityExpanded ? nothing : renderToolFailures(cards)}
       <div class="chat-activity-group__body" id=${activityBodyId} ?hidden=${!activityExpanded}>
         ${
           activityExpanded
@@ -432,6 +431,25 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
     normalizedRole === "assistant" ? formatSenderLabel(group.replyToSender) : null;
   const replyToTitle = replyToLabel ? t("chat.messages.replyingTo", { name: replyToLabel }) : null;
 
+  const inlineUserAvatar =
+    normalizedRole === "user" &&
+    avatarPlacement === "gutter" &&
+    Boolean(preparedMessages[lastMessageIndex]?.source.displayMarkdown);
+  const avatar =
+    normalizedRole !== "tool" &&
+    avatarPlacement === "gutter" &&
+    (isForwarded || normalizedRole !== "assistant" || opts.showAssistantAvatar !== false)
+      ? isForwarded
+        ? renderForwardedAvatar(group.senderSession?.agentId, opts)
+        : renderChatAvatar(
+            group.role,
+            { name: assistantName, avatar: opts.assistantAvatar ?? null },
+            { name: opts.userName ?? null, avatar: opts.userAvatar ?? null },
+            opts.resourceBasePath,
+            group.sender,
+          )
+      : nothing;
+
   return html`
     <div
       class="chat-group ${roleClass} chat-group--with-footer${
@@ -442,21 +460,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
       style=${senderHue === null ? nothing : `--chat-sender-hue: ${senderHue}`}
       data-chat-row-key=${group.key}
     >
-      ${
-        normalizedRole !== "tool" &&
-        avatarPlacement === "gutter" &&
-        (isForwarded || normalizedRole !== "assistant" || opts.showAssistantAvatar !== false)
-          ? isForwarded
-            ? renderForwardedAvatar(group.senderSession?.agentId, opts)
-            : renderChatAvatar(
-                group.role,
-                { name: assistantName, avatar: opts.assistantAvatar ?? null },
-                { name: opts.userName ?? null, avatar: opts.userAvatar ?? null },
-                opts.resourceBasePath,
-                group.sender,
-              )
-          : nothing
-      }
+      ${inlineUserAvatar ? nothing : avatar}
       <div class="chat-group-messages">
         ${isForwarded ? renderForwardedAttribution(group, opts) : nothing}
         ${
@@ -480,7 +484,15 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
           preparedMessages.map((prepared, index) => {
             const { item, actions: actionDetails } = prepared;
             return html`
-              ${renderPreparedGroupMessage(group, index, opts, prepared)}
+              ${renderPreparedGroupMessage(
+                group,
+                index,
+                {
+                  ...opts,
+                  avatar: inlineUserAvatar && index === lastMessageIndex ? avatar : undefined,
+                },
+                prepared,
+              )}
               ${
                 actionDetails && index < lastMessageIndex && !ownsRunFrame
                   ? html`
