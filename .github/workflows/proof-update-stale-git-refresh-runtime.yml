@@ -1,0 +1,121 @@
+name: Stale Git update real Gateway UI proof
+
+on:
+  push:
+    branches:
+      - proof/update-stale-git-refresh-runtime-20260912
+
+permissions:
+  contents: read
+
+concurrency:
+  group: stale-git-update-real-gateway-ui-proof
+  cancel-in-progress: true
+
+jobs:
+  proof:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      PR_SOURCE_HEAD: 9a895212cb4517e1d1243f01bd7ff84893aa2445
+      RESULTS_DIR: .artifacts/control-ui-e2e/stale-git-update-real-gateway
+    steps:
+      - name: Checkout immutable proof branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify exact-head lineage and proof-only delta
+        shell: bash
+        run: |
+          set -euo pipefail
+          git merge-base --is-ancestor "$PR_SOURCE_HEAD" HEAD
+          mapfile -t changed < <(git diff --name-only "$PR_SOURCE_HEAD"...HEAD)
+          printf '%s\n' "${changed[@]}"
+          test "${#changed[@]}" -eq 2
+          test "${changed[0]}" = ".github/workflows/proof-update-stale-git-refresh-runtime.yml"
+          test "${changed[1]}" = "ui/src/e2e/update-stale-git-refresh.real-gateway.proof.e2e.test.ts"
+
+      - name: Set up exact PR source dependencies
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: 24.x
+          install-bun: "false"
+          install-deps: "true"
+          frozen-lockfile: "true"
+          cache-mode: restore
+          dependency-cache: "true"
+
+      - name: Install Playwright Chromium
+        run: pnpm --dir ui exec playwright install --with-deps chromium
+
+      - name: Build runtime and Control UI artifacts
+        env:
+          OPENCLAW_BUILD_PRIVATE_QA: "1"
+        run: pnpm build:ci-artifacts
+
+      - name: Prepare one-commit-ahead local upstream
+        shell: bash
+        run: |
+          set -euo pipefail
+          initial_sha="$(git rev-parse HEAD)"
+          proof_remote="$RUNNER_TEMP/openclaw-update-proof.git"
+          git init --bare "$proof_remote"
+          tree="$(git rev-parse HEAD^{tree})"
+          upstream_sha="$(git commit-tree "$tree" -p "$initial_sha" -m 'proof: upstream checkout advanced')"
+          git --git-dir="$proof_remote" update-ref refs/heads/main "$upstream_sha"
+          git remote add proof-upstream "$proof_remote"
+          git fetch proof-upstream main
+          branch="$(git branch --show-current)"
+          test -n "$branch"
+          git branch --set-upstream-to=proof-upstream/main "$branch"
+          test "$(git rev-list --count HEAD..@{upstream})" -eq 1
+          {
+            echo "UI_PROOF_INITIAL_SHA=$initial_sha"
+            echo "UI_PROOF_UPSTREAM_SHA=$upstream_sha"
+          } >> "$GITHUB_ENV"
+
+      - name: Run real Gateway checkout refresh and browser proof
+        env:
+          OPENCLAW_CAPTURE_UI_PROOF: "1"
+          OPENCLAW_UI_E2E_ARTIFACT_DIR: ${{ env.RESULTS_DIR }}
+        run: |
+          node scripts/run-vitest.mjs run \
+            --config test/vitest/vitest.ui-e2e-prebuilt.config.ts \
+            --configLoader runner \
+            ui/src/e2e/update-stale-git-refresh.real-gateway.proof.e2e.test.ts
+
+      - name: Publish summary
+        if: always()
+        shell: bash
+        run: |
+          result_file="$(find "$RESULTS_DIR" -type f -name result.json -print -quit 2>/dev/null || true)"
+          if [[ -z "$result_file" ]]; then
+            echo "Proof result was not produced." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          export RESULT_FILE="$result_file"
+          node --input-type=module <<'NODE'
+          import fs from "node:fs";
+          const result = JSON.parse(fs.readFileSync(process.env.RESULT_FILE, "utf8"));
+          const lines = [
+            "## Stale Git update real-Gateway UI proof",
+            "",
+            `- Exact PR head: \`${process.env.PR_SOURCE_HEAD}\``,
+            `- Real checkout: \`${result.checkout.beforeFastForward}\` was 1 commit behind, then fast-forwarded to \`${result.checkout.afterFastForward}\`.`,
+            `- Real Gateway refresh: install=\`${result.gateway.installAfterRefresh.git.status}\`; the original target remained cached at \`${result.gateway.retainedStaleTarget.commitsBehind}\` commit behind.`,
+            `- Browser result: \`${result.ui.afterRefresh.updateStatus}\`; stale text=${result.ui.afterRefresh.commitsBehindTextCount}, update card=${result.ui.afterRefresh.updateCardCount}, Inbox=${result.ui.afterRefresh.inboxButtonCount}.`,
+            "- Artifact contains screenshots, video, bundle hash, Git SHAs, Gateway response state, and UI observations.",
+          ];
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${lines.join("\n")}\n`);
+          NODE
+
+      - name: Upload immutable browser proof
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: stale-git-update-real-gateway-ui-proof
+          path: ${{ env.RESULTS_DIR }}
+          if-no-files-found: error
+          retention-days: 30
