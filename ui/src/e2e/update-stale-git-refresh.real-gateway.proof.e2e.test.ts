@@ -97,6 +97,9 @@ suite.define(() => {
     const expectedUpstreamSha = process.env.UI_PROOF_UPSTREAM_SHA;
     expect(expectedInitialSha).toMatch(/^[0-9a-f]{40}$/u);
     expect(expectedUpstreamSha).toMatch(/^[0-9a-f]{40}$/u);
+    if (!expectedInitialSha || !expectedUpstreamSha) {
+      throw new Error("proof checkout SHAs were not provided");
+    }
     expect(await git("rev-parse", "HEAD")).toBe(expectedInitialSha);
     expect(await git("rev-parse", "@{upstream}")).toBe(expectedUpstreamSha);
 
@@ -312,8 +315,14 @@ suite.define(() => {
       try {
         await gateway?.close({ reason: "stale update real-Gateway proof cleanup" });
       } finally {
-        resetUpdateAvailableStateForTest();
-        await state.cleanup();
+        try {
+          if ((await git("rev-parse", "HEAD")) !== expectedInitialSha) {
+            await git("checkout", "--detach", expectedInitialSha);
+          }
+        } finally {
+          resetUpdateAvailableStateForTest();
+          await state.cleanup();
+        }
       }
     }
   }, 120_000);

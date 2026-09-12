@@ -106,7 +106,7 @@ jobs:
             `- Exact PR head: \`${process.env.PR_SOURCE_HEAD}\``,
             `- Real checkout: \`${result.checkout.beforeFastForward}\` was 1 commit behind, then fast-forwarded to \`${result.checkout.afterFastForward}\`.`,
             `- Real Gateway refresh: install=\`${result.gateway.installAfterRefresh.git.status}\`; the original target remained cached at \`${result.gateway.retainedStaleTarget.commitsBehind}\` commit behind.`,
-            `- Browser result: \`${result.ui.afterRefresh.updateStatus}\`; stale text=${result.ui.afterRefresh.commitsBehindTextCount}, update card=${result.ui.afterRefresh.updateCardCount}, Inbox=${result.ui.afterRefresh.inboxButtonCount}.`,
+            `- Browser result: \`${result.ui.afterRefresh.updateStatus}\`; stale text=${result.ui.afterRefresh.commitsBehindTextCount}, update card=${result.ui.afterRefresh.updateCardCount}, Inbox items=${result.ui.afterRefresh.inboxItems}.`,
             "- Artifact contains screenshots, video, bundle hash, Git SHAs, Gateway response state, and UI observations.",
           ];
           fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${lines.join("\n")}\n`);
