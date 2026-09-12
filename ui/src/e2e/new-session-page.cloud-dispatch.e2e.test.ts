@@ -8,6 +8,7 @@ import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-
 import { tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
 import {
   ONE_PIXEL_PNG_B64,
+  NEW_SESSION_MODEL_CATALOG,
   SESSION_LIST_DEFAULTS,
   TARGET_REPO,
   WORKSPACE,
@@ -15,6 +16,7 @@ import {
   captureUiProofEnabled,
   controlUiSessionPath,
   controlUiSessionUrl,
+  createCloudAgentsListResponse,
   createNewSessionPageE2eSuite,
   createdSessionListResult,
   expectPendingSessionPlacementStartupBeforeRuntime,
@@ -70,16 +72,16 @@ suite.define(() => {
       const trigger = page.locator("#new-session-where-trigger");
       const place = page.locator("wa-popover.new-session-page__where-popover");
       await trigger.click();
-      await place.getByRole("button", { name: "Cloud · aws" }).click();
+      await place.getByRole("button", { name: "aws", exact: true }).click();
       await trigger.click();
       await place.getByRole("button", { name: "Fast", exact: true }).click();
       await expect.poll(() => trigger.getAttribute("data-machine-class")).toBe("fast");
-      await place.getByRole("button", { name: "Cloud · machine0" }).click();
+      await place.getByRole("button", { name: "machine0", exact: true }).click();
       await expect.poll(() => trigger.getAttribute("data-cloud-profile")).toBe("machine0");
       await expect.poll(() => trigger.getAttribute("data-machine-class")).toBeNull();
       await trigger.click();
       await expect
-        .poll(() => place.getByRole("button", { name: "Cloud · machine0" }).isDisabled())
+        .poll(() => place.getByRole("button", { name: "machine0", exact: true }).isDisabled())
         .toBe(false);
       expect(await place.getByText("Machine", { exact: true }).count()).toBe(0);
       expect(await place.locator('[data-value^="machine:"]').count()).toBe(0);
@@ -124,6 +126,7 @@ suite.define(() => {
     const sessionKey = "agent:cloud:cloud-e2e";
     const gateway = await installMockGateway(page, {
       defaultAgentId: "cloud",
+      models: NEW_SESSION_MODEL_CATALOG,
       operatorScopes: ["operator.admin", "operator.read", "operator.write"],
       deferredMethods: ["sessions.dispatch"],
       featureMethods: [
@@ -137,20 +140,7 @@ suite.define(() => {
       workspaceGit: true,
       sessionKey: "agent:cloud:neutral-e2e",
       methodResponses: {
-        "agents.list": {
-          agents: [
-            {
-              id: "cloud",
-              identity: { name: "Cloud" },
-              name: "Cloud",
-              workspace: WORKSPACE,
-              workspaceGit: true,
-            },
-          ],
-          defaultId: "cloud",
-          mainKey: "main",
-          scope: "agent",
-        },
+        "agents.list": createCloudAgentsListResponse(),
         "projects.list": {
           projects: [
             {
@@ -239,7 +229,7 @@ suite.define(() => {
       await gateway.waitForRequest("environments.list");
       await page.locator("#new-session-where-trigger").click();
       const place = page.locator("wa-popover.new-session-page__where-popover");
-      await place.getByRole("button", { name: "Cloud · aws" }).click();
+      await place.getByRole("button", { name: "aws", exact: true }).click();
       const trigger = page.locator("#new-session-where-trigger");
       await expect.poll(() => trigger.getAttribute("data-cloud-profile")).toBe("aws");
       await trigger.click();
@@ -376,7 +366,7 @@ suite.define(() => {
         await writeFile(
           path.join(suite.artifactDir, "cloud-profile-refresh-retention", "01-before-refresh.png"),
           await takeControlUiViewportScreenshot(page, place.locator('wa-popup [part="popup"]'), [
-            place.getByRole("button", { name: "Cloud · aws" }),
+            place.getByRole("button", { name: "aws", exact: true }),
           ]),
         );
         await page.keyboard.press("Escape");
@@ -424,7 +414,7 @@ suite.define(() => {
       await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("aws · Fast");
       await expect.poll(() => startButton.isDisabled()).toBe(false);
       await trigger.click();
-      const retainedCloudProfile = place.getByRole("button", { name: "Cloud · aws" });
+      const retainedCloudProfile = place.getByRole("button", { name: "aws", exact: true });
       await expect.poll(() => retainedCloudProfile.isDisabled()).toBe(false);
       await expect
         .poll(() => tooltipTitleText(retainedCloudProfile))
@@ -450,6 +440,7 @@ suite.define(() => {
       expect(create.params).toMatchObject({
         agentId: "cloud",
         message: "",
+        titleSource: message,
         projectId: "openclaw",
         worktree: true,
         worktreeBaseRef: "main",

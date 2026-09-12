@@ -203,6 +203,7 @@ export async function restartChatPanePlacement(params: {
       ...(target.kind === "profile"
         ? {
             profileId: target.profileId,
+            ...(target.os ? { os: target.os } : {}),
             ...(target.machineClass ? { machineClass: target.machineClass } : {}),
           }
         : { deviceId: target.deviceId }),
@@ -248,14 +249,11 @@ export async function reclaimChatPanePlacement(params: {
     reclaiming ||
     deviceOffline ||
     (action?.blocksActiveRun && params.row.hasActiveRun === true) ||
-    action?.method !== "sessions.reclaim"
+    !action
   ) {
     return;
   }
-  const access = readSessionMethodAccess(params.gatewaySnapshot, {
-    method: "sessions.reclaim",
-    requiredScope: "operator.write",
-  });
+  const access = readSessionMethodAccess(params.gatewaySnapshot, action);
   if (!access.allowed) {
     params.publishError(access.reason);
     return;

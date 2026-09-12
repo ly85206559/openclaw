@@ -117,7 +117,7 @@ suite.define(() => {
       await page.reload();
       picker = page.locator('openclaw-chat-pane[aria-hidden="false"] .chat-controls__model-picker');
       await picker.locator('[data-chat-model-select="true"]').tap();
-      await picker.getByRole("button", { name: "Reset session model", exact: true }).waitFor();
+      await picker.locator('[data-chat-model-default="true"]').waitFor();
       await expect.poll(() => picker.locator("[data-chat-model-selection-target]").count()).toBe(0);
       await expect
         .poll(() =>
@@ -126,26 +126,16 @@ suite.define(() => {
         .toBe("openai/gpt-5.6-terra");
       await screenshot(page, "07-picker-after-reload.png");
       await page.setViewportSize({ height: 900, width: 400 });
-      const footer = picker.locator(".chat-controls__model-provenance");
+      const defaultRow = picker.locator('[data-chat-model-default="true"]');
       await expect
-        .poll(() =>
-          footer.evaluate((element) => {
-            const bounds = element.getBoundingClientRect();
-            return Array.from(element.children).every((child) => {
-              const childBounds = child.getBoundingClientRect();
-              const range = document.createRange();
-              range.selectNodeContents(child);
-              const lines = new Set(Array.from(range.getClientRects(), (rect) => rect.top));
-              return (
-                lines.size === 1 &&
-                childBounds.left >= bounds.left &&
-                childBounds.right <= bounds.right
-              );
-            });
-          }),
-        )
+        .poll(async () => {
+          const bounds = await defaultRow.boundingBox();
+          return Boolean(
+            bounds && bounds.width > 0 && bounds.x >= 0 && bounds.x + bounds.width <= 401,
+          );
+        })
         .toBe(true);
-      await screenshot(page, "08-compact-footer-mobile.png");
+      await screenshot(page, "08-default-row-mobile.png");
       const configureModels = picker
         .getByRole("button", { name: "Configure models", exact: true })
         .first();
@@ -225,7 +215,7 @@ suite.define(() => {
         'openclaw-chat-pane[aria-hidden="false"] .chat-controls__model-picker',
       );
       await picker.locator('[data-chat-model-select="true"]').click();
-      await picker.getByRole("button", { name: "Reset session model", exact: true }).waitFor();
+      await picker.locator('[data-chat-model-default="true"]').waitFor();
       await screenshot(page, "03-pin-matching-default.png");
       await picker.getByRole("option", { name: "Proof Model", exact: true }).click();
       const request = await gateway.waitForRequest("sessions.patch");
@@ -236,7 +226,6 @@ suite.define(() => {
         )
         .toBe("");
       await picker.locator('[data-chat-model-select="true"]').click();
-      await expect.poll(() => picker.locator("[data-chat-model-reset]").count()).toBe(0);
       await screenshot(page, "04-pin-cleared.png");
     } finally {
       await context.close();
@@ -262,10 +251,14 @@ suite.define(() => {
       await picker.locator("[data-chat-model-option]").first().waitFor({ state: "attached" });
 
       // Freeze the operator-signaled revalidation so the in-flight state is observable.
-      await gateway.deferNext("models.list", { refresh: true });
+      await gateway.deferNext("models.list", { view: "configured" });
       await picker.locator('[data-chat-model-select="true"]').click();
-      const request = await gateway.waitForRequest("models.list");
-      expect(requireRecord(request.params)).toMatchObject({ refresh: true, view: "configured" });
+      const request = await gateway.waitForRequest("models.list", { after: 1 });
+      expect(requireRecord(request.params)).toMatchObject({
+        sessionKey: "agent:main:main",
+        view: "configured",
+      });
+      expect(request.params).not.toHaveProperty("refresh");
 
       // The warm list stays rendered and selectable with no refresh/loading interstitial.
       await expect
@@ -277,21 +270,8 @@ suite.define(() => {
         await picker.locator('[data-chat-model-option="openai/gpt-5.6-luna"]').isDisabled(),
       ).toBe(false);
 
-      // Discovery invalidates the session projection; only that projection can update readiness.
-      await gateway.deferNext("chat.metadata");
+      // The direct scoped response owns model readiness; commands remain independent.
       await gateway.resolveDeferred("models.list", {
-        models: [
-          { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai" },
-          { id: "gpt-5.6-terra", name: "GPT-5.6 Terra", provider: "openai" },
-        ],
-      });
-      const metadataRequest = await gateway.waitForRequest("chat.metadata");
-      expect(metadataRequest.params).toEqual({ agentId: "main", sessionKey: "agent:main:main" });
-      expect(
-        await picker.locator('[data-chat-model-option="openai/gpt-5.6-luna"]').isVisible(),
-      ).toBe(true);
-      await gateway.resolveDeferred("chat.metadata", {
-        commands: [],
         models: [
           { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai" },
           { id: "gpt-5.6-terra", name: "GPT-5.6 Terra", provider: "openai" },
@@ -329,7 +309,7 @@ suite.define(() => {
       const previous = picker.locator('[data-chat-model-option="anthropic/claude-haiku-4-5"]');
       await previous.waitFor({ state: "attached" });
       const discoveryCount = (await gateway.getRequests("models.list")).length;
-      await gateway.deferNext("models.list", { refresh: true });
+      await gateway.deferNext("models.list", { view: "configured" });
       await picker.locator('[data-chat-model-select="true"]').click();
       await gateway.waitForRequest("models.list", { after: discoveryCount });
       const search = picker.locator("[data-chat-model-search]");
@@ -343,17 +323,13 @@ suite.define(() => {
         });
       }
 
-      const metadataCount = (await gateway.getRequests("chat.metadata")).length;
-      await gateway.deferNext("chat.metadata");
       const refreshedModels = [
         { id: "gpt-5.5", name: "GPT-5.5", provider: "openai" },
         { id: "gpt-5.4-mini", name: "GPT-5.4 mini", provider: "openai" },
         { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", provider: "anthropic" },
       ];
       await gateway.resolveDeferred("models.list", { models: refreshedModels });
-      await gateway.waitForRequest("chat.metadata", { after: metadataCount });
-      expect(await previous.isVisible()).toBe(true);
-      await gateway.resolveDeferred("chat.metadata", { commands: [], models: refreshedModels });
+
       const replacement = picker.locator('[data-chat-model-option="anthropic/claude-sonnet-4-6"]');
       await replacement.waitFor({ state: "attached" });
       await previous.waitFor({ state: "detached" });

@@ -22,7 +22,6 @@ import type { BoardFace } from "../lib/board/settings.ts";
 import { invalidateChatMetadataStore } from "../lib/chat/chat-metadata-store.ts";
 import { createIdleImport } from "../lib/idle-import.ts";
 import { invalidateModelAuthStatusRequests } from "../lib/model-auth-request-state.ts";
-import { invalidateModelCatalogCache } from "../lib/model-catalog-store.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
 import {
   isUiGlobalSessionKey,
@@ -96,6 +95,7 @@ i18n.setLocaleLoadRecovery({
 function equalShellRouteState(previous: ShellRouteState, next: ShellRouteState): boolean {
   return (
     previous.routeId === next.routeId &&
+    previous.routeFailed === next.routeFailed &&
     previous.location?.pathname === next.location?.pathname &&
     previous.location?.search === next.location?.search &&
     previous.location?.hash === next.location?.hash &&
@@ -497,7 +497,6 @@ class OpenClawShell
     if (event.event === "config.changed" || event.event === "chat.metadata.changed") {
       const client = this.context?.gateway?.snapshot.client;
       if (client) {
-        invalidateModelCatalogCache(client);
         invalidateModelAuthStatusRequests(client);
         invalidateChatMetadataStore(client);
       }
@@ -537,8 +536,8 @@ class OpenClawShell
     this.shellNavigation.navigate(routeId, options);
   }
 
-  replaceChatWithCurrentSession() {
-    return this.shellNavigation.replaceChatWithCurrentSession();
+  recoverNotFoundRoute() {
+    return this.shellNavigation.recoverNotFoundRoute();
   }
 
   recoverDeletedActiveSession(sessionState: ApplicationContext["sessions"]["state"]) {
@@ -686,7 +685,6 @@ class OpenClawShell
       // A disconnect can retain the browser client, so object identity alone
       // cannot keep metadata alive across logical Gateway connections.
       if (snapshot.client) {
-        invalidateModelCatalogCache(snapshot.client);
         invalidateModelAuthStatusRequests(snapshot.client);
         invalidateChatMetadataStore(snapshot.client);
       }
