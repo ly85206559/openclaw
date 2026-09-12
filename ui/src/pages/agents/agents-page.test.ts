@@ -321,7 +321,7 @@ describe("AgentsPage gateway lifecycle", () => {
     page.agentsSelectedId = "main";
     page.loadActivePanelData();
     await waitForFast(() => expect(page.chatModelCatalog).toEqual(defaultModels));
-    expect(request).toHaveBeenCalledTimes(3);
+    expect(request).toHaveBeenCalledTimes(2);
     expect(request).toHaveBeenNthCalledWith(
       1,
       "models.list",
@@ -354,7 +354,7 @@ describe("AgentsPage gateway lifecycle", () => {
 
       page.loadActivePanelData();
       await waitForFast(() => expect(page.chatModelCatalog[0]?.id).toBe("old"));
-      page.ensureModelCatalog({ refresh: true });
+      emitCatalogChanged(page.context.gateway);
       await waitForFast(() =>
         expect(page.chatModelCatalogStatus.error).toBe(
           hasRows
@@ -414,7 +414,7 @@ describe("AgentsPage gateway lifecycle", () => {
     );
   });
 
-  it("re-reads a cached model catalog when the picker asks for a refresh", async () => {
+  it("keeps picker opens cached and reloads after a catalog publication", async () => {
     const oldModels = [{ id: "old", name: "Old Model", alias: "opus", provider: "anthropic" }];
     const nextModels = [{ id: "new", name: "Opus 4.8", alias: "opus", provider: "anthropic" }];
     const request = vi
@@ -429,11 +429,14 @@ describe("AgentsPage gateway lifecycle", () => {
     page.loadActivePanelData();
     await waitForFast(() => expect(page.chatModelCatalog).toEqual(oldModels));
 
-    // Repeated render work retains this page snapshot; a picker read requests current facts.
     page.ensureModelCatalog();
     expect(request).toHaveBeenCalledTimes(1);
 
     page.ensureModelCatalog({ refresh: true });
+    await waitForFast(() => expect(page.chatModelCatalog).toEqual(oldModels));
+    expect(request).toHaveBeenCalledTimes(1);
+
+    emitCatalogChanged(page.context.gateway);
     await waitForFast(() => expect(page.chatModelCatalog).toEqual(nextModels));
     expect(request).toHaveBeenCalledTimes(2);
   });
@@ -903,6 +906,7 @@ describe("AgentsPage gateway lifecycle", () => {
       agents: [{ id: "main", name: "Main" }],
     };
     page.agentsSelectedId = "main";
+    page.routeData = { panel: "files" } as AgentsRouteData;
     page.agentFileContents = { "cached.md": "keep" };
     page.routeDataInitialized = true;
     page.context = {
@@ -1030,6 +1034,7 @@ describe("AgentsPage gateway lifecycle", () => {
     } as unknown as ApplicationContext["sessions"];
     const page = document.createElement("openclaw-agents-page") as TestAgentsPage;
     const context = pageContext(currentGateway, agents, { sessions: oldSessions });
+    page.routeData = agentsRouteData(currentGateway);
     page.context = context;
     setPageGateway(page, client);
     page.subscriptions.hostConnected();
