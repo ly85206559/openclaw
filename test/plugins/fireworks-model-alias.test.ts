@@ -151,7 +151,6 @@ describe("Fireworks manifest provider alias", () => {
   );
 });
 
-
 describe("Together manifest provider alias", () => {
   const modelId = "moonshotai/Kimi-K2.6";
 
