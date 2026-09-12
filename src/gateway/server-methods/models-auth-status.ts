@@ -25,10 +25,7 @@ import {
   type RuntimeAuthProfileStore,
 } from "../../agents/auth-profiles.js";
 import { getRuntimeExternalCliProfileIds } from "../../agents/auth-profiles/runtime-external-profile-references.js";
-import {
-  isNonSecretApiKeyMarker,
-  NON_ENV_SECRETREF_MARKER,
-} from "../../agents/model-auth-markers.js";
+import { isNonSecretApiKeyMarker } from "../../agents/model-auth-markers.js";
 import {
   type ProviderAuthAliasLookupParams,
   resolveProviderIdForAuth,
@@ -38,6 +35,7 @@ import { hasConfiguredSecretInput } from "../../config/types.secrets.js";
 import { providerUsageLabel, resolveUsageProviderId } from "../../infra/provider-usage.shared.js";
 import type { UsageProviderId } from "../../infra/provider-usage.types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { NON_ENV_SECRETREF_MARKER } from "../../secrets/provider-credential-values.js";
 import { refreshActiveProviderAuthRuntimeSnapshot } from "../../secrets/runtime.js";
 import { abortChatRunsForProvider, type ChatAbortOps } from "../chat-abort.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
@@ -327,6 +325,9 @@ function mapProvider(
         ...(includeProfileIdentity && metadata.displayName
           ? { displayName: metadata.displayName }
           : {}),
+        ...(prof.reasonCode === "setup_inactive"
+          ? { displayName: "Saved sign-in (inactive)" }
+          : {}),
         ...(includeProfileIdentity && metadata.email ? { email: metadata.email } : {}),
         ...(includeProfileIdentity && lastUsedAt ? { lastUsedAt } : {}),
         ...(logoutProfileIds.has(prof.profileId) ? { logoutSupported: true } : {}),
@@ -510,7 +511,7 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
         return;
       }
       const { removeModelAuthCredentials } = await import("../../commands/models/auth-logout.js");
-      await removeModelAuthCredentials({
+      const configWarning = await removeModelAuthCredentials({
         cfg,
         agentDir,
         profileIds: removedProfiles,
@@ -531,7 +532,8 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
               agentId: scope.agentId,
               stopReason: "auth-revoked",
             });
-      const warning = await refreshAfterCredentialMutation(context, "logout", scope.agentId);
+      const refreshWarning = await refreshAfterCredentialMutation(context, "logout", scope.agentId);
+      const warning = [configWarning, refreshWarning].filter(Boolean).join(" ");
       const result: ModelAuthLogoutResult = {
         provider,
         removedProfiles,

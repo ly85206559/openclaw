@@ -1,5 +1,6 @@
 // Control UI view renders the Models settings page content.
 import { html, nothing, type TemplateResult } from "lit";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { FastMode, GatewayAgentRow, ModelsProbeResult } from "../../api/types.ts";
 import { titleForRoute } from "../../app-navigation.ts";
 import type { AgentSelectionCapability } from "../../app/agent-selection.ts";
@@ -42,6 +43,8 @@ import { hasVerifiedProvider, renderProviderStatus } from "./view-status.ts";
 registerSettingsEnglish();
 
 type ModelProvidersViewProps = {
+  usageClient?: GatewayBrowserClient | null;
+  usageAgentId?: string;
   connected: boolean;
   loading: boolean;
   refreshing: boolean;
@@ -335,12 +338,7 @@ function renderProviderActions(card: ModelProviderCard, props: ModelProvidersVie
                 title=${keyBlocked}
                 @click=${() => props.onOpenKeyEditor(card.id)}
               >
-                ${
-                  card.hasConfigApiKey ||
-                  card.profiles.some((profile) => profile.type === "api_key")
-                    ? t("modelProviders.apiKey.replace")
-                    : t("modelProviders.apiKey.set")
-                }
+                ${t("modelProviders.apiKey.set")}
               </button>
             `
       }
@@ -389,6 +387,8 @@ function renderProviderRow(card: ModelProviderCard, props: ModelProvidersViewPro
       ${
         card.profiles.length > 0 && props.canViewProfiles
           ? renderProviderProfiles(card, {
+              usageClient: props.usageClient,
+              usageAgentId: props.usageAgentId,
               busy: props.busy,
               canMutate: props.canMutate && !props.configBusy,
               mutationBlockedReason: props.mutationBlockedReason,

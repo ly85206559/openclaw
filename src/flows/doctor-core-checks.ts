@@ -361,8 +361,16 @@ const skillWorkshopRelocationCheck: HealthCheck = {
       config: ctx.cfg,
       env: process.env,
     });
+    const automationFindings = (inspection.automationReferences ?? []).map((reference) => ({
+      checkId: SKILL_WORKSHOP_RELOCATION_CHECK_ID,
+      severity: "warning" as const,
+      target: reference.automationId,
+      path: reference.field,
+      message: reference.message,
+      fixHint: reference.fixHint,
+    }));
     if (inspection.externalProposalCount === 0 && inspection.legacyBackupRootCount === 0) {
-      return [];
+      return automationFindings;
     }
     const fixHints: string[] = [];
     if (
@@ -381,6 +389,7 @@ const skillWorkshopRelocationCheck: HealthCheck = {
       );
     }
     return [
+      ...automationFindings,
       {
         checkId: SKILL_WORKSHOP_RELOCATION_CHECK_ID,
         severity: "warning",
@@ -1095,9 +1104,8 @@ const gatewayPlatformNotesCheck: HealthCheck = {
     if (!isDefaultInstallIdentity(process.env)) {
       return [];
     }
-    const { collectMacGatewayPlatformWarnings } =
-      await import("../commands/doctor-platform-notes.js");
-    const warnings = await collectMacGatewayPlatformWarnings(ctx.cfg);
+    const { collectGatewayPlatformWarnings } = await import("../commands/doctor-platform-notes.js");
+    const warnings = await collectGatewayPlatformWarnings(ctx.cfg);
     return warnings.map((warning) =>
       noteTextToFinding({
         checkId: "core/doctor/gateway-services/platform-notes",
