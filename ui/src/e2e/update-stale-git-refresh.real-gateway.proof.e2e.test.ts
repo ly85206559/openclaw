@@ -256,7 +256,10 @@ suite.define(() => {
             (await page.goto(new URL("chat", suite.server.baseUrl).toString()))?.status(),
           ).toBe(200);
           await waitForControlUiRoute(page, { pathname: "/chat/main", routeId: "chat" });
-          expect(await page.locator(".sidebar-issues-button:visible").count()).toBe(0);
+          await expect
+            .poll(() => inboxButton.getAttribute("aria-label"))
+            .toBe("0 inbox items");
+          expect(await page.locator(".sidebar-issues-button__count").count()).toBe(0);
           expect(
             await page
               .locator('openclaw-sidebar-update-card[data-attention-kind="updateAvailable"]')
@@ -288,7 +291,7 @@ suite.define(() => {
                 ui: {
                   afterRefresh: {
                     commitsBehindTextCount: 0,
-                    inboxButtonCount: 0,
+                    inboxItems: 0,
                     updateCardCount: 0,
                     updateStatus: "Up to date",
                   },
