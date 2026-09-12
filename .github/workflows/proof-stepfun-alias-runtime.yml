@@ -1,0 +1,87 @@
+name: StepFun alias real runtime proof
+
+on:
+  push:
+    branches:
+      - proof/stepfun-alias-runtime-20260912
+
+permissions:
+  contents: read
+
+concurrency:
+  group: stepfun-alias-runtime-proof
+  cancel-in-progress: true
+
+jobs:
+  proof:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      PR_SOURCE_HEAD: c66be11ce7bec220309f9e7e44591ff35190e55b
+      RESULTS_DIR: artifacts/stepfun-alias-runtime
+    steps:
+      - name: Checkout immutable proof branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify exact-head lineage and proof-only delta
+        shell: bash
+        run: |
+          set -euo pipefail
+          git merge-base --is-ancestor "$PR_SOURCE_HEAD" HEAD
+          mapfile -t changed < <(git diff --name-only "$PR_SOURCE_HEAD"...HEAD)
+          printf '%s\n' "${changed[@]}"
+          test "${#changed[@]}" -eq 2
+          test "${changed[0]}" = ".github/proof/stepfun-alias-runtime.mjs"
+          test "${changed[1]}" = ".github/workflows/proof-stepfun-alias-runtime.yml"
+
+      - name: Set up exact PR source dependencies
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: 24.x
+          install-bun: "false"
+          install-deps: "true"
+          frozen-lockfile: "true"
+          cache-mode: restore
+          dependency-cache: "true"
+
+      - name: Build exact PR source
+        run: pnpm build
+
+      - name: Run both aliases through the real CLI and local provider transport
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RESULTS_DIR"
+          PR_SOURCE_HEAD="$PR_SOURCE_HEAD" \
+            PROOF_OUTPUT="$RESULTS_DIR/result.json" \
+            node .github/proof/stepfun-alias-runtime.mjs
+
+      - name: Publish summary
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from "node:fs";
+          const result = JSON.parse(fs.readFileSync(`${process.env.RESULTS_DIR}/result.json`, "utf8"));
+          const lines = [
+            "## StepFun alias real-runtime proof",
+            "",
+            `- Exact PR head: \`${result.exactHead}\``,
+            ...result.results.map((item) =>
+              `- \`${item.provider}\`: models status/list accepted the alias; local agent reached \`${item.resolvedTransport.path}\` with model \`${item.resolvedTransport.model}\` and returned \`${item.responseObserved}\`.`),
+            "- Secretless: loopback provider only; no StepFun API call or repository secret.",
+          ];
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${lines.join("\n")}\n`);
+          console.log(lines.join("\n"));
+          NODE
+
+      - name: Upload immutable proof record
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: stepfun-alias-runtime-proof
+          path: ${{ env.RESULTS_DIR }}
+          if-no-files-found: error
+          retention-days: 30
