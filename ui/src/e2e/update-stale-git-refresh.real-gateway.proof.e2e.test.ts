@@ -118,6 +118,7 @@ suite.define(() => {
       },
     });
     const config = {
+      agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
       gateway: {
         auth: { mode: "none" as const },
         controlUi: {
