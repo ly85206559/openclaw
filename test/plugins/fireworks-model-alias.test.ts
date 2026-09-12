@@ -218,9 +218,9 @@ describe("StepFun manifest provider aliases", () => {
       api: "openai-completions",
       baseUrl: "https://api.stepfun.ai/v1",
     });
-    expect(
-      resolveStepfunModel({ catalogProvider: "stepfun", provider: "stepfun-ai" }),
-    ).toEqual(standard);
+    expect(resolveStepfunModel({ catalogProvider: "stepfun", provider: "stepfun-ai" })).toEqual(
+      standard,
+    );
 
     const plan = resolveStepfunModel({
       catalogProvider: "stepfun-plan",
