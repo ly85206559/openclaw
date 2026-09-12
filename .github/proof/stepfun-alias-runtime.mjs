@@ -129,8 +129,10 @@ async function proveScenario(scenario) {
 
     const list = await runCli(["models", "list", "--provider", scenario.provider, "--json"], env);
     const listJson = JSON.parse(list.stdout);
+    const listedModels = listJson.models;
+    assert.ok(Array.isArray(listedModels), `unexpected models list payload: ${list.stdout}`);
     assert.ok(
-      listJson.some((entry) => entry.key === `${scenario.provider}/${scenario.model}`),
+      listedModels.some((entry) => entry.key === `${scenario.provider}/${scenario.model}`),
       `alias model absent from models list: ${list.stdout}`,
     );
 
