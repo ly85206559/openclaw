@@ -63,7 +63,7 @@ jobs:
           proof_remote="$RUNNER_TEMP/openclaw-update-proof.git"
           git init --bare "$proof_remote"
           tree="$(git rev-parse HEAD^{tree})"
-          upstream_sha="$(git commit-tree "$tree" -p "$initial_sha" -m 'proof: upstream checkout advanced')"
+          upstream_sha="$(git -c user.name='OpenClaw proof' -c user.email='proof@openclaw.invalid' commit-tree "$tree" -p "$initial_sha" -m 'proof: upstream checkout advanced')"
           git --git-dir="$proof_remote" update-ref refs/heads/main "$upstream_sha"
           git remote add proof-upstream "$proof_remote"
           git fetch proof-upstream main
