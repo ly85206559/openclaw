@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { createWriteStream } from "node:fs";
+import { closeSync, openSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -87,7 +87,7 @@ await applySessionStoreProjection({
   },
 });
 
-const gatewayLog = createWriteStream(gatewayLogPath, { flags: "w" });
+const gatewayLogFd = openSync(gatewayLogPath, "w");
 const gateway = spawn(
   process.execPath,
   [
@@ -106,7 +106,7 @@ const gateway = spawn(
   {
     cwd: repoRoot,
     env: proofEnv,
-    stdio: ["ignore", gatewayLog, gatewayLog],
+    stdio: ["ignore", gatewayLogFd, gatewayLogFd],
   },
 );
 
@@ -192,7 +192,6 @@ try {
   await writeFile(resultPath, `${JSON.stringify(result, null, 2)}\n`, "utf8");
   console.log(JSON.stringify(result));
 } catch (error) {
-  gatewayLog.end();
   const log = await readFile(gatewayLogPath, "utf8").catch(() => "");
   if (log) {
     console.error(log);
@@ -200,6 +199,6 @@ try {
   throw error;
 } finally {
   await stopGateway();
-  gatewayLog.end();
+  closeSync(gatewayLogFd);
   await rm(tempRoot, { recursive: true, force: true });
 }
