@@ -15,6 +15,8 @@ jobs:
     steps:
       - name: Check out proof commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4.2.0
+        with:
+          fetch-depth: 2
 
       - name: Verify product-head lineage
         shell: bash
