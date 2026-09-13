@@ -328,7 +328,14 @@ export function isChannelProgressPriorityLine(line: string | ChannelProgressDraf
   );
 }
 
-const progressDraftLineCorrelationKeys = new WeakMap<ChannelProgressDraftLine, string>();
+type ProgressDraftLineMetadata = {
+  correlationKey?: string;
+  commandDetailCandidate?: string;
+};
+const progressDraftLineMetadata = new WeakMap<
+  ChannelProgressDraftLine,
+  ProgressDraftLineMetadata
+>();
 
 function compactStrings(values: readonly (string | undefined | null)[]): string[] {
   return values.map((value) => value?.replace(/\s+/g, " ").trim()).filter(Boolean) as string[];
@@ -352,6 +359,7 @@ function buildNamedProgressLine(
   options?: ChannelProgressLineOptions,
   fields?: {
     correlationKey?: string;
+    commandDetailCandidate?: string;
     id?: string;
     status?: string;
   },
@@ -376,18 +384,34 @@ function buildNamedProgressLine(
     ...(fields?.status ? { status: fields.status } : {}),
     toolName: display.name,
   };
-  setProgressDraftLineCorrelationKey(line, fields?.correlationKey);
+  setProgressDraftLineMetadata(line, fields?.correlationKey, fields?.commandDetailCandidate);
   return line;
 }
 
-function setProgressDraftLineCorrelationKey(
+function setProgressDraftLineMetadata(
   line: ChannelProgressDraftLine,
   correlationKey: string | undefined,
+  commandDetailCandidate?: string,
 ): void {
   const normalized = correlationKey?.trim();
-  if (normalized) {
-    progressDraftLineCorrelationKeys.set(line, normalized);
+  if (normalized || commandDetailCandidate) {
+    progressDraftLineMetadata.set(line, { correlationKey: normalized, commandDetailCandidate });
   }
+}
+
+function copyProgressDraftLineMetadata(
+  source: ChannelProgressDraftLine,
+  target: ChannelProgressDraftLine,
+  previous?: ChannelProgressDraftLine,
+): void {
+  const metadata = progressDraftLineMetadata.get(source);
+  // Only correlation may fall back: the candidate belongs to the incoming output.
+  setProgressDraftLineMetadata(
+    target,
+    metadata?.correlationKey ??
+      (previous && progressDraftLineMetadata.get(previous)?.correlationKey),
+    metadata?.commandDetailCandidate,
+  );
 }
 
 function itemKindToToolName(kind: string | undefined): string | undefined {
@@ -472,8 +496,15 @@ function buildCommandOutputProgressLine(
   const name = input.name ?? "exec";
   const correlationKey = resolveCommandProgressCorrelationKey(input);
   const detail = options?.commandText === "raw" ? compactStrings([input.title]) : [];
+  // Compare a possible restatement before the formatter moves flags or adds Markdown.
+  // Keep the actual title intact unless it matches an already displayed command.
+  const commandMeta = detail[0]?.match(/^command\s+(.+)$/i)?.[1];
+  const commandDetailCandidate = commandMeta
+    ? formatToolAggregateParts(name, [commandMeta], { markdown: options?.markdown }).detail
+    : undefined;
   const line = buildNamedProgressLine(input.event, name, detail, options, {
     correlationKey,
+    commandDetailCandidate,
     id: resolveProgressDraftLineId(input, { useToolCallIdFallback: true }),
     status,
   });
@@ -489,14 +520,14 @@ function buildCommandOutputProgressLine(
       detail: status,
       text: formatToolAggregate(name, [status], { markdown: options?.markdown }),
     };
-    setProgressDraftLineCorrelationKey(statusLine, correlationKey);
+    copyProgressDraftLineMetadata(line, statusLine);
     return statusLine;
   }
   const statusLine = {
     ...line,
     text: formatToolAggregate(name, [status, line.detail], { markdown: options?.markdown }),
   };
-  setProgressDraftLineCorrelationKey(statusLine, correlationKey);
+  copyProgressDraftLineMetadata(line, statusLine);
   return statusLine;
 }
 
@@ -623,7 +654,7 @@ export function buildChannelProgressDraftLine(
         label: input.title?.trim() || input.itemKind?.trim() || "Update",
         ...(input.status ? { status: input.status } : {}),
       };
-      setProgressDraftLineCorrelationKey(line, correlationKey);
+      setProgressDraftLineMetadata(line, correlationKey);
       return line;
     }
     case "plan": {
@@ -1234,13 +1265,8 @@ export function mergeChannelProgressDraftLine<TLine extends string | ChannelProg
 
 export function mergeChannelProgressDraftLineForStreaming<
   TLine extends string | ChannelProgressDraftLine,
->(lines: TLine[], line: TLine, params: { maxLines: number; toolProgress: boolean }): TLine[] {
-  return mergeProgressDraftLine(
-    lines,
-    line,
-    params.maxLines,
-    params.toolProgress ? isChannelProgressPriorityLine : isChannelProgressAttentionLine,
-  );
+>(lines: TLine[], line: TLine, params: { maxLines: number }): TLine[] {
+  return mergeProgressDraftLine(lines, line, params.maxLines, isChannelProgressPriorityLine);
 }
 
 function mergeProgressDraftLine<TLine extends string | ChannelProgressDraftLine>(
@@ -1295,6 +1321,8 @@ function limitProgressDraftLines<TLine extends string | ChannelProgressDraftLine
     .toReversed();
 }
 
+// Preserve a matching command description, including after its terminal item.
+// Titleless recovery must still replace terminal failure text rather than retain it.
 function mergeProgressDraftLineUpdate<TLine extends string | ChannelProgressDraftLine>(
   previous: TLine,
   line: TLine,
@@ -1302,18 +1330,24 @@ function mergeProgressDraftLineUpdate<TLine extends string | ChannelProgressDraf
   if (typeof previous !== "object" || typeof line !== "object") {
     return line;
   }
-  if (
-    line.kind !== "command-output" ||
-    !line.status ||
-    (line.detail && line.detail !== line.status)
-  ) {
+  if (line.kind !== "command-output" || !line.status) {
     return line;
   }
   const previousDetail = previous.detail?.trim();
+  const incomingDetail = line.detail?.trim();
   if (
     !previousDetail ||
     previousDetail === previous.status ||
-    isTerminalProgressStatus(previous.status)
+    incomingDetail === previousDetail ||
+    (incomingDetail &&
+      incomingDetail !== line.status &&
+      progressDraftLineMetadata.get(line)?.commandDetailCandidate !== previousDetail)
+  ) {
+    return line;
+  }
+  if (
+    isTerminalProgressStatus(previous.status) &&
+    (!incomingDetail || incomingDetail === line.status)
   ) {
     return line;
   }
@@ -1322,10 +1356,7 @@ function mergeProgressDraftLineUpdate<TLine extends string | ChannelProgressDraf
     detail: previousDetail,
   };
   replacement.text = getProgressDraftLineText(replacement);
-  setProgressDraftLineCorrelationKey(
-    replacement,
-    progressDraftLineCorrelationKeys.get(line) ?? progressDraftLineCorrelationKeys.get(previous),
-  );
+  copyProgressDraftLineMetadata(line, replacement, previous);
   return replacement;
 }
 
@@ -1348,11 +1379,7 @@ function keepProgressDraftLineId<TLine extends string | ChannelProgressDraftLine
     return replacement;
   }
   const kept = { ...replacement, id: previousId };
-  setProgressDraftLineCorrelationKey(
-    kept,
-    progressDraftLineCorrelationKeys.get(replacement) ??
-      progressDraftLineCorrelationKeys.get(previous),
-  );
+  copyProgressDraftLineMetadata(replacement, kept, previous);
   return kept;
 }
 
@@ -1360,7 +1387,7 @@ function resolveProgressDraftLineMergeKeys(line: string | ChannelProgressDraftLi
   if (typeof line !== "object") {
     return [];
   }
-  const keys = [progressDraftLineCorrelationKeys.get(line), line.id]
+  const keys = [progressDraftLineMetadata.get(line)?.correlationKey, line.id]
     .map((key) => key?.trim())
     .filter((key): key is string => Boolean(key));
   return [...new Set(keys)];
@@ -1381,7 +1408,7 @@ type ChannelProgressDraftTextParams = {
   formatLine?: (line: string) => string;
   /** Prefix used for plain progress lines that lack their own icon. */
   bullet?: string;
-  /** Short narration paragraph; when present it replaces the tool lines. */
+  /** Status headline rendered above the plan and activity rows. */
   narration?: string;
   /** Latest full plan snapshot, rendered independently from rolling tool lines. */
   plan?: readonly AgentPlanStep[];
@@ -1393,14 +1420,9 @@ export function formatChannelProgressDraftText(params: ChannelProgressDraftTextP
 }
 
 export function formatChannelProgressDraftTextForStreaming(
-  params: ChannelProgressDraftTextParams & { toolProgress: boolean },
+  params: ChannelProgressDraftTextParams,
 ): string {
-  return formatProgressDraftText(
-    params,
-    params.toolProgress && params.presentation !== "summary"
-      ? isChannelProgressPriorityLine
-      : isChannelProgressAttentionLine,
-  );
+  return formatProgressDraftText(params, isChannelProgressPriorityLine);
 }
 
 function formatProgressDraftText(

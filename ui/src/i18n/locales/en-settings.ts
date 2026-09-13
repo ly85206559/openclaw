@@ -4,6 +4,28 @@ import { en } from "./en.ts";
 // Settings copy loads with its lazy page or search, not the startup shell.
 const enSettings = {
   connection: {
+    ping: {
+      title: "Gateway ping",
+      latest: "Latest ping",
+      average: "Avg ping",
+      averageHint: "Average browser-to-Gateway round-trip time, including Gateway handling.",
+      p50: "p50",
+      p50Hint: "50% of measured pings completed in this time or less (median).",
+      p95: "p95",
+      p95Hint: "95% of measured pings completed in this time or less.",
+      p99: "p99",
+      p99Hint: "99% of measured pings completed in this time or less.",
+      unit: "ms",
+      samples: "Samples: {count}/100 · every 5 s while visible",
+      measuring: "Measuring ping…",
+      failed: "Last ping failed. Retrying…",
+    },
+    activity: {
+      title: "Gateway activity",
+      description: "Process CPU, memory, and event-loop delay · every 5 s while visible",
+      failed: "Activity refresh failed. Retrying…",
+      offline: "Connect to see Gateway activity.",
+    },
     access: {
       title: "Connection",
       descriptionOffline: "Not connected.",
@@ -294,7 +316,7 @@ const enSettings = {
   },
   modelProviders: {
     title: "Configured providers",
-    configureModels: "Configure Models",
+    configureModels: "Model setup",
     login: {
       action: "Connect provider",
       title: "Connect a provider",
@@ -430,6 +452,7 @@ const enSettings = {
       utilityHelpAutomatic:
         "Automatic uses the primary model provider's recommended small model when available. Generated titles otherwise use the primary model.",
       automatic: "Automatic (provider default)",
+      automaticUnavailable: "No recommended small model",
       disabled: "Disabled",
       fallback: "Fallback Model",
       noFallback: "No fallback model",
@@ -976,6 +999,21 @@ const enSettings = {
       collapseTaskProgress: "Collapse task progress by default",
       collapseTaskProgressHint:
         "Keep task progress collapsed while work is active, then expand it when the response finishes.",
+    },
+    sessionSources: {
+      title: "Session sources",
+      hint: "Choose which coding apps show their existing conversations in the sidebar.",
+      scope: "Applies to everyone on this Gateway. Changes require a Gateway restart.",
+      claude: "Show Claude Code sessions",
+      codex: "Show Codex sessions",
+      opencode: "Show OpenCode sessions",
+      pi: "Show Pi sessions",
+      sourceHint:
+        "Discover conversations on this Gateway and eligible paired computers. Requires the {plugin} plugin to be enabled.",
+      empty: "No supported session source plugins are installed. Add one in Manage plugins.",
+      unavailable:
+        "Session source settings are unavailable. Reconnect or reload Settings to try again.",
+      managePlugins: "Manage plugins",
     },
     sidebarPrefs: {
       title: "Sidebar",

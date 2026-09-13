@@ -35,6 +35,7 @@ import {
   type SqliteWalMaintenance,
 } from "../infra/sqlite-wal.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { assertAgentDatabaseAdmitted } from "./agent-database-admission.js";
 import {
   assertAgentDeletionCleanupAliases,
   assertAgentDeletionDatabaseCleanupAccess,
@@ -85,9 +86,10 @@ import {
 } from "./openclaw-agent-db-schema.js";
 import {
   clearOpenClawAgentDatabaseValidationCache,
-  getValidatedOpenClawAgentDatabaseOwner,
+  adoptOpenClawAgentDatabaseValidation,
+  getOpenClawAgentDatabaseValidation,
   invalidateOpenClawAgentDatabaseValidation,
-  setValidatedOpenClawAgentDatabaseOwner,
+  setOpenClawAgentDatabaseValidation,
 } from "./openclaw-agent-db-validation-cache.js";
 import {
   isIncognitoOpenClawAgentSqlitePath,
@@ -107,8 +109,6 @@ export {
   OPENCLAW_AGENT_SCHEMA_VERSION,
   type OpenClawAgentDatabase,
   type OpenClawAgentDatabaseOptions,
-  type OpenClawAgentDatabaseOwnerInspection,
-  type OpenClawRegisteredAgentDatabase,
 } from "./openclaw-agent-db-contract.js";
 export {
   assertOpenClawAgentDatabaseForMaintenance,
@@ -126,7 +126,7 @@ export {
   resolveOpenClawAgentSqlitePath,
 } from "./openclaw-agent-db.paths.js";
 
-export class IncognitoAgentDatabasePathCollisionError extends Error {
+class IncognitoAgentDatabasePathCollisionError extends Error {
   readonly path: string;
 
   constructor(pathname: string) {
@@ -195,6 +195,7 @@ function* openOpenClawAgentDatabaseSteps(
   pending?: PendingAgentDatabaseOpen,
 ): SqliteIntegrityOperation<OpenClawAgentDatabase> {
   const agentId = normalizeAgentId(options.agentId);
+  assertAgentDatabaseAdmitted(agentId, { env: options.env });
   const databaseOptions = { ...options, agentId };
   const pathname = resolveOpenClawAgentSqlitePath(databaseOptions);
   getAgentDeletionDatabaseCleanup(databaseOptions)?.assertCurrent();
@@ -320,7 +321,11 @@ function* openOpenClawAgentDatabaseSteps(
     finishPhase("open");
     // Eviction churn must avoid migration/convergence and registry busy waits.
     // Version and owner can change while evicted, so their read-only gates run on every open.
-    let isValidatedReopen = getValidatedOpenClawAgentDatabaseOwner(pathname) === agentId;
+    const validationDatabase = { db, path: pathname, agentId };
+    if (pending?.validation) {
+      adoptOpenClawAgentDatabaseValidation(validationDatabase, pending.validation);
+    }
+    let isValidatedReopen = Boolean(getOpenClawAgentDatabaseValidation(validationDatabase));
     const walMaintenance = yield* (function* (): SqliteIntegrityOperation<SqliteWalMaintenance> {
       let maintenance: OpenClawAgentDatabase["walMaintenance"] | undefined;
       try {
@@ -328,13 +333,14 @@ function* openOpenClawAgentDatabaseSteps(
         assertSupportedAgentSchemaVersion(db, pathname);
         const existingSchema = readExistingAgentSchemaMeta(db);
         assertExistingAgentSchemaOwner(existingSchema, agentId, pathname);
-        // Integrity is not process-stable: the file can be damaged while evicted.
-        // This guard is read-only (no busy waits), so every physical open pays it.
+        // Reuse the first full verification across ordinary reopens. Schema
+        // convergence still verifies before mutation, independently of this proof.
         const requiresCurrentVersionConvergence = yield* agentDatabaseIntegrityBeforeMutationSteps(
           db,
           agentId,
           pathname,
           diagnostics,
+          isValidatedReopen,
         );
         if (isValidatedReopen && (!existingSchema || requiresCurrentVersionConvergence)) {
           // New files and same-version divergence cannot inherit an earlier validation.
@@ -402,7 +408,7 @@ function* openOpenClawAgentDatabaseSteps(
     }
     if (!isValidatedReopen) {
       registerOpenClawAgentDatabase({ agentId, path: pathname, env: options.env });
-      setValidatedOpenClawAgentDatabaseOwner(pathname, agentId);
+      setOpenClawAgentDatabaseValidation(database);
     }
     cache.terminal.clear(pathname);
     // Safety net for processes that end without an orderly close: agent DBs have
@@ -531,6 +537,7 @@ export function getOpenClawAgentDatabaseIfOpen(
   options: OpenClawAgentDatabaseOptions,
 ): OpenClawAgentDatabase | undefined {
   const agentId = normalizeAgentId(options.agentId);
+  assertAgentDatabaseAdmitted(agentId, { env: options.env });
   const pathname = resolveOpenClawAgentSqlitePath({ ...options, agentId });
   // Incognito skips durable database leases, but still follows the agent deletion fence.
   if (
@@ -644,7 +651,6 @@ export function closeOpenClawAgentDatabasesForTest(rootPath?: string): void {
 }
 
 export {
-  OPENCLAW_AGENT_DB_OPEN_HANDLE_CAP,
   closeOpenClawAgentDatabaseByPath,
   closeOpenClawAgentDatabases,
   closeOpenClawAgentDatabasesAsync,

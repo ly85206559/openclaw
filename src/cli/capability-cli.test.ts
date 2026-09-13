@@ -330,10 +330,11 @@ vi.mock("./command-secret-targets.js", () => ({
 }));
 
 // Account-secret snapshot preparation is covered by dedicated
-// model.account-secrets.* tests; keep this command-wiring suite on the
-// pre-existing mocked world instead of loading the real secrets runtime.
-vi.mock("./capability-cli/model-local-secrets.js", () => ({
-  prepareLocalModelRunAccountSecrets: vi.fn(async () => {}),
+// model.account-secrets.* and local-runners.account-secrets tests; keep this
+// command-wiring suite on the pre-existing mocked world instead of loading the
+// real secrets runtime.
+vi.mock("./capability-cli/local-account-secrets.js", () => ({
+  prepareLocalCapabilityAccountSecrets: vi.fn(async () => {}),
 }));
 
 vi.mock("../agents/agent-scope.js", () => ({
@@ -3798,6 +3799,7 @@ describe("capability cli", () => {
     ).rejects.toThrow("exit 1");
 
     expectRuntimeErrorContains("--output is not supported for remote gateway TTS yet");
+    expect(mocks.callGateway).not.toHaveBeenCalled();
   });
 
   it.each(["local", "gateway"] as const)(

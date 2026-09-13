@@ -2,16 +2,19 @@ import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.j
 import { formatErrorMessage } from "../../infra/errors.js";
 import { readPackageVersion } from "../../infra/package-json.js";
 import { resolveManagedServiceUpdateFailureExitCode } from "../../infra/update-control-plane-sentinel.js";
+import { normalizeUpdateFailureFacts } from "../../infra/update-failure-facts.js";
 import { verifyPackageUpdateRecovery } from "../../infra/update-global.js";
 import { getUpdateRun, recordUpdateRunPhase } from "../../infra/update-run-ledger.js";
 import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
 import { readCurrentGitUpdateRecovery } from "../../infra/update-runner-git-recovery.js";
 import type { UpdateRunResult, UpdateStepResult } from "../../infra/update-runner.js";
 import { defaultRuntime } from "../../runtime.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { exitCliAfterOutput } from "../one-shot-exit.js";
 import { printResult } from "./progress.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
+import { UpdateCommandRecoveryPendingError } from "./update-command-recovery.js";
 import {
   recordUpdateResultNextAction,
   UnreportedUpdateAdmissionOutcome,
@@ -73,7 +76,10 @@ export async function withUpdateCommandTerminalResult<T>(
     const result = await owner.publish("error" in outcome ? outcome.error : undefined);
     if ("error" in outcome) {
       const failure = outcome.error;
-      if (failure instanceof UpdateCommandPendingRecoveryFailure) {
+      if (
+        failure instanceof UpdateCommandPendingRecoveryFailure ||
+        failure instanceof UpdateCommandRecoveryPendingError
+      ) {
         // Publication does not restore authority for outer failure triage.
         throw new UpdateCommandFinalizedRecoveryFailure(result);
       }
@@ -130,11 +136,14 @@ export async function resolveSettledUpdateCommandResult(
   // The mutation owner is now closed. This is diagnostic publication only,
   // never authority to reopen displaced state or replace another terminal row.
   try {
-    await assertUpdateRecoveryAdmission({
-      env: params.ownedManagedUpdateEnv ?? params.opts.run?.env,
-    });
+    const env = params.ownedManagedUpdateEnv ?? params.opts.run?.env;
+    // Keep the first target stable if selectors change during admission.
+    const targetPath = resolveOpenClawStateSqlitePath(env);
+    await assertUpdateRecoveryAdmission({ env, path: targetPath });
     if (params.opts.run) {
-      await assertUpdateRecoveryAdmission({ env: params.opts.run.env });
+      if (resolveOpenClawStateSqlitePath(params.opts.run.env) !== targetPath) {
+        await assertUpdateRecoveryAdmission({ env: params.opts.run.env });
+      }
       const prior = getUpdateRun(params.opts.run.runId, { env: params.opts.run.env });
       if (prior && prior.status !== "running" && settlementFailed) {
         throw new Error("Update history was already finalized by another owner.");
@@ -269,7 +278,24 @@ async function publishPreMutationUpdateOutcome(
       mode: params.installKind === "git" ? "git" : "unknown",
       root: params.root,
       reason: params.reason,
-      steps: [],
+      steps:
+        outcome.status === "error"
+          ? [
+              {
+                name: params.reason,
+                command: "openclaw update",
+                cwd: params.root,
+                durationMs: 0,
+                exitCode: 1,
+                failureFacts: normalizeUpdateFailureFacts(
+                  params.failureFacts ?? [
+                    { check: params.reason, code: params.reason, message: params.message },
+                  ],
+                  run?.env,
+                ),
+              },
+            ]
+          : [],
       ...(outcome.status === "skipped"
         ? { before: { version: await readPackageVersion(params.root) } }
         : {}),
