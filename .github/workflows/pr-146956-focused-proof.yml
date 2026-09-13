@@ -36,6 +36,6 @@ jobs:
         run: >-
           node scripts/run-vitest.mjs run
           test/openclaw-launcher.e2e.test.ts
-          -t "preserves foreground Gateway shutdown grace with compile cache"
+          -t "preserves foreground Gateway shutdown grace with packaged compile cache"
       - name: Check patch whitespace
         run: git diff --check ${{ inputs.target_sha }}^ ${{ inputs.target_sha }}
