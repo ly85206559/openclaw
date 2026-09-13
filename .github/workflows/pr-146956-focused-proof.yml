@@ -27,10 +27,15 @@ jobs:
         run: corepack enable
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
-      - name: Run focused launcher tests
+      - name: Run runtime recovery shutdown regression
         run: >-
           node scripts/run-vitest.mjs run
           src/infra/node-runtime-recovery.test.ts
+          -t "leaves foreground Gateway shutdown inside its drain budget"
+      - name: Run packaged launcher shutdown regression
+        run: >-
+          node scripts/run-vitest.mjs run
           test/openclaw-launcher.e2e.test.ts
+          -t "preserves foreground Gateway shutdown grace with compile cache"
       - name: Check patch whitespace
         run: git diff --check ${{ inputs.target_sha }}^ ${{ inputs.target_sha }}
