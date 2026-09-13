@@ -961,7 +961,7 @@ describe("runtime recovery child shutdown", () => {
 
       listener?.("SIGTERM");
       expect(kill).toHaveBeenCalledExactlyOnceWith("SIGTERM");
-      vi.advanceTimersByTime(3_000);
+      vi.advanceTimersByTime(2_500);
       expect(kill).toHaveBeenCalledTimes(1);
 
     } finally {
