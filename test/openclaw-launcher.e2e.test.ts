@@ -1347,7 +1347,13 @@ describe("openclaw launcher", () => {
       );
       const launcher = spawn(
         process.execPath,
-        [path.join(fixtureRoot, "openclaw.mjs"), "gateway", "run"],
+        [
+          path.join(fixtureRoot, "openclaw.mjs"),
+          "--profile",
+          "fixture",
+          "gateway",
+          "run",
+        ],
         {
           cwd: fixtureRoot,
           env: launcherEnv({ NODE_COMPILE_CACHE: path.join(fixtureRoot, ".node-cache") }),
