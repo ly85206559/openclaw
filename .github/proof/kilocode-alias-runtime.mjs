@@ -110,11 +110,18 @@ try {
   const freshStatus = JSON.parse((await runCli(["models", "status", "--json"], env)).stdout);
   assert.equal(freshStatus.defaultModel, `${canonicalProvider}/${model}`);
   const canonicalListed = listedModel(
-    (await runCli(["models", "list", "--provider", canonicalProvider, "--json"], env)).stdout,
+    (
+      await runCli(
+        ["models", "list", "--provider", canonicalProvider, "--refresh", "--json"],
+        env,
+      )
+    ).stdout,
     canonicalProvider,
   );
   const aliasListed = listedModel(
-    (await runCli(["models", "list", "--provider", aliasProvider, "--json"], env)).stdout,
+    (
+      await runCli(["models", "list", "--provider", aliasProvider, "--refresh", "--json"], env)
+    ).stdout,
     aliasProvider,
   );
 
