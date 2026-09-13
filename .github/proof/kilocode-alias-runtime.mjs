@@ -157,7 +157,7 @@ try {
   );
   assert.equal(readback.baseUrl, baseUrl);
   assert.equal(readback.api, "openai-completions");
-  assert.equal(readback.headers["X-Kilocode-Proof"], "saved-alias-route");
+  assert.equal(readback.headers["X-Kilocode-Proof"], "__OPENCLAW_REDACTED__");
 
   const savedStatus = JSON.parse((await runCli(["models", "status", "--json"], env)).stdout);
   assert.equal(savedStatus.defaultModel, `${aliasProvider}/${model}`);
@@ -196,7 +196,7 @@ try {
       defaultModel: savedStatus.defaultModel,
       baseUrl: readback.baseUrl,
       api: readback.api,
-      routeHeader: readback.headers["X-Kilocode-Proof"],
+      routeHeaderReadback: readback.headers["X-Kilocode-Proof"],
     },
     resolvedTransport: requests[0],
     responseObserved: "ALIAS_OK",

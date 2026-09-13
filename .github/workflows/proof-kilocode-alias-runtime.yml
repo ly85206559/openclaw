@@ -70,8 +70,8 @@ jobs:
             "",
             `- Exact PR head: \`${result.exactHead}\``,
             `- Fresh config returned \`${result.fresh.canonicalListed}\` through both the canonical and alias provider filters.`,
-            `- Saved config selected \`${result.saved.defaultModel}\` and read back the custom base URL, API, and route header.`,
-            `- Local agent reached \`${result.resolvedTransport.path}\` and returned \`${result.responseObserved}\`.`,
+            `- Saved config selected \`${result.saved.defaultModel}\`, read back the custom base URL/API, and redacted its sensitive header value.`,
+            `- Local agent reached \`${result.resolvedTransport.path}\`, forwarded the saved route header, and returned \`${result.responseObserved}\`.`,
             "- Secretless: loopback provider only; no Kilocode API call or repository secret.",
           ];
           fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${lines.join("\n")}\n`);
