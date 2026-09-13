@@ -118,11 +118,11 @@ try {
     ).stdout,
     canonicalProvider,
   );
-  const aliasListed = listedModel(
+  const aliasFilterListed = listedModel(
     (
       await runCli(["models", "list", "--provider", aliasProvider, "--refresh", "--json"], env)
     ).stdout,
-    aliasProvider,
+    canonicalProvider,
   );
 
   const savedAlias = {
@@ -157,7 +157,7 @@ try {
   assert.equal(savedStatus.defaultModel, `${aliasProvider}/${model}`);
   listedModel(
     (await runCli(["models", "list", "--provider", aliasProvider, "--json"], env)).stdout,
-    aliasProvider,
+    canonicalProvider,
   );
   listedModel(
     (await runCli(["models", "list", "--provider", canonicalProvider, "--json"], env)).stdout,
@@ -182,7 +182,7 @@ try {
     fresh: {
       defaultModel: freshStatus.defaultModel,
       canonicalListed,
-      aliasListed,
+      aliasFilterListed,
     },
     saved: {
       defaultModel: savedStatus.defaultModel,

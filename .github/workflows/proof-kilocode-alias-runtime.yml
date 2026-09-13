@@ -69,7 +69,7 @@ jobs:
             "## Kilocode alias real-runtime proof",
             "",
             `- Exact PR head: \`${result.exactHead}\``,
-            `- Fresh config listed \`${result.fresh.canonicalListed}\` and \`${result.fresh.aliasListed}\`.`,
+            `- Fresh config returned \`${result.fresh.canonicalListed}\` through both the canonical and alias provider filters.`,
             `- Saved config selected \`${result.saved.defaultModel}\` and read back the custom base URL, API, and route header.`,
             `- Local agent reached \`${result.resolvedTransport.path}\` and returned \`${result.responseObserved}\`.`,
             "- Secretless: loopback provider only; no Kilocode API call or repository secret.",
