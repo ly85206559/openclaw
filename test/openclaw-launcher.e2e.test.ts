@@ -1327,6 +1327,53 @@ describe("openclaw launcher", () => {
     },
   );
 
+  it.runIf(process.platform !== "win32").each([true, false])(
+    "preserves foreground Gateway shutdown grace with compile cache (source=%s)",
+    async (sourceCheckout) => {
+      const fixtureRoot = await makeLauncherFixture(fixtureRoots);
+      if (sourceCheckout) {
+        await addGitMarker(fixtureRoot);
+      }
+      const readyPath = path.join(fixtureRoot, "gateway-ready.json");
+      const stoppedPath = path.join(fixtureRoot, "gateway-stopped.txt");
+      await fs.writeFile(
+        path.join(fixtureRoot, "dist", "entry.js"),
+        [
+          'import { writeFileSync } from "node:fs";',
+          `process.on("SIGTERM", () => setTimeout(() => { writeFileSync(${JSON.stringify(stoppedPath)}, "stopped"); process.exit(0); }, 3025));`,
+          `writeFileSync(${JSON.stringify(readyPath)}, JSON.stringify({ pid: process.pid }));`,
+          "setInterval(() => {}, 1000);",
+        ].join("\n"),
+      );
+      const launcher = spawn(
+        process.execPath,
+        [path.join(fixtureRoot, "openclaw.mjs"), "gateway", "run"],
+        {
+          cwd: fixtureRoot,
+          env: launcherEnv({ NODE_COMPILE_CACHE: path.join(fixtureRoot, ".node-cache") }),
+          stdio: "ignore",
+        },
+      );
+      let ownerPid: number | undefined;
+      try {
+        ownerPid = (await waitForJsonFile<{ pid: number }>(readyPath, 5000)).pid;
+        launcher.kill("SIGTERM");
+        await expect(waitForProcessExit(launcher, "foreground Gateway", 5000)).resolves.toEqual({
+          code: 0,
+          signal: null,
+        });
+        await expect(fs.readFile(stoppedPath, "utf8")).resolves.toBe("stopped");
+        expect(isProcessAlive(ownerPid)).toBe(false);
+      } finally {
+        for (const pid of [ownerPid, launcher.pid]) {
+          if (isProcessAlive(pid)) {
+            process.kill(pid!, "SIGKILL");
+          }
+        }
+      }
+    },
+  );
+
   it.runIf(process.platform !== "win32").each([
     { signal: "SIGINT" as const, target: "launcher" },
     { signal: "SIGTERM" as const, target: "launcher" },

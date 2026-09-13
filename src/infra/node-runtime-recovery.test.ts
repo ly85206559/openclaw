@@ -9,7 +9,11 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
-import { isUsableNode, recoverNodeRuntime } from "../../node-runtime-recovery.mjs";
+import {
+  isUsableNode,
+  recoverNodeRuntime,
+  runRespawnedChild,
+} from "../../node-runtime-recovery.mjs";
 import { SQLITE_CAPABILITY_PROBE } from "../../node-sqlite.mjs";
 import { buildTaskScript } from "../daemon/schtasks-layout.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
@@ -939,5 +943,30 @@ describe("candidate admission probe", () => {
 
       expect(isUsableNode(candidate)).toBe(false);
     });
+  });
+});
+
+describe("runtime recovery child shutdown", () => {
+  it("leaves foreground Gateway shutdown inside its drain budget", () => {
+    process.argv = [process.execPath, "/fixture/openclaw.mjs", "gateway", "run"];
+    const kill = vi.spyOn(child, "kill").mockReturnValue(true);
+    const existingListeners = new Set(process.listeners("SIGTERM"));
+    vi.useFakeTimers();
+    try {
+      runRespawnedChild(process.execPath, process.argv.slice(1), process.env);
+      const listener = process
+        .listeners("SIGTERM")
+        .find((candidate) => !existingListeners.has(candidate));
+      expect(listener).toBeDefined();
+
+      listener?.("SIGTERM");
+      expect(kill).toHaveBeenCalledExactlyOnceWith("SIGTERM");
+      vi.advanceTimersByTime(3_000);
+      expect(kill).toHaveBeenCalledTimes(1);
+
+      expect(() => child.emit("exit", 0, null)).toThrow(exitSentinel);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
