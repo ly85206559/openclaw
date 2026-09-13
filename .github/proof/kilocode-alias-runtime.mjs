@@ -35,7 +35,10 @@ function listedModel(output, provider) {
   const parsed = JSON.parse(output);
   assert.ok(Array.isArray(parsed.models));
   const key = `${provider}/${model}`;
-  assert.ok(parsed.models.some((entry) => entry.key === key), `missing ${key}`);
+  assert.ok(
+    parsed.models.some((entry) => entry.key === key),
+    `missing ${key}`,
+  );
   return key;
 }
 
@@ -62,7 +65,9 @@ const server = http.createServer((request, response) => {
       object: "chat.completion.chunk",
       created: 1,
       model,
-      choices: [{ index: 0, delta: { role: "assistant", content: "ALIAS_OK" }, finish_reason: null }],
+      choices: [
+        { index: 0, delta: { role: "assistant", content: "ALIAS_OK" }, finish_reason: null },
+      ],
     };
     response.writeHead(200, { "content-type": "text/event-stream" });
     response.end(
@@ -81,18 +86,22 @@ try {
   const baseUrl = `http://127.0.0.1:${address.port}/v1`;
   await fs.writeFile(
     configPath,
-    `${JSON.stringify({
-      gateway: { mode: "local" },
-      plugins: { slots: { memory: "none" } },
-      agents: {
-        defaults: {
-          workspace,
-          skipBootstrap: true,
-          skills: [],
-          model: { primary: `${canonicalProvider}/${model}` },
+    `${JSON.stringify(
+      {
+        gateway: { mode: "local" },
+        plugins: { slots: { memory: "none" } },
+        agents: {
+          defaults: {
+            workspace,
+            skipBootstrap: true,
+            skills: [],
+            model: { primary: `${canonicalProvider}/${model}` },
+          },
         },
       },
-    }, null, 2)}\n`,
+      null,
+      2,
+    )}\n`,
     "utf8",
   );
   const env = {
@@ -110,18 +119,13 @@ try {
   const freshStatus = JSON.parse((await runCli(["models", "status", "--json"], env)).stdout);
   assert.equal(freshStatus.defaultModel, `${canonicalProvider}/${model}`);
   const canonicalListed = listedModel(
-    (
-      await runCli(
-        ["models", "list", "--provider", canonicalProvider, "--refresh", "--json"],
-        env,
-      )
-    ).stdout,
+    (await runCli(["models", "list", "--provider", canonicalProvider, "--refresh", "--json"], env))
+      .stdout,
     canonicalProvider,
   );
   const aliasFilterListed = listedModel(
-    (
-      await runCli(["models", "list", "--provider", aliasProvider, "--refresh", "--json"], env)
-    ).stdout,
+    (await runCli(["models", "list", "--provider", aliasProvider, "--refresh", "--json"], env))
+      .stdout,
     canonicalProvider,
   );
 
@@ -130,15 +134,17 @@ try {
     api: "openai-completions",
     apiKey: "proof-placeholder",
     headers: { "X-Kilocode-Proof": "saved-alias-route" },
-    models: [{
-      id: model,
-      name: "Proof Kilo Auto",
-      reasoning: false,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 8192,
-      maxTokens: 1024,
-    }],
+    models: [
+      {
+        id: model,
+        name: "Proof Kilo Auto",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 8192,
+        maxTokens: 1024,
+      },
+    ],
   };
   const updates = [
     { path: "models.providers.kilo", value: savedAlias },
@@ -169,13 +175,15 @@ try {
     env,
   );
   assert.match(agent.stdout, /ALIAS_OK/);
-  assert.deepEqual(requests, [{
-    path: "/v1/chat/completions",
-    authorization: "Bearer proof-placeholder",
-    routeHeader: "saved-alias-route",
-    model,
-    stream: true,
-  }]);
+  assert.deepEqual(requests, [
+    {
+      path: "/v1/chat/completions",
+      authorization: "Bearer proof-placeholder",
+      routeHeader: "saved-alias-route",
+      model,
+      stream: true,
+    },
+  ]);
 
   const output = {
     exactHead,
