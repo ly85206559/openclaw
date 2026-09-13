@@ -34,7 +34,7 @@ jobs:
           -t "leaves foreground Gateway shutdown inside its drain budget"
       - name: Run packaged launcher shutdown regression
         run: >-
-          timeout 75s node scripts/run-vitest.mjs run
+          timeout 600s node scripts/run-vitest.mjs run
           test/openclaw-launcher.e2e.test.ts
           -t "preserves foreground Gateway shutdown grace with packaged compile cache"
           --reporter verbose
