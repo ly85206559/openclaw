@@ -1,0 +1,32 @@
+name: Proof session ID early filter
+
+on:
+  push:
+    branches:
+      - proof/session-id-early-filter-green-20260913
+
+permissions:
+  contents: read
+
+jobs:
+  focused-test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out proof commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4.2.0
+
+      - name: Verify product-head lineage
+        shell: bash
+        run: |
+          test "$(git rev-parse HEAD^)" = "fc31b4d6f34af79bc1e58e6a55a1ae47f7008817"
+          test "$(git diff --name-only HEAD^ HEAD)" = ".github/workflows/proof-session-id-early-filter.yml"
+
+      - name: Set up Node and dependencies
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          install-deps: "true"
+
+      - name: Run focused session ID resolution test
+        run: node scripts/run-vitest.mjs src/gateway/sessions-resolve.session-id.test.ts
