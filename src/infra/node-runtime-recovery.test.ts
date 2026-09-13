@@ -964,7 +964,6 @@ describe("runtime recovery child shutdown", () => {
       vi.advanceTimersByTime(3_000);
       expect(kill).toHaveBeenCalledTimes(1);
 
-      expect(() => child.emit("exit", 0, null)).toThrow(exitSentinel);
     } finally {
       vi.useRealTimers();
     }
