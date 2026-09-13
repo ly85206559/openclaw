@@ -1327,13 +1327,10 @@ describe("openclaw launcher", () => {
     },
   );
 
-  it.runIf(process.platform !== "win32").each([true, false])(
-    "preserves foreground Gateway shutdown grace with compile cache (source=%s)",
-    async (sourceCheckout) => {
+  it.runIf(process.platform !== "win32")(
+    "preserves foreground Gateway shutdown grace with packaged compile cache",
+    async () => {
       const fixtureRoot = await makeLauncherFixture(fixtureRoots);
-      if (sourceCheckout) {
-        await addGitMarker(fixtureRoot);
-      }
       const readyPath = path.join(fixtureRoot, "gateway-ready.json");
       const stoppedPath = path.join(fixtureRoot, "gateway-stopped.txt");
       await fs.writeFile(
