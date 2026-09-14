@@ -1,3 +1,4 @@
+import "../../../styles/chat/session-rail.css";
 import { html, nothing, type PropertyValues, type TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";
 import { ref } from "lit/directives/ref.js";
@@ -12,7 +13,8 @@ import { renderPanelLoadingSkeleton } from "../../../components/panel-loading-sk
 import "../../../components/tooltip.ts";
 import "../../../components/web-awesome.ts";
 import { t } from "../../../i18n/index.ts";
-import { formatDurationCompact, formatTimeAgo, formatTimeMs } from "../../../lib/format.ts";
+import { formatDurationCompact } from "../../../lib/format-duration.ts";
+import { formatTimeAgo, formatTimeMs } from "../../../lib/format.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
 import {
   type ChatObserverDisplayPreference,

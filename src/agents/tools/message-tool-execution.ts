@@ -39,6 +39,7 @@ import {
 import { createSandboxBridgeReadFile } from "../sandbox-media-paths.js";
 import type { SandboxFsBridge } from "../sandbox/fs-bridge.js";
 import { type AnyAgentTool, jsonResult, readToolStringParam } from "./common.js";
+import { captureGatewayToolCallerAssertion } from "./gateway-caller-context.js";
 import { readGatewayCallOptions } from "./gateway.js";
 import { createMessageToolDecisionRecorder } from "./message-tool-decision.js";
 import {
@@ -105,6 +106,7 @@ function resolvePollVoteEchoRoute(params: {
   currentChannelId?: string;
   currentChatType?: ChatType;
   currentMessagingTarget?: string;
+  preparedMessageToolCatalog?: PreparedMessageToolCatalog;
 }): string | undefined {
   const channel = normalizeMessageChannel(params.channel);
   if (!channel) {
@@ -112,9 +114,15 @@ function resolvePollVoteEchoRoute(params: {
   }
   let deliveryAliasTarget: string | undefined;
   try {
+    const selectedChannel = params.preparedMessageToolCatalog
+      ? params.preparedMessageToolCatalog.getChannel(channel)
+      : getChannelPlugin(channel);
     deliveryAliasTarget = resolveActionDeliveryTargetAlias(params.action, params.args, {
       channel,
-      aliasSpec: getChannelPlugin(channel)?.actions?.messageActionTargetAliases?.[params.action],
+      aliasSpec:
+        params.preparedMessageToolCatalog || selectedChannel
+          ? (selectedChannel?.actions?.messageActionTargetAliases?.[params.action] ?? null)
+          : undefined,
     });
   } catch {
     return undefined;
@@ -295,6 +303,8 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       if (signal?.aborted) {
         throw createAbortError("Message send aborted");
       }
+      const assertCallerCurrent = captureGatewayToolCallerAssertion();
+      assertCallerCurrent?.();
       // Shallow-copy so we don't mutate the original event args (used for logging/dedup).
       const params = { ...(args as Record<string, unknown>) };
       const action = readToolStringParam(params, "action", {
@@ -307,6 +317,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         action,
         params,
         accountId: requestedAccountId ?? agentAccountId,
+        preparedMessageToolCatalog,
       });
       const decisions = createMessageToolDecisionRecorder({
         actionId: toolCallId,
@@ -318,20 +329,36 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
           ? decisions.executionIdentityToken
           : undefined;
       const deliveryRunId = options?.runId ?? executionIdentityToken?.runId;
-      const trustedTurnContext =
+      const turnCapabilityParams =
         resolvedAgentId && options?.agentSessionKey
-          ? messageActionTurnCapability.resolveMessageActionTurnCapability({
+          ? {
               token: options.messageActionTurnCapability,
               agentId: resolvedAgentId,
               runId: options.runId,
               sessionKey: options.agentSessionKey,
               sessionId: options.sessionId,
-            })
+            }
           : undefined;
+      const trustedTurnContext = turnCapabilityParams
+        ? messageActionTurnCapability.resolveMessageActionTurnCapability(turnCapabilityParams)
+        : undefined;
       if (normalizeOptionalString(options?.messageActionTurnCapability) && !trustedTurnContext) {
         decisions.recordTurnCapabilityInactive();
         throw new Error("message action turn capability is no longer active");
       }
+      const assertActionCurrent = () => {
+        assertCallerCurrent?.();
+        if (signal?.aborted) {
+          throw createAbortError("Message action aborted");
+        }
+        if (
+          trustedTurnContext &&
+          turnCapabilityParams &&
+          !messageActionTurnCapability.resolveMessageActionTurnCapability(turnCapabilityParams)
+        ) {
+          throw new Error("message action turn capability is no longer active");
+        }
+      };
       if (options?.sourceReplyOnly) {
         decisions.runBoundary(() =>
           enforceSourceReplyOnlyMessageAction({
@@ -463,6 +490,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
           mode: "enforce_resolved",
         })
       ).resolvedConfig;
+      assertActionCurrent();
 
       const accountId = explicitAccountId ?? agentAccountId;
       const pollVoteEchoRoute = resolvePollVoteEchoRoute({
@@ -472,6 +500,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         accountId,
         currentChannelId: effectiveCurrentChannel.currentChannelId,
         currentMessagingTarget: effectiveCurrentChannel.currentMessagingTarget,
+        preparedMessageToolCatalog,
       });
       const recentPollVote = pollEchoSessionKey
         ? recentPollVoteBySession.get(pollEchoSessionKey)
@@ -583,6 +612,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
               requesterSenderId: trustedTurnContext?.requesterSenderId,
               toolContext: trustedTurnContext?.toolContext,
             },
+            assertDirectAdapterHandoff: assertActionCurrent,
             senderIsOwner: options?.senderIsOwner,
             conversationReadOrigin: options?.conversationReadOrigin,
             workspaceDir: options?.workspaceDir,

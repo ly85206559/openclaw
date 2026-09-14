@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 import { closePreparedModelRuntimeSnapshots } from "../agents/prepared-model-runtime.lifecycle.js";
 import { isNixMode, resolveIsConfigReadOnly } from "../config/paths.js";
 import { clearGatewayAgentCliShim } from "../infra/openclaw-cli-shim.js";
@@ -229,6 +230,9 @@ async function createGatewayKernelWithSdkHost(
       }),
     );
     lifecycleRuntime = preparedLifecycleRuntime;
+    // Retain teardown first. A timer turn lets I/O run before more cached imports.
+    await delay(0, undefined, { signal: runtime.connectionWork.signal });
+    runtime.connectionWork.signal.throwIfAborted();
     if (bootstrap.cfgAtStart.gateway?.tls?.enabled && !runtime.gatewayTls.enabled) {
       throw new Error(runtime.gatewayTls.error ?? "gateway tls: failed to enable");
     }
@@ -272,7 +276,9 @@ async function createGatewayKernelWithSdkHost(
       kernelState?.mentionInbox.dispose();
       await sdkResourceHost.drainWork();
       const cleanupErrors: unknown[] = [];
-      const releaseMetadata = async (retireRegistry?: () => Promise<void>) => {
+      const releaseMetadata = async (
+        retireRegistry?: Parameters<typeof pluginMetadata.close>[1],
+      ) => {
         try {
           await sdkResourceHost.close();
         } catch (cleanupError) {
@@ -281,7 +287,7 @@ async function createGatewayKernelWithSdkHost(
           }
           cleanupErrors.push(cleanupError);
         }
-        await pluginMetadata.close(async (retire) => {
+        return pluginMetadata.close(async (retire) => {
           await closePreparedModelRuntimeSnapshots();
           await retire();
           for (const cleanup of [clearGatewayAgentCliShim, clearSecretsRuntimeSnapshotState]) {

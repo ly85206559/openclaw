@@ -106,10 +106,17 @@ export type StatusScanOverviewResult = {
     | "gatewaySelf"
     | "gatewayCallOverrides"
   >;
-  runtimeDegradation: Pick<
-    StatusSummary,
-    "degradedSecretOwners" | "degradedPlugins" | "startupMigrationWarning" | "secretEgressProxy"
-  > | null;
+  runtimeDegradation:
+    | (Pick<
+        StatusSummary,
+        | "degradedSecretOwners"
+        | "degradedPlugins"
+        | "startupMigrationWarning"
+        | "secretEgressProxy"
+        | "sqliteWal"
+      > &
+        Partial<Pick<StatusSummary, "heartbeat">>)
+    | null;
   channelsStatus: unknown;
   channelIssues: ReturnType<typeof collectChannelStatusIssuesFn>;
   channels: Awaited<ReturnType<typeof buildChannelsTableFn>>;
@@ -296,6 +303,9 @@ export async function collectStatusScanOverview(params: {
           degradedPlugins: status.degradedPlugins ?? [],
           startupMigrationWarning: status.startupMigrationWarning,
           secretEgressProxy: status.secretEgressProxy,
+          sqliteWal: status.sqliteWal,
+          // The Gateway owns route readiness; CLI channel runtimes stay unloaded.
+          ...(status.heartbeat ? { heartbeat: status.heartbeat } : {}),
         }
       : null;
   }

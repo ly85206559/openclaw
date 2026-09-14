@@ -622,6 +622,7 @@ export async function executeMessagePlugin(
     agentId,
     gateway,
     toolContext: authorization !== undefined ? authorization.toolContext : input.toolContext,
+    assertDirectAdapterHandoff: input.assertDirectAdapterHandoff,
     dryRun,
     ...(input.onDeliveryResult
       ? {

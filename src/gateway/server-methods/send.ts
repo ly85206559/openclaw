@@ -1040,7 +1040,10 @@ export const sendHandlers: GatewayRequestHandlers = {
             canonicalAction &&
             request.action === "send" &&
             !normalizeOptionalString(request.params.target) &&
-            !actionHasTarget("send", request.params, { channel }) &&
+            !actionHasTarget("send", request.params, {
+              channel,
+              aliasSpec: plugin.actions?.messageActionTargetAliases?.send ?? null,
+            }) &&
             !resolveImplicitMessageActionTarget(trustedContext.toolContext)
           ) {
             // Native sends could use account defaults without a target. Resolve that
@@ -1148,10 +1151,10 @@ export const sendHandlers: GatewayRequestHandlers = {
             toolContext: trustedContext.toolContext,
             dryRun: false,
             gatewayClientScopes,
+            assertDirectAdapterHandoff,
             ...(request.action === "send"
               ? {
                   onPlatformSendDispatch,
-                  assertDirectAdapterHandoff,
                   // Recovery cannot retain a live run's closure-bound send authority.
                   skipQueue: client?.internal?.agentRuntimeIdentity !== undefined,
                 }

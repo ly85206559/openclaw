@@ -17,6 +17,7 @@ import { createCrustaceanSlug } from "../session-slug.js";
 import { resolveWorktreeBase } from "./base-ref.js";
 import {
   directorySizeBytes,
+  estimateWorktreeCheckoutTransitionBytes,
   estimateWorktreeGitBytes,
   requireWorktreeDiskSpace,
   WORKTREE_SETUP_HEADROOM_BYTES,
@@ -26,6 +27,11 @@ import {
   collectWorktreeTemplates,
   WORKTREE_TEMPLATE_DIRECTORY,
 } from "./checkout.js";
+import {
+  ensureEmptyWorktreeSource,
+  removeUnusedEmptyWorktreeSource,
+  resolveEmptyWorktreeSourceRoot,
+} from "./empty-source.js";
 import { WorktreeRepositoryError } from "./errors.js";
 import { lockState, lockWorktreeForProcess, unlockWorktree } from "./git-lock.js";
 import {
@@ -35,6 +41,7 @@ import {
   requireGit,
   resolveGitRepositoryPaths,
   runGit,
+  WORKTREE_CHECKOUT_TIMEOUT_MS,
   type GitResult,
 } from "./git.js";
 import { worktreeOwnerMatches } from "./owner.js";
@@ -414,34 +421,90 @@ export class ManagedWorktreeService {
   async create(params: CreateManagedWorktreeParams): Promise<ManagedWorktreeRecord> {
     params.signal?.throwIfAborted();
     const repository = await resolveRepository(params.repoRoot);
-    return await this.withAllocationLease(params, async (guard) => {
-      if (params.ownerId) {
-        const existing = findLiveRegistryWorktreeByOwner(
-          this.env,
-          params.ownerKind ?? "manual",
-          params.ownerId,
+    return await this.withAllocationLease(
+      params,
+      async (guard) => await this.createForOwner({ ...params, ...guard }, repository),
+    );
+  }
+
+  async createEmpty(
+    params: Omit<CreateManagedWorktreeParams, "repoRoot" | "baseRef" | "checkoutCommit"> & {
+      ownerKind: "session";
+      ownerId: string;
+    },
+  ): Promise<ManagedWorktreeRecord> {
+    let sourceRoot: string | undefined;
+    try {
+      return await this.withAllocationLease(params, async (guard) => {
+        const repoRoot = await ensureEmptyWorktreeSource({
+          env: this.env,
+          ownerId: params.ownerId,
+          signal: guard.signal,
+          commitGuard: () => guard.commitGuard?.(),
+        });
+        sourceRoot = repoRoot;
+        const repository = await resolveRepository(repoRoot);
+        return await this.createForOwner(
+          { ...params, ...guard, repoRoot, baseRef: "main", runSetupScript: false },
+          repository,
         );
-        if (existing && (await worktreePathExists(existing.path))) {
-          const validated = await this.rebindLiveRepository(existing, guard);
-          if (validated.repoRoot !== repository.repoRoot) {
-            throw new Error(
-              `worktree owner ${params.ownerKind ?? "manual"} ${params.ownerId} is already bound to another repository`,
-            );
-          }
-          guard.commitGuard?.();
-          return validated;
-        }
-        if (existing) {
-          guard.commitGuard?.();
-          updateRegistryWorktree(this.env, existing.id, { removedAt: this.now() });
+      });
+    } catch (error) {
+      if (sourceRoot) {
+        const repoRoot = sourceRoot;
+        try {
+          // Cancellation retires caller authority. Reacquire allocation ownership
+          // before cleaning a source that never received a registry record.
+          await this.withAllocationLease({}, async (guard) => {
+            await removeUnusedEmptyWorktreeSource({
+              env: this.env,
+              record: { repoRoot, ownerKind: "session", ownerId: params.ownerId },
+              signal: guard.signal,
+              commitGuard: () => guard.commitGuard?.(),
+            });
+          });
+        } catch (cleanupError) {
+          throw new AggregateError(
+            [error, cleanupError],
+            `${String(error)}\nEmpty workspace cleanup failed: ${String(cleanupError)}`,
+            { cause: cleanupError },
+          );
         }
       }
-      return await this.createForRepository(
-        { ...params, ...guard },
-        repository,
-        params.name ?? params.suggestedName ?? createCrustaceanSlug(),
+      throw error;
+    }
+  }
+
+  private async createForOwner(
+    params: CreateManagedWorktreeParams,
+    repository: ResolvedRepository,
+  ): Promise<ManagedWorktreeRecord> {
+    if (params.ownerId) {
+      const existing = findLiveRegistryWorktreeByOwner(
+        this.env,
+        params.ownerKind ?? "manual",
+        params.ownerId,
       );
-    });
+      if (existing && (await worktreePathExists(existing.path))) {
+        const validated = await this.rebindLiveRepository(existing, params);
+        if (validated.repoRoot !== repository.repoRoot) {
+          throw new Error(
+            `worktree owner ${params.ownerKind ?? "manual"} ${params.ownerId} is already bound to another repository`,
+          );
+        }
+        params.commitGuard?.();
+        return validated;
+      }
+      if (existing) {
+        params.commitGuard?.();
+        updateRegistryWorktree(this.env, existing.id, { removedAt: this.now() });
+      }
+    }
+    return await this.createForRepository(
+      params,
+      repository,
+      params.name ?? params.suggestedName ?? createCrustaceanSlug(),
+    );
   }
 
   private async withAllocationLease<T>(
@@ -790,8 +853,9 @@ export class ManagedWorktreeService {
       const result = await this.withAllocationLease(params, async (guard) => {
         timing?.markPhase();
         try {
-          return await this.removeWithAllocation({ ...params, ...guard });
+          return await this.removeWithAllocation({ ...params, ...guard }, timing);
         } finally {
+          timing?.markRemovalStage();
           timing?.markPhase();
         }
       });
@@ -804,7 +868,9 @@ export class ManagedWorktreeService {
 
   private async removeWithAllocation(
     params: RemoveWorktreeParams,
+    timing: ReturnType<typeof startGitOperationTiming>,
   ): Promise<RemoveManagedWorktreeResult> {
+    timing?.markRemovalStage("preparation");
     params.signal?.throwIfAborted();
     params.commitGuard?.();
     let record = this.requireLiveRecord(params.id);
@@ -833,6 +899,7 @@ export class ManagedWorktreeService {
           killProcessTree: true,
         });
       }
+      timing?.markRemovalStage("snapshot");
       let snapshotRef = record.snapshotRef;
       let snapshotError: string | undefined;
       try {
@@ -908,6 +975,7 @@ export class ManagedWorktreeService {
           throw new WorktreeSnapshotError(snapshotError, { cause: error });
         }
       }
+      timing?.markRemovalStage("checkoutRemoval");
       params.signal?.throwIfAborted();
       params.commitGuard?.();
       // Once admitted, let deletion settle; cancellation could leave a partial checkout
@@ -920,6 +988,7 @@ export class ManagedWorktreeService {
       if (removed.code !== 0) {
         throw commandError("git worktree remove", removed);
       }
+      timing?.markRemovalStage("finalization");
       params.commitGuard?.();
       const branchDelete = await runGit(record.repoRoot, ["branch", "-D", record.branch], {
         signal: params.signal,
@@ -953,6 +1022,7 @@ export class ManagedWorktreeService {
         ...(snapshotError ? { snapshotError } : {}),
       };
     } catch (error) {
+      timing?.markRemovalStage("finalization");
       abortWorktreeRemoval(this.env, record.id, claimToken);
       throw error;
     }
@@ -987,32 +1057,39 @@ export class ManagedWorktreeService {
       (sum, entry) => sum + entry.chunks * SNAPSHOT_CHUNK_BYTES,
       0,
     );
-    const gitBytes = await estimateWorktreeGitBytes(record.repoRoot, record.snapshotRef, {
+    const gitOptions = {
       signal: params.signal,
-      assertCurrent: params.commitGuard,
-    });
+      beforeRun: params.commitGuard,
+      killProcessTree: true,
+    };
+    const snapshot = await requireGit(
+      record.repoRoot,
+      ["rev-parse", "--verify", `${record.snapshotRef}^{commit}`],
+      gitOptions,
+    );
     let parent: string;
     try {
-      parent = await requireGit(record.repoRoot, ["rev-parse", `${record.snapshotRef}^`]);
+      parent = await requireGit(record.repoRoot, ["rev-parse", `${snapshot}^`], gitOptions);
     } catch (error) {
-      const shallow = await runGit(record.repoRoot, ["rev-parse", "--is-shallow-repository"]);
+      const shallow = await runGit(
+        record.repoRoot,
+        ["rev-parse", "--is-shallow-repository"],
+        gitOptions,
+      );
       if (shallow.code !== 0 || shallow.stdout.trim() !== "true") {
-        throw error;
-      }
-      const snapshot = await runGit(record.repoRoot, [
-        "rev-parse",
-        "--verify",
-        `${record.snapshotRef}^{commit}`,
-      ]);
-      if (snapshot.code !== 0) {
         throw error;
       }
       // Origin cannot deepen a local-only snapshot that a later fetch made shallow.
       throw new Error(
-        `Cannot restore snapshot ${snapshot.stdout.trim()} in ${record.repoRoot}: shallow clone boundary; run \`git fetch --unshallow\` in ${record.repoRoot}. If the snapshot remains shallow, recover its parent from the original repository before retrying.`,
+        `Cannot restore snapshot ${snapshot} in ${record.repoRoot}: shallow clone boundary; run \`git fetch --unshallow\` in ${record.repoRoot}. If the snapshot remains shallow, recover its parent from the original repository before retrying.`,
         { cause: error },
       );
     }
+    const { targetBytes, changedBytes, requiresFullCheckout } =
+      await estimateWorktreeCheckoutTransitionBytes(record.repoRoot, parent, snapshot, {
+        signal: params.signal,
+        assertCurrent: params.commitGuard,
+      });
     params.commitGuard?.();
     await fs.mkdir(path.dirname(record.path), { recursive: true });
     params.commitGuard?.();
@@ -1024,12 +1101,15 @@ export class ManagedWorktreeService {
       commonDir: repository.commonDir,
       worktreeRoot: path.dirname(path.dirname(record.path)),
       destination: record.path,
-      base: record.snapshotRef,
+      base: parent,
+      branch: record.branch,
+      deferGitCheckout: true,
       requireSpace: (cloneBytes) =>
         this.requireAllocationSpace(
           record.path,
           repository,
-          (cloneBytes ?? 2 * gitBytes) + 2 * provisionedBytes,
+          (cloneBytes === undefined ? 2 * targetBytes : cloneBytes + 2 * changedBytes) +
+            2 * provisionedBytes,
         ),
       signal: params.signal,
       commitGuard: () => params.commitGuard?.(),
@@ -1037,29 +1117,36 @@ export class ManagedWorktreeService {
     if (added.code !== 0) {
       throw commandError("git worktree add", added);
     }
-    let branchCreated = false;
     let restoredProvisionedPaths: string[];
     try {
-      // Branch history stays at the original commit; the snapshot is restored as working state.
+      // Reuse the original source template. Git replaces only snapshot differences,
+      // then resets the index so saved additions are untracked and edits unstaged.
+      // The synthetic snapshot never becomes the branch's HEAD or a cached template.
+      const materializationBytes = added.templateCloned ? changedBytes : targetBytes;
+      const checkoutOptions = {
+        ...gitOptions,
+        beforeRun: () => {
+          params.commitGuard?.();
+          this.requireAllocationSpace(
+            record.path,
+            repository,
+            2 * materializationBytes + 2 * provisionedBytes,
+          );
+        },
+        timeoutMs: WORKTREE_CHECKOUT_TIMEOUT_MS,
+      };
+      if (requiresFullCheckout && added.templateCloned) {
+        // Even checkout-index --force skips stat-matching files. Remove the owned
+        // source files first so Git must apply the snapshot's attributes to every blob.
+        await requireGit(
+          record.path,
+          ["rm", "-r", "--force", "--ignore-unmatch", "--", "."],
+          checkoutOptions,
+        );
+      }
+      await requireGit(record.path, ["read-tree", "--reset", "-u", snapshot], checkoutOptions);
       params.commitGuard?.();
-      await requireGit(record.repoRoot, ["branch", record.branch, parent], {
-        signal: params.signal,
-        beforeRun: params.commitGuard,
-        killProcessTree: true,
-      });
-      branchCreated = true;
-      params.commitGuard?.();
-      await requireGit(record.path, ["symbolic-ref", "HEAD", `refs/heads/${record.branch}`], {
-        signal: params.signal,
-        beforeRun: params.commitGuard,
-        killProcessTree: true,
-      });
-      params.commitGuard?.();
-      await requireGit(record.path, ["reset"], {
-        signal: params.signal,
-        beforeRun: params.commitGuard,
-        killProcessTree: true,
-      });
+      await requireGit(record.path, ["reset"], gitOptions);
       params.commitGuard?.();
       this.requireAllocationSpace(record.path, repository, 2 * provisionedBytes);
       await restoreProvisionedFiles(
@@ -1074,12 +1161,10 @@ export class ManagedWorktreeService {
       restoredProvisionedPaths = provisionedState.map((state) => state.path);
     } catch (error) {
       const removed = await runGit(record.repoRoot, ["worktree", "remove", "--force", record.path]);
-      const branchDeleted = branchCreated
-        ? await runGit(record.repoRoot, ["branch", "-D", record.branch])
-        : undefined;
-      if (removed.code !== 0 || (branchDeleted && branchDeleted.code !== 0)) {
+      const branchDeleted = await runGit(record.repoRoot, ["branch", "-D", record.branch]);
+      if (removed.code !== 0 || branchDeleted.code !== 0) {
         const failure =
-          branchDeleted && removed.code === 0
+          removed.code === 0
             ? commandError("git branch -D", branchDeleted)
             : commandError("git worktree remove", removed);
         throw new Error(`${String(error)}\nrestore cleanup failed: ${failure.message}`, {
@@ -1274,11 +1359,41 @@ export class ManagedWorktreeService {
         continue;
       }
       try {
-        if (record.snapshotRef && (await worktreePathExists(record.repoRoot))) {
-          await requireGit(record.repoRoot, ["update-ref", "-d", record.snapshotRef]);
+        const emptySource = await resolveEmptyWorktreeSourceRoot({ env: this.env, record });
+        const pruneSnapshot = async (guard: WorktreeMutationGuard = {}) => {
+          const current = getRegistryWorktree(this.env, record.id);
+          if (
+            !current ||
+            current.removedAt === undefined ||
+            now - current.removedAt <= SNAPSHOT_RETENTION_MS
+          ) {
+            return;
+          }
+          if (emptySource) {
+            await removeUnusedEmptyWorktreeSource({
+              env: this.env,
+              record: current,
+              signal: guard.signal,
+              commitGuard: () => guard.commitGuard?.(),
+            });
+          }
+          if (current.snapshotRef && (await worktreePathExists(current.repoRoot))) {
+            await requireGit(current.repoRoot, ["update-ref", "-d", current.snapshotRef], {
+              signal: guard.signal,
+              beforeRun: guard.commitGuard,
+            });
+          }
+          guard.commitGuard?.();
+          deleteRegistryWorktree(this.env, current.id);
+          snapshotsPruned += 1;
+        };
+        // Only owned source deletion must serialize against checkout allocation.
+        // Ordinary snapshot expiry must still work when allocation is unavailable.
+        if (emptySource) {
+          await this.withAllocationLease({}, pruneSnapshot);
+        } else {
+          await pruneSnapshot();
         }
-        deleteRegistryWorktree(this.env, record.id);
-        snapshotsPruned += 1;
       } catch (error) {
         log.warn(`snapshot retention failed for ${record.id}: ${String(error)}`);
       }

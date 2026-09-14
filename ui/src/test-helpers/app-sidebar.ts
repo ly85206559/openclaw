@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, vi } from "vitest";
 import type {
-  PreservedSessionWorktree,
   SessionCatalogPullRequestSummary,
   SessionsCatalogListResult,
   SessionsPatchManyParams,
@@ -28,6 +27,7 @@ import {
   type SessionListOptions,
 } from "../lib/sessions/index.ts";
 import { reconcileSessionHistory } from "../lib/sessions/reconcile.ts";
+import { createSessionArchiveState } from "../lib/sessions/session-archive-state.ts";
 import {
   createSidebarContextLifecycle,
   disposeSidebarContextLifecycles,
@@ -105,10 +105,6 @@ export type SidebarLifecycleState = HTMLElement & {
   onToggleSidebar?: () => void;
   onOpenNewSession?: (agentId: string, target?: { catalogId: string }) => void;
   variant: "panel" | "drawer";
-};
-
-export type LobsterPetElement = HTMLElement & {
-  runOutcome: "ok" | "error" | "aborted";
 };
 
 export type TestSessionMenu = HTMLElement & {
@@ -244,22 +240,19 @@ export function successfulSessionPatch(key: string) {
   };
 }
 
-export function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, resolve, reject };
-}
-
 export function createSessionsHarness(agentId: string, keys: string[]) {
   let state = createSessionState(agentId, keys);
   let canonicalListRevision = 1;
   const listeners = new Set<(next: SessionState) => void>();
   const pullRequestSummaries = new Map<string, SessionCatalogPullRequestSummary>();
-  const archiveVisibilityByKey = new Map<string, "pending" | "archived">();
+  const archiveState = createSessionArchiveState(
+    (key) => state.result?.sessions.find((row) => row.key === key),
+    () => {
+      for (const listener of listeners) {
+        listener(state);
+      }
+    },
+  );
   const groupsPut = vi.fn(() => Promise.resolve<SessionGroupMutationResult>("completed"));
   const groupsRename = vi.fn(() => Promise.resolve<SessionGroupMutationResult>("completed"));
   const groupsDelete = vi.fn(() => Promise.resolve<SessionGroupMutationResult>("completed"));
@@ -270,11 +263,11 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
   const deleteSession = vi.fn((): Promise<SessionDeleteResult> =>
     Promise.resolve({ deleted: false }),
   );
-  const deleteMany = vi.fn(() =>
+  const deleteMany = vi.fn<SessionCapability["deleteMany"]>(() =>
     Promise.resolve({
-      deleted: [] as string[],
-      errors: [] as string[],
-      preservedWorktrees: [] as PreservedSessionWorktree[],
+      deleted: [],
+      errors: [],
+      preservedWorktrees: [],
     }),
   );
   const refresh = vi.fn((_options?: Parameters<SessionCapability["refresh"]>[0]) =>
@@ -370,19 +363,8 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     groupsDelete,
     create,
     patch,
-    archiveVisibility: (key: string) => archiveVisibilityByKey.get(key),
-    setArchivePending(key: string, pending: boolean) {
-      if (pending) {
-        archiveVisibilityByKey.set(key, "pending");
-      } else if (state.result?.sessions.find((row) => row.key === key)?.archived) {
-        archiveVisibilityByKey.set(key, "archived");
-      } else {
-        archiveVisibilityByKey.delete(key);
-      }
-      for (const listener of listeners) {
-        listener(state);
-      }
-    },
+    archiveVisibility: archiveState.visibility,
+    beginArchive: archiveState.beginPending,
     assignOwner,
     patchMany,
     deletionState: () => undefined,
@@ -521,8 +503,8 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     publish,
     publishList(statePatch: Partial<SessionState>) {
       for (const row of statePatch.result?.sessions ?? []) {
-        if (row.archived !== true && archiveVisibilityByKey.get(row.key) === "archived") {
-          archiveVisibilityByKey.delete(row.key);
+        if (row.archived === true || archiveState.visibility(row.key) === "archived") {
+          archiveState.observe(row.key, row.archived === true, row);
         }
       }
       canonicalListRevision += 1;
@@ -564,11 +546,12 @@ export function createContext(
     ensureList: async (): Promise<AgentsListResult | null> => agents.state.agentsList,
     subscribe: () => () => undefined,
   };
-  const { theme, agentSelection } = createSidebarContextLifecycle(gateway, agents, selectedAgentId);
-  sidebarSessionGatewayBindings.get(sessions)?.(gateway, agentSelection);
+  const lifecycle = createSidebarContextLifecycle(gateway, agents, selectedAgentId);
+  sidebarSessionGatewayBindings.get(sessions)?.(gateway, lifecycle.agentSelection);
   return {
     config: createApplicationConfigCapability({ resourceBasePath: "" }),
     gateway,
+    ...lifecycle,
     sessions,
     plugins: {
       registrations: () => [],
@@ -579,8 +562,6 @@ export function createContext(
     placementStartup: { pause: vi.fn<ApplicationContext["placementStartup"]["pause"]>() },
     agents,
     agentIdentity,
-    agentSelection,
-    theme,
     scopeUpgrade: hiddenScopeUpgradeCapability,
     overlays: {
       snapshot: { approvalQueue },

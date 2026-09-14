@@ -62,6 +62,15 @@ their structured file-log record, with cause and error-code details when
 available. Long summaries are truncated. The record retains its write timing
 and store fields.
 
+### SQLite snapshot cleanup
+
+Failed removal of a temporary read-only SQLite snapshot is recorded once by its
+cleanup owner in the structured file log, with the owned path, removal operation,
+and filesystem error code when available. These diagnostics do not write to
+subprocess stdout or stderr, so a successful read keeps its result and a failed
+update retains its original error detail. Existing required-cleanup failures
+remain errors.
+
 ### Slow agent database opens
 
 A completed physical agent-database open taking at least one second emits
@@ -96,7 +105,7 @@ pages emit no such record.
 These are wall times, not CPU time: waiting includes scheduling delays, callback
 time includes awaited work, and completion delay covers settlement after the
 callback finishes. Each source page is measured separately. Caller visibility
-filtering and delivery previews outside that page are not included. Existing
+filtering runs inside the page callback; delivery previews remain outside it. Existing
 trace context is retained when present. Emitter identity identifies the logging process/isolate, not the owner of work
 awaited by the callback. The diagnostic adds no job identifiers,
 job contents, or request parameters.
@@ -111,10 +120,10 @@ uses the existing request trace/span and reports `elapsedMs` plus fixed
 
 `sourcePageMs` and `sourcePageCount` aggregate source-page calls, including
 failed calls. `returnedCount` appears once a page is selected.
-`scopeAttemptCount` is zero for direct lists. Scoped lists allow
-three total attempts. For scoped lists, `scopeProcessingMs` is listing time
-minus source-page time: it includes visibility filtering, snapshot processing
-and scheduling between page calls. These components are already included in
+`scopeAttemptCount` is zero for direct lists and one for scoped lists. Visibility
+filtering, sorting, revision calculation, and pagination share one locked source
+operation. For scoped lists, `scopeProcessingMs` is listing time minus source-page
+time, covering work outside that operation. These components are already included in
 the listing phase and must not be added to it again.
 
 The bounded branch fields are `compact`, `previewsRequested`, and `scopeApplied`.
@@ -164,6 +173,8 @@ diagnostic sinks retain broad assignment matching.
   - Use raw regex strings (auto `gi`), or `/pattern/flags` for custom flags.
   - Matches are masked keeping the first 6 + last 4 chars (values >= 18 chars). Shorter values become `***`.
   - Defaults cover common key assignments, CLI flags, JSON fields, bearer headers, PEM blocks, popular vendor token prefixes, and payment credential field names (card number, CVC/CVV, shared payment token, payment credential).
+
+File and JSON console records finish masking before final JSON encoding. Rules run in order over decoded values, then serialized record context, with later rules seeing earlier masks. String matches retain their existing token hints so later rules can match those hints. Structured credential fields use full masks; matched numbers, booleans, and null become the JSON string `"***"`. File records retain built-in credential patterns when custom patterns are configured.
 
 Safety boundaries such as Control UI tool-call events, `sessions_history` output, diagnostics exports, provider errors, exec approval display, and Gateway WebSocket logs always redact. `logging.redactPatterns` adds deployment-specific patterns.
 

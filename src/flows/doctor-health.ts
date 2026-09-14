@@ -250,7 +250,11 @@ async function runDoctorHealthFlowWithResult(
     await maintenance?.finish(ctx.cfg);
     const warnings = normalizeUpdatePostInstallDoctorWarnings([
       ...(ctx.configResult.stateMigrationStepReceipts ?? []).flatMap((receipt) =>
-        receipt.outcome === "warning" || receipt.outcome === "skipped" ? receipt.warnings : [],
+        receipt.outcome === "warning" ||
+        receipt.outcome === "skipped" ||
+        receipt.outcome === "deferred"
+          ? receipt.warnings
+          : [],
       ),
       ...(ctx.postInstallDoctorResult?.warnings ?? []),
       ...(ctx.updateWarnings ?? []),
@@ -266,6 +270,15 @@ async function runDoctorHealthFlowWithResult(
   } catch (error) {
     const { DoctorStateMigrationRefusalError } =
       await import("../infra/state-migrations.messages.js");
+    if (error instanceof DoctorStateMigrationRefusalError) {
+      const { recordUpdateDoctorRefusal, resolveUpdateDoctorGitRecovery } =
+        await import("../commands/doctor-update-refusal.js");
+      const recovery = await resolveUpdateDoctorGitRecovery({ root, stateRepaired: true });
+      if (recovery) {
+        error.message += `\n${recovery.message}`;
+        recordUpdateDoctorRefusal(error.message);
+      }
+    }
     doctorResult = {
       status: "error",
       failureFacts:
