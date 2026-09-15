@@ -10,6 +10,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import {
+  isForegroundGatewayRunInvocation,
   isUsableNode,
   recoverNodeRuntime,
   runRespawnedChild,
@@ -943,6 +944,19 @@ describe("candidate admission probe", () => {
 
       expect(isUsableNode(candidate)).toBe(false);
     });
+  });
+});
+
+describe("foreground Gateway argv classifier", () => {
+  it.each([
+    { argv: ["node", "openclaw.mjs", "gateway", "run"], expected: true },
+    { argv: ["node", "openclaw.mjs", "gateway"], expected: true },
+    { argv: ["node", "openclaw.mjs", "--profile", "p", "gateway", "run"], expected: true },
+    { argv: ["node", "openclaw.mjs", "gateway", "run", "--port", "18789"], expected: true },
+    { argv: ["node", "openclaw.mjs", "gateway", "status"], expected: false },
+    { argv: ["node", "openclaw.mjs", "agent", "run"], expected: false },
+  ])("detects foreground Gateway invocations (%j)", ({ argv, expected }) => {
+    expect(isForegroundGatewayRunInvocation(argv)).toBe(expected);
   });
 });
 

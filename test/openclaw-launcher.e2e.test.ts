@@ -1360,13 +1360,18 @@ describe("openclaw launcher", () => {
       let ownerPid: number | undefined;
       try {
         ownerPid = (await waitForJsonFile<{ pid: number }>(readyPath, 5000)).pid;
+        const shutdownStartedAt = Date.now();
         launcher.kill("SIGTERM");
         await expect(waitForProcessExit(launcher, "foreground Gateway", 5000)).resolves.toEqual({
           code: 0,
           signal: null,
         });
+        const shutdownElapsedMs = Date.now() - shutdownStartedAt;
         await expect(fs.readFile(stoppedPath, "utf8")).resolves.toBe("stopped");
         expect(isProcessAlive(ownerPid)).toBe(false);
+        console.log(
+          `foreground Gateway real-request shutdown: launcher exit after ${shutdownElapsedMs} ms with 3025 ms child cleanup (old launcher cutoff ~2000 ms)`,
+        );
       } finally {
         for (const pid of [ownerPid, launcher.pid]) {
           if (isProcessAlive(pid)) {
