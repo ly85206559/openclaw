@@ -8,7 +8,6 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   consumeLauncherRootOptionToken,
-  isForegroundGatewayRunInvocation,
   isForegroundGmailRunInvocation,
   isNativeHookRelayInvocation,
   recoverNodeRuntime,
@@ -661,8 +660,7 @@ if (!waitingForNodeUpdateRespawn) {
 // so a timeout cannot strand a compile-cache respawn child.
 const waitingForCompileCacheRespawn =
   waitingForNodeUpdateRespawn ||
-  (!isForegroundGatewayRunInvocation(process.argv) &&
-    !isForegroundGmailRunInvocation(process.argv) &&
+  (!isForegroundGmailRunInvocation(process.argv) &&
     !(process.platform !== "win32" && isNativeHookRelayInvocation(process.argv)) &&
     (respawnWithoutCompileCacheIfNeeded() || respawnWithPackagedCompileCacheIfNeeded()));
 
