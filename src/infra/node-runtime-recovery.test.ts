@@ -10,7 +10,6 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import {
-  isForegroundGatewayRunInvocation,
   isUsableNode,
   recoverNodeRuntime,
   runRespawnedChild,
@@ -947,37 +946,67 @@ describe("candidate admission probe", () => {
   });
 });
 
-describe("foreground Gateway argv classifier", () => {
-  it.each([
-    { argv: ["node", "openclaw.mjs", "gateway", "run"], expected: true },
-    { argv: ["node", "openclaw.mjs", "gateway"], expected: true },
-    { argv: ["node", "openclaw.mjs", "--profile", "p", "gateway", "run"], expected: true },
-    { argv: ["node", "openclaw.mjs", "gateway", "run", "--port", "18789"], expected: true },
-    { argv: ["node", "openclaw.mjs", "gateway", "status"], expected: false },
-    { argv: ["node", "openclaw.mjs", "agent", "run"], expected: false },
-  ])("detects foreground Gateway invocations (%j)", ({ argv, expected }) => {
-    expect(isForegroundGatewayRunInvocation(argv)).toBe(expected);
-  });
-});
-
 describe("runtime recovery child shutdown", () => {
-  it("leaves foreground Gateway shutdown inside its drain budget", () => {
-    process.argv = [process.execPath, "/fixture/openclaw.mjs", "gateway", "run"];
+  function installRespawnListener(argvTail: string[]) {
+    process.argv = [process.execPath, "/fixture/openclaw.mjs", ...argvTail];
     const kill = vi.spyOn(child, "kill").mockReturnValue(true);
     const existingListeners = new Set(process.listeners("SIGTERM"));
+    runRespawnedChild(process.execPath, process.argv.slice(1), process.env);
+    const listener = process
+      .listeners("SIGTERM")
+      .find((candidate) => !existingListeners.has(candidate));
+    expect(listener).toBeDefined();
+    return { kill, listener };
+  }
+
+  it.each([
+    { argvTail: ["gateway", "run"] },
+    { argvTail: ["gateway"] },
+    { argvTail: ["--profile", "p", "gateway", "run"] },
+    { argvTail: ["gateway", "run", "--port", "18789"] },
+  ])("leaves foreground Gateway shutdown inside its drain budget (%j)", ({ argvTail }) => {
     vi.useFakeTimers();
     try {
-      runRespawnedChild(process.execPath, process.argv.slice(1), process.env);
-      const listener = process
-        .listeners("SIGTERM")
-        .find((candidate) => !existingListeners.has(candidate));
-      expect(listener).toBeDefined();
-
+      const { kill, listener } = installRespawnListener(argvTail);
       listener?.("SIGTERM");
       expect(kill).toHaveBeenCalledExactlyOnceWith("SIGTERM");
       vi.advanceTimersByTime(2_500);
       expect(kill).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 
+  it.each([{ argvTail: ["gateway", "status"] }, { argvTail: ["agent", "run"] }])(
+    "keeps non-foreground Gateway children on the short grace (%j)",
+    ({ argvTail }) => {
+      vi.useFakeTimers();
+      try {
+        const { kill, listener } = installRespawnListener(argvTail);
+        listener?.("SIGTERM");
+        expect(kill).toHaveBeenCalledExactlyOnceWith("SIGTERM");
+        vi.advanceTimersByTime(1_000);
+        expect(kill).toHaveBeenCalledTimes(2);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it("force-kills a stuck foreground Gateway after the drain budget", () => {
+    vi.useFakeTimers();
+    try {
+      const { kill, listener } = installRespawnListener(["gateway", "run"]);
+      listener?.("SIGTERM");
+      expect(kill).toHaveBeenCalledExactlyOnceWith("SIGTERM");
+
+      vi.advanceTimersByTime(328_000);
+      expect(kill).toHaveBeenCalledTimes(2);
+      expect(kill).toHaveBeenLastCalledWith("SIGTERM");
+
+      vi.advanceTimersByTime(1_000);
+      expect(kill).toHaveBeenCalledTimes(3);
+      expect(kill).toHaveBeenLastCalledWith("SIGKILL");
     } finally {
       vi.useRealTimers();
     }

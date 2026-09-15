@@ -74,7 +74,8 @@ export const isForegroundGmailRunInvocation = (argv) => {
 };
 
 // Mirror the entry's foreground Gateway policy without loading the built CLI.
-export const isForegroundGatewayRunInvocation = (argv) => {
+// Keep this unexported: only runRespawnedChild uses it for grace selection.
+const isForegroundGatewayRunInvocation = (argv) => {
   const args = argv.slice(2);
   let sawGateway = false;
   let subcommand;
