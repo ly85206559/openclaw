@@ -48,4 +48,12 @@ jobs:
       - name: Run standalone proof script
         run: node scripts/proof/gateway-launcher-drain-shutdown-proof.mjs
       - name: Check patch whitespace
-        run: git diff --check ${{ inputs.target_sha }}^ ${{ inputs.target_sha }}
+        env:
+          TARGET_SHA: ${{ inputs.target_sha }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${TARGET_SHA}" =~ ^[a-f0-9]{40}$ ]]; then
+            echo "target_sha must be a full lowercase commit SHA; got: ${TARGET_SHA}" >&2
+            exit 1
+          fi
+          git diff --check "${TARGET_SHA}^" "${TARGET_SHA}"

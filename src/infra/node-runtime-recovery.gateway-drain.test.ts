@@ -21,7 +21,9 @@ async function waitForReadableFile(filePath: string, timeoutMs: number): Promise
       return await fs.readFile(filePath, "utf8");
     } catch (error) {
       lastError = error;
-      await new Promise((resolve) => setTimeout(resolve, 25));
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 25);
+      });
     }
   }
   throw new Error(`timed out waiting for ${filePath}`, { cause: lastError });
