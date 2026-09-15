@@ -31,7 +31,7 @@ describe("runtime recovery Gateway drain (real child)", () => {
   it.runIf(process.platform !== "win32")(
     "lets a real recovery child finish a 3025ms SIGTERM cleanup for foreground Gateway",
     async () => {
-      await withTempDir(async (dir) => {
+      await withTempDir("openclaw-gateway-drain-", async (dir) => {
         const readyPath = path.join(dir, "ready.json");
         const stoppedPath = path.join(dir, "stopped.txt");
         const childScript = path.join(dir, "slow-sigterm-child.mjs");
