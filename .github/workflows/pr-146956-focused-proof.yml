@@ -2,11 +2,6 @@ name: PR 146956 focused launcher proof
 
 on:
   workflow_dispatch:
-    inputs:
-      target_sha:
-        description: Exact candidate commit
-        required: true
-        type: string
 
 permissions:
   contents: read
@@ -18,7 +13,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.target_sha }}
+          # Dispatch selects the branch/ref; never expand untrusted input into checkout.
+          ref: ${{ github.sha }}
           fetch-depth: 2
           persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -49,11 +45,11 @@ jobs:
         run: node scripts/proof/gateway-launcher-drain-shutdown-proof.mjs
       - name: Check patch whitespace
         env:
-          TARGET_SHA: ${{ inputs.target_sha }}
+          TARGET_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           if [[ ! "${TARGET_SHA}" =~ ^[a-f0-9]{40}$ ]]; then
-            echo "target_sha must be a full lowercase commit SHA; got: ${TARGET_SHA}" >&2
+            echo "github.sha must be a full lowercase commit SHA; got: ${TARGET_SHA}" >&2
             exit 1
           fi
           git diff --check "${TARGET_SHA}^" "${TARGET_SHA}"
