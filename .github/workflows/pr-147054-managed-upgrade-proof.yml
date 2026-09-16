@@ -1,0 +1,73 @@
+name: PR 147054 managed upgrade proof
+
+on:
+  push:
+    branches:
+      - codex/proof-pr-147054-managed-upgrade
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-147054-managed-upgrade-proof
+  cancel-in-progress: false
+
+jobs:
+  published-driver-candidate:
+    if: github.repository == 'ly85206559/openclaw'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      CI: "1"
+      EXPECTED_PRODUCT_SHA: 2123eaeae601a792c90401b66c5bca4e63356bc1
+      OPENCLAW_DOCKER_ALL_LANES: update-restart-auth
+      OPENCLAW_DOCKER_ALL_LOG_DIR: .artifacts/docker-tests/pr-147054-managed-upgrade
+      OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: openclaw@2026.9.4
+      OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: legacy-operator-state
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: 2123eaeae601a792c90401b66c5bca4e63356bc1
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Verify exact product source
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual_sha="$(git rev-parse HEAD)"
+          test "$actual_sha" = "$EXPECTED_PRODUCT_SHA"
+          echo "candidate_sha=$actual_sha"
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.16.0
+      - name: Enable Corepack
+        run: corepack enable
+      - name: Install exact dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Record focused Docker plan
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$OPENCLAW_DOCKER_ALL_LOG_DIR"
+          node scripts/test-docker-all.mjs --plan-json |
+            tee "$OPENCLAW_DOCKER_ALL_LOG_DIR/plan.json"
+      - name: Run published updater managed-restart proof
+        run: node scripts/test-docker-all.mjs
+      - name: Summarize exact proof identity
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "candidate_sha=$EXPECTED_PRODUCT_SHA"
+          echo "baseline=$OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC"
+          echo "lane=$OPENCLAW_DOCKER_ALL_LANES"
+          echo "scenario=$OPENCLAW_UPGRADE_SURVIVOR_SCENARIO"
+          find .artifacts/docker-tests -maxdepth 5 -type f -print 2>/dev/null | sort || true
+      - name: Upload managed-upgrade evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: pr-147054-managed-upgrade-evidence
+          path: .artifacts/docker-tests/**
+          if-no-files-found: warn
+          retention-days: 14
