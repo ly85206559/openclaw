@@ -23,7 +23,7 @@ jobs:
       OPENCLAW_DOCKER_ALL_LANES: update-restart-auth
       OPENCLAW_DOCKER_ALL_LOG_DIR: .artifacts/docker-tests/pr-147054-managed-upgrade
       OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: openclaw@2026.9.4
-      OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: legacy-operator-state
+      OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: base
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
