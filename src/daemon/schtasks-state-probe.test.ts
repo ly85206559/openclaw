@@ -38,6 +38,20 @@ it("reads nested native action metadata without localized field names", () => {
   expect(probeScheduledTaskState(snapshot.taskPath)).toEqual({ status: "found", ...snapshot });
 });
 
+it("returns an unknown result when PowerShell execution is denied", () => {
+  vi.mocked(spawnSync).mockImplementationOnce(() => {
+    throw Object.assign(new Error("spawnSync powershell.exe ERR_ACCESS_DENIED"), {
+      code: "ERR_ACCESS_DENIED",
+    });
+  });
+
+  expect(probeScheduledTaskState("OpenClaw Gateway")).toEqual({
+    status: "unknown",
+    detail: "spawnSync powershell.exe ERR_ACCESS_DENIED",
+    diagnostic: { kind: "spawn" },
+  });
+});
+
 it("reads task state when PowerShell rejects a no-console launch", () => {
   vi.mocked(spawnSync).mockImplementation((_command, _args, options) => {
     const hidden = options?.windowsHide === true;
