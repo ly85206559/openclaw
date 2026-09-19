@@ -1,4 +1,4 @@
-name: PR 146956 focused launcher proof
+name: PR 147054 focused launcher proof
 
 on:
   workflow_dispatch:
@@ -19,7 +19,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 24.16.0
+          node-version: 24.20.0
       - name: Enable Corepack
         run: corepack enable
       - name: Install dependencies
@@ -30,6 +30,8 @@ jobs:
           src/infra/node-runtime-recovery.test.ts
           -t "runtime recovery child shutdown"
           --reporter verbose
+      - name: Run source entry compile-cache coverage
+        run: node scripts/run-vitest.mjs run src/entry.compile-cache.test.ts --reporter verbose
       - name: Run real recovery child drain proof
         run: >-
           node scripts/run-vitest.mjs run
@@ -41,8 +43,11 @@ jobs:
           test/openclaw-launcher.e2e.test.ts
           -t "preserves foreground Gateway shutdown grace with packaged compile cache"
           --reporter verbose
-      - name: Run standalone proof script
-        run: node scripts/proof/gateway-launcher-drain-shutdown-proof.mjs
+      - name: Run real bounded denial and failure proof
+        run: |
+          node scripts/proof/gateway-launcher-drain-shutdown-proof.mjs --mode=generic
+          node scripts/proof/gateway-launcher-drain-shutdown-proof.mjs --mode=failure
+          node scripts/proof/gateway-launcher-drain-shutdown-proof.mjs --mode=stuck
       - name: Check patch whitespace
         env:
           TARGET_SHA: ${{ github.sha }}

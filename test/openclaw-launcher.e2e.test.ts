@@ -1,5 +1,5 @@
 // OpenClaw launcher E2E tests validate launcher process behavior.
-import { spawn, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -7,14 +7,22 @@ import { pathToFileURL } from "node:url";
 import { build as esbuild } from "esbuild";
 import { afterEach, describe, expect, it } from "vitest";
 import { parseNodeReleaseVersion } from "../node-version.mjs";
+import { resolveTestNodeExecPath } from "../src/test-utils/node-process.js";
 import { NODE_RELEASE_VERSION_CASES } from "./helpers/node-version-cases.js";
 import { cleanupTempDirs, makeTempDir } from "./helpers/temp-dir.js";
+
+// Node version fixtures must enter Node admission even when Vitest runs under Bun.
+const testNodeExecPath = resolveTestNodeExecPath();
 
 async function makeLauncherFixture(fixtureRoots: string[]): Promise<string> {
   const fixtureRoot = makeTempDir(fixtureRoots, "openclaw-launcher-");
   await fs.copyFile(
     path.resolve(process.cwd(), "openclaw.mjs"),
     path.join(fixtureRoot, "openclaw.mjs"),
+  );
+  await fs.copyFile(
+    path.resolve(process.cwd(), "node-host-launcher.mjs"),
+    path.join(fixtureRoot, "node-host-launcher.mjs"),
   );
   await fs.copyFile(
     path.resolve(process.cwd(), "node-version.mjs"),
@@ -189,7 +197,7 @@ describe("openclaw launcher", () => {
       );
       if (params.cached) {
         await fs.mkdir(path.dirname(nodePath), { recursive: true });
-        await fs.symlink(process.execPath, nodePath);
+        await fs.symlink(testNodeExecPath, nodePath);
       }
       const installLog = path.join(root, "installer.json");
       const preload = path.join(root, "legacy-node.mjs");
@@ -249,7 +257,7 @@ describe("openclaw launcher", () => {
       }
       const run = (input: string, args = ["status"], env: NodeJS.ProcessEnv = {}, cwd = root) =>
         spawnSync(
-          process.execPath,
+          testNodeExecPath,
           ["--import", pathToFileURL(preload).href, path.join(root, "openclaw.mjs"), ...args],
           {
             cwd,
@@ -339,7 +347,7 @@ describe("openclaw launcher", () => {
       });
     });
 
-    it.each(["n\n", "\n", "", "maybe\n", "\u0003"])(
+    it.each(["n\n", "\n", "", "maybe\n", "^C"])(
       "does not install after decline or cancellation: %j",
       async (input) => {
         const fixture = await prepareRecovery();
@@ -486,7 +494,10 @@ describe("openclaw launcher", () => {
     });
 
     it("keeps a supported active Node even when a private runtime exists", async () => {
-      const fixture = await prepareRecovery({ cached: true, version: process.versions.node });
+      const version = execFileSync(testNodeExecPath, ["--print", "process.versions.node"], {
+        encoding: "utf8",
+      }).trim();
+      const fixture = await prepareRecovery({ cached: true, version });
       const result = fixture.run("");
       expect(result.status, result.stderr).toBe(17);
       expect(result.stderr).not.toContain("Node.js");
@@ -555,7 +566,7 @@ describe("openclaw launcher", () => {
       'Object.defineProperty(process.versions, "node", { value: "22.23.2" });',
     );
     const result = spawnSync(
-      process.execPath,
+      testNodeExecPath,
       ["--import", pathToFileURL(preload).href, path.join(root, "openclaw.mjs"), ...args],
       {
         cwd: root,
@@ -588,7 +599,7 @@ describe("openclaw launcher", () => {
       );
 
       const result = spawnSync(
-        process.execPath,
+        testNodeExecPath,
         [
           "--import",
           pathToFileURL(mockNodeVersionPath).href,
@@ -628,7 +639,7 @@ describe("openclaw launcher", () => {
     );
 
     const result = spawnSync(
-      process.execPath,
+      testNodeExecPath,
       ["--import", pathToFileURL(legacyRuntimePath).href, path.join(fixtureRoot, "openclaw.mjs")],
       {
         cwd: fixtureRoot,
@@ -1330,50 +1341,33 @@ describe("openclaw launcher", () => {
   it.runIf(process.platform !== "win32")(
     "preserves foreground Gateway shutdown grace with packaged compile cache",
     async () => {
-      const fixtureRoot = await makeLauncherFixture(fixtureRoots);
-      const readyPath = path.join(fixtureRoot, "gateway-ready.json");
-      const stoppedPath = path.join(fixtureRoot, "gateway-stopped.txt");
-      await fs.writeFile(
-        path.join(fixtureRoot, "dist", "entry.js"),
-        [
-          'import { writeFileSync } from "node:fs";',
-          `process.on("SIGTERM", () => setTimeout(() => { writeFileSync(${JSON.stringify(stoppedPath)}, "stopped"); process.exit(0); }, 3025));`,
-          `writeFileSync(${JSON.stringify(readyPath)}, JSON.stringify({ pid: process.pid }));`,
-          "setInterval(() => {}, 1000);",
-        ].join("\n"),
-      );
-      const launcher = spawn(
+      const child = spawn(
         process.execPath,
-        [path.join(fixtureRoot, "openclaw.mjs"), "--profile", "fixture", "gateway", "run"],
-        {
-          cwd: fixtureRoot,
-          env: launcherEnv({ NODE_COMPILE_CACHE: path.join(fixtureRoot, ".node-cache") }),
-          stdio: "ignore",
-        },
+        [
+          path.resolve("scripts/proof/gateway-launcher-drain-shutdown-proof.mjs"),
+          "--mode=packaged",
+        ],
+        { stdio: ["ignore", "pipe", "pipe"] },
       );
-      let ownerPid: number | undefined;
-      try {
-        ownerPid = (await waitForJsonFile<{ pid: number }>(readyPath, 5000)).pid;
-        const shutdownStartedAt = Date.now();
-        launcher.kill("SIGTERM");
-        await expect(waitForProcessExit(launcher, "foreground Gateway", 5000)).resolves.toEqual({
-          code: 0,
-          signal: null,
-        });
-        const shutdownElapsedMs = Date.now() - shutdownStartedAt;
-        await expect(fs.readFile(stoppedPath, "utf8")).resolves.toBe("stopped");
-        expect(isProcessAlive(ownerPid)).toBe(false);
-        console.log(
-          `foreground Gateway real-request shutdown: launcher exit after ${shutdownElapsedMs} ms with 3025 ms child cleanup (old launcher cutoff ~2000 ms)`,
-        );
-      } finally {
-        for (const pid of [ownerPid, launcher.pid]) {
-          if (isProcessAlive(pid)) {
-            process.kill(pid!, "SIGKILL");
-          }
-        }
-      }
+      let stdout = "";
+      let stderr = "";
+      child.stdout.setEncoding("utf8").on("data", (data: string) => {
+        stdout += data;
+      });
+      child.stderr.setEncoding("utf8").on("data", (data: string) => {
+        stderr += data;
+      });
+      const [code, signal] = await once(child, "exit");
+      expect({ code, signal }, stderr).toEqual({ code: 0, signal: null });
+      expect(JSON.parse(stdout)).toMatchObject({
+        mode: "packaged",
+        compileCache: true,
+        packagedRespawned: true,
+        finalEffect: true,
+        deniedAdmission: 503,
+      });
     },
+    20_000,
   );
 
   it.runIf(process.platform !== "win32").each([

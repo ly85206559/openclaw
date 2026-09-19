@@ -52,7 +52,7 @@ vi.mock("node:fs", async (importOriginal) => {
 });
 vi.mock("../../node-sqlite.mjs", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../node-sqlite.mjs")>()),
-  detectCurrentSqliteCapabilities: () => ({
+  detectCurrentSqliteCapabilities: async () => ({
     available: true,
     version: "3.51.3",
     text: mocks.currentAdmitted,
@@ -66,8 +66,9 @@ vi.mock("./windows-encoding.js", async (importOriginal) => ({
   resolveWindowsOemCodePage: () => 437,
 }));
 
-const originalArgv = process.argv;
-const originalExecArgv = process.execArgv;
+const { argv: originalArgv, execArgv: originalExecArgv } = process;
+const stdinTtyDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
+const stdoutTtyDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
 // Exercise the Node-only recovery branch when Bun owns Vitest; process-boundary cases still launch Node.
 const bunVersionDescriptor = Object.getOwnPropertyDescriptor(process.versions, "bun");
 const execPathDescriptor = Object.getOwnPropertyDescriptor(process, "execPath")!;
@@ -145,6 +146,16 @@ afterEach(() => {
   }
   process.argv = originalArgv;
   process.execArgv = originalExecArgv;
+  for (const [stream, descriptor] of [
+    [process.stdin, stdinTtyDescriptor],
+    [process.stdout, stdoutTtyDescriptor],
+  ] as const) {
+    if (descriptor) {
+      Object.defineProperty(stream, "isTTY", descriptor);
+    } else {
+      Reflect.deleteProperty(stream, "isTTY");
+    }
+  }
   if (bunVersionDescriptor) {
     Object.defineProperty(process.versions, "bun", bunVersionDescriptor);
     Object.defineProperty(process, "execPath", execPathDescriptor);
@@ -842,9 +853,16 @@ describe("runtime recovery discovery", () => {
     });
   });
 
-  it.each([0, 7])(
-    "preserves the invocation and propagates replacement exit %s",
-    async (exitCode) => {
+  it.each([
+    { terminal: "none", stdinTTY: false, stdoutTTY: false, hide: true, exitCode: 0 },
+    { terminal: "none", stdinTTY: false, stdoutTTY: false, hide: true, exitCode: 7 },
+    { terminal: "stdin", stdinTTY: true, stdoutTTY: false, hide: false, exitCode: 0 },
+    { terminal: "stdout", stdinTTY: false, stdoutTTY: true, hide: false, exitCode: 7 },
+  ])(
+    "preserves invocation and replacement exit $exitCode with $terminal terminal stdio",
+    async ({ stdinTTY, stdoutTTY, hide, exitCode }) => {
+      Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: stdinTTY });
+      Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: stdoutTTY });
       await withRecoveryHome(async (home) => {
         const candidate = await writeFixture(path.join(home, "bin/node"));
         mocks.admissible.add(candidate);
@@ -859,7 +877,11 @@ describe("runtime recovery discovery", () => {
         expect(mocks.spawn).toHaveBeenCalledExactlyOnceWith(
           candidate,
           ["--trace-warnings", "/fixture/dist/index.js", "doctor", "--non-interactive", "--fix"],
-          { stdio: "inherit", env: { ...originalEnv, OPENCLAW_NODE_UPDATE_RESPAWNED: "1" } },
+          {
+            stdio: "inherit",
+            env: { ...originalEnv, OPENCLAW_NODE_UPDATE_RESPAWNED: "1" },
+            windowsHide: hide,
+          },
         );
         expect(process.cwd()).toBe(originalCwd);
         expect(exitSpy).not.toHaveBeenCalled();
@@ -944,71 +966,231 @@ describe("candidate admission probe", () => {
       expect(isUsableNode(candidate)).toBe(false);
     });
   });
+
+  it("rejects candidates when the permission model denies child processes", async () => {
+    await withRecoveryHome(async (home) => {
+      const candidate = await writeFixture(path.join(home, "bin/node"));
+      mocks.admissible.add(candidate);
+      mocks.probe.mockImplementation(() => {
+        throw Object.assign(new Error("Access to this API has been restricted"), {
+          code: "ERR_ACCESS_DENIED",
+        });
+      });
+
+      expect(isUsableNode(candidate)).toBe(false);
+    });
+  });
 });
 
 describe("runtime recovery child shutdown", () => {
-  function installRespawnListener(argvTail: string[]) {
+  function start(argvTail: string[]) {
+    vi.useFakeTimers();
     process.argv = [process.execPath, "/fixture/openclaw.mjs", ...argvTail];
     const kill = vi.spyOn(child, "kill").mockReturnValue(true);
-    const existingListeners = new Set(process.listeners("SIGTERM"));
+    const before = new Set(process.listeners("SIGTERM"));
     runRespawnedChild(process.execPath, process.argv.slice(1), process.env);
-    const listener = process
-      .listeners("SIGTERM")
-      .find((candidate) => !existingListeners.has(candidate));
-    expect(listener).toBeDefined();
-    return { kill, listener };
+    const signal = expectDefined(
+      process.listeners("SIGTERM").find((fn) => !before.has(fn)),
+      "signal listener",
+    );
+    return { kill, signal };
   }
 
-  it.each([
-    { argvTail: ["gateway", "run"] },
-    { argvTail: ["gateway"] },
-    { argvTail: ["--profile", "p", "gateway", "run"] },
-    { argvTail: ["gateway", "run", "--port", "18789"] },
-  ])("leaves foreground Gateway shutdown inside its drain budget (%j)", ({ argvTail }) => {
-    vi.useFakeTimers();
-    try {
-      const { kill, listener } = installRespawnListener(argvTail);
-      listener?.("SIGTERM");
-      expect(kill).toHaveBeenCalledExactlyOnceWith("SIGTERM");
-      vi.advanceTimersByTime(2_500);
-      expect(kill).toHaveBeenCalledTimes(1);
-    } finally {
-      vi.useRealTimers();
+  afterEach(() => {
+    // Detach before restoring clocks, including on assertion failure.
+    if (child.listenerCount("exit")) {
+      expect(() => child.emit("exit", 0, null)).toThrow(exitSentinel);
     }
+    vi.useRealTimers();
   });
 
-  it.each([{ argvTail: ["gateway", "status"] }, { argvTail: ["agent", "run"] }])(
-    "keeps non-foreground Gateway children on the short grace (%j)",
-    ({ argvTail }) => {
-      vi.useFakeTimers();
-      try {
-        const { kill, listener } = installRespawnListener(argvTail);
-        listener?.("SIGTERM");
+  it.each([
+    ["gateway"],
+    ["gateway", "run"],
+    ["--profile", "fixture", "gateway", "run"],
+    ["--dev", "--no-color", "--log-level=debug", "gateway", "run"],
+    ["gateway", "--container", "fixture", "run", "--port=18789", "--bind", "loopback"],
+    ["gateway", "--token", "run"],
+    ["gateway", "--token", "--help"],
+    ["gateway", "run", "--token=--", "--compact", "--ambient-channels"],
+    ["--", "gateway", "run"],
+    ["gateway", "--", "run"],
+  ])("retains foreground drain for %j", (...args) => {
+    const { kill, signal } = start(args);
+    signal("SIGTERM");
+    vi.advanceTimersByTime(327_999);
+    expect(kill).toHaveBeenCalledExactlyOnceWith("SIGTERM");
+    vi.advanceTimersByTime(1);
+    expect(kill).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    ["agent", "run"],
+    ["gateway", "status"],
+    ["gateway", "stop"],
+    ["gateway", "restart"],
+    ["gateway", "run", "status"],
+    ["gateway", "run", "run"],
+    ["gateway", "--help"],
+    ["gateway", "run", "-h"],
+    ["gateway", "--version"],
+    ["--profile", "gateway", "run"],
+    ["--container=gateway", "run"],
+    ["gateway", "--port"],
+    ["gateway", "--profile"],
+    ["gateway", "--unknown"],
+    ["gateway", "--compact=true"],
+    ["--dev=true", "gateway"],
+    ["gateway", "--", "--port", "18789"],
+    ["--", "--profile", "fixture", "gateway"],
+    ["--port", "18789", "gateway"],
+    ["gateway", ""],
+  ])("keeps administrative or malformed invocation short: %j", (...args) => {
+    const { kill, signal } = start(args);
+    signal("SIGTERM");
+    vi.advanceTimersByTime(1_000);
+    expect(kill).toHaveBeenCalledTimes(2);
+    vi.advanceTimersByTime(1_000);
+    expect(kill).toHaveBeenLastCalledWith("SIGKILL");
+  });
+
+  it.each(
+    (["linux", "win32"] as const).flatMap((platform) =>
+      [
+        ["gateway", "--token", ""],
+        ["gateway", "--token", "   "],
+        ["gateway", "run", "--token="],
+        ["gateway", "run", "--raw-stream-path", ""],
+        ["gateway", "--raw-stream-path=", "run"],
+        ["gateway", "--port="],
+        ["gateway", "--profile="],
+        ["--profile", "", "gateway", "run"],
+      ].map((args) => ({ platform, args })),
+    ),
+  )(
+    "retains foreground policy for explicit empty values on $platform: $args",
+    ({ platform, args }) => {
+      mockProcessPlatform(platform);
+      Object.defineProperty(child, "connected", { value: true });
+      child.send = vi.fn().mockReturnValue(true);
+      const { kill, signal } = start(args);
+      signal("SIGTERM");
+      vi.advanceTimersByTime(327_999);
+      if (platform === "win32") {
+        expect(child.send).toHaveBeenCalledExactlyOnceWith(
+          { type: "openclaw.launcher.gateway-stop", signal: "SIGTERM" },
+          expect.any(Function),
+        );
+        expect(kill).not.toHaveBeenCalled();
+      } else {
         expect(kill).toHaveBeenCalledExactlyOnceWith("SIGTERM");
-        vi.advanceTimersByTime(1_000);
-        expect(kill).toHaveBeenCalledTimes(2);
-      } finally {
-        vi.useRealTimers();
       }
+      vi.advanceTimersByTime(1);
+      expect(kill).toHaveBeenLastCalledWith("SIGTERM");
     },
   );
 
-  it("force-kills a stuck foreground Gateway after the drain budget", () => {
-    vi.useFakeTimers();
-    try {
-      const { kill, listener } = installRespawnListener(["gateway", "run"]);
-      listener?.("SIGTERM");
+  // The module registers the host's supported signals at import time. The IPC
+  // process suite separately covers SIGBREAK mapping on every host.
+  it.each(
+    (["SIGTERM", "SIGINT", "SIGBREAK"] as const).filter(
+      (signal) => signal !== "SIGBREAK" || hostPlatform === "win32",
+    ),
+  )("transports Windows Gateway %s cooperatively before its fixed deadline", (stopSignal) => {
+    mockProcessPlatform("win32");
+    Object.defineProperty(child, "connected", { value: true });
+    child.send = vi.fn().mockReturnValue(true);
+    const before = new Set(process.listeners(stopSignal));
+    const { kill } = start(["gateway", "run"]);
+    const signal = expectDefined(
+      process.listeners(stopSignal).find((fn) => !before.has(fn)),
+      "Windows signal listener",
+    );
+    expect(mocks.spawn).toHaveBeenCalledWith(
+      process.execPath,
+      process.argv.slice(1),
+      expect.objectContaining({ stdio: ["inherit", "inherit", "inherit", "ipc"] }),
+    );
+    signal(stopSignal);
+    vi.advanceTimersByTime(200_000);
+    signal(stopSignal);
+    expect(child.send).toHaveBeenCalledExactlyOnceWith(
+      { type: "openclaw.launcher.gateway-stop", signal: stopSignal },
+      expect.any(Function),
+    );
+    vi.advanceTimersByTime(127_999);
+    expect(kill).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(kill).toHaveBeenCalledExactlyOnceWith("SIGTERM");
+    vi.advanceTimersByTime(1_000);
+    expect(kill).toHaveBeenCalledTimes(2);
+    expect(() => vi.advanceTimersByTime(1_000)).toThrow(exitSentinel);
+    expect(exitSpy).toHaveBeenCalledWith(1);
+  });
+
+  it.each(["disconnected", "throws", "callback-error"])(
+    "keeps the Windows Gateway deadline when IPC %s",
+    (failure) => {
+      mockProcessPlatform("win32");
+      Object.defineProperty(child, "connected", { value: failure !== "disconnected" });
+      child.send = vi.fn().mockImplementation((_message, callback) => {
+        if (failure === "throws") {
+          throw new Error("IPC unavailable");
+        }
+        callback(new Error("IPC closed"));
+        return false;
+      });
+      const { kill, signal } = start(["gateway", "run"]);
+      signal("SIGTERM");
+      vi.advanceTimersByTime(327_999);
+      expect(kill).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1);
       expect(kill).toHaveBeenCalledExactlyOnceWith("SIGTERM");
+    },
+  );
 
-      vi.advanceTimersByTime(328_000);
-      expect(kill).toHaveBeenCalledTimes(2);
-      expect(kill).toHaveBeenLastCalledWith("SIGTERM");
+  it("keeps ordinary Windows commands on their short signal path", () => {
+    mockProcessPlatform("win32");
+    const { kill, signal } = start(["gateway", "status"]);
+    expect(mocks.spawn).toHaveBeenCalledWith(
+      process.execPath,
+      process.argv.slice(1),
+      expect.objectContaining({ stdio: "inherit" }),
+    );
+    signal("SIGTERM");
+    expect(kill).toHaveBeenCalledExactlyOnceWith("SIGTERM");
+    vi.advanceTimersByTime(1_000);
+    expect(kill).toHaveBeenCalledTimes(2);
+  });
 
-      vi.advanceTimersByTime(1_000);
-      expect(kill).toHaveBeenCalledTimes(3);
-      expect(kill).toHaveBeenLastCalledWith("SIGKILL");
-    } finally {
-      vi.useRealTimers();
+  it("does not extend the deadline on repeated signals or later argv changes", () => {
+    const { kill, signal } = start(["gateway", "run"]);
+    process.argv = [process.execPath, "/fixture/openclaw.mjs", "status"];
+    signal("SIGTERM");
+    vi.advanceTimersByTime(200_000);
+    signal("SIGTERM");
+    expect(kill).toHaveBeenCalledTimes(2);
+    vi.advanceTimersByTime(128_000);
+    expect(kill).toHaveBeenCalledTimes(3);
+    vi.advanceTimersByTime(1_000);
+    expect(kill).toHaveBeenLastCalledWith("SIGKILL");
+    expect(() => vi.advanceTimersByTime(1_000)).toThrow(exitSentinel);
+    expect(exitSpy).toHaveBeenCalledWith(1);
+  });
+
+  it.each(["exit", "error"])("clears every signal timer and listener on early %s", (event) => {
+    const before = process.listeners("SIGTERM");
+    const { signal } = start(["gateway", "run"]);
+    signal("SIGTERM");
+    if (event === "exit") {
+      expect(() => child.emit("exit", 17, null)).toThrow(exitSentinel);
+      expect(exitSpy).toHaveBeenCalledWith(17);
+    } else {
+      expect(() => child.emit("error", new Error("spawn failed"))).toThrow(exitSentinel);
+      expect(exitSpy).toHaveBeenCalledWith(1);
+      expect(stderrSpy).toHaveBeenCalledWith(expect.stringContaining("spawn failed"));
     }
+    expect(vi.getTimerCount()).toBe(0);
+    expect(process.listeners("SIGTERM")).toEqual(before);
   });
 });
