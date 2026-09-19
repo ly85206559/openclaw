@@ -27,7 +27,7 @@ jobs:
       - name: Run recovery shutdown unit coverage
         run: >-
           node scripts/run-vitest.mjs run
-          src/infra/node-runtime-recovery.test.ts
+          src/infra/node-runtime-recovery.shutdown.test.ts
           -t "runtime recovery child shutdown"
           --reporter verbose
       - name: Run source entry compile-cache coverage
