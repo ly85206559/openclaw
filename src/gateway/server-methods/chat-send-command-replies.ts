@@ -58,23 +58,26 @@ function mergeDefinedReplySemantics(target: ReplyPayload, source: ReplyPayload):
     sanitizeReplyDirectiveId(source.replyToId) ??
     sanitizeReplyDirectiveId(sourceInlineDirectives?.replyToExplicitId);
   const mergedMedia = mergeMediaReplySemantics(target, source, sourceInlineDirectives);
-  return copyReplyPayloadMetadata(mergedMedia, {
-    ...mergedMedia,
-    ...(source.presentation !== undefined ? { presentation: source.presentation } : {}),
-    ...(source.delivery !== undefined ? { delivery: source.delivery } : {}),
-    ...(source.interactive !== undefined ? { interactive: source.interactive } : {}),
-    ...(sourceReplyToId !== undefined ? { replyToId: sourceReplyToId } : {}),
-    ...(source.replyToTag === true || target.replyToTag === true ? { replyToTag: true } : {}),
-    ...(source.replyToCurrent === true ||
-    sourceInlineDirectives?.replyToCurrent === true ||
-    target.replyToCurrent === true
-      ? { replyToCurrent: true }
-      : {}),
-    ...(source.spokenText !== undefined ? { spokenText: source.spokenText } : {}),
-    ...(source.ttsSupplement !== undefined ? { ttsSupplement: source.ttsSupplement } : {}),
-    ...(source.isError === true || target.isError === true ? { isError: true } : {}),
-    ...(source.channelData !== undefined ? { channelData: source.channelData } : {}),
-  });
+  return copyReplyPayloadMetadata(
+    source,
+    copyReplyPayloadMetadata(mergedMedia, {
+      ...mergedMedia,
+      ...(source.presentation !== undefined ? { presentation: source.presentation } : {}),
+      ...(source.delivery !== undefined ? { delivery: source.delivery } : {}),
+      ...(source.interactive !== undefined ? { interactive: source.interactive } : {}),
+      ...(sourceReplyToId !== undefined ? { replyToId: sourceReplyToId } : {}),
+      ...(source.replyToTag === true || target.replyToTag === true ? { replyToTag: true } : {}),
+      ...(source.replyToCurrent === true ||
+      sourceInlineDirectives?.replyToCurrent === true ||
+      target.replyToCurrent === true
+        ? { replyToCurrent: true }
+        : {}),
+      ...(source.spokenText !== undefined ? { spokenText: source.spokenText } : {}),
+      ...(source.ttsSupplement !== undefined ? { ttsSupplement: source.ttsSupplement } : {}),
+      ...(source.isError === true || target.isError === true ? { isError: true } : {}),
+      ...(source.channelData !== undefined ? { channelData: source.channelData } : {}),
+    }),
+  );
 }
 
 function mergeMediaReplySemantics(
@@ -106,21 +109,24 @@ function mergeMediaReplySemantics(
       return merged;
     });
   }
-  return copyReplyPayloadMetadata(target, {
-    ...target,
-    ...(attachments ? { attachments } : {}),
-    ...(source.trustedLocalMedia === true || target.trustedLocalMedia === true
-      ? { trustedLocalMedia: true }
-      : {}),
-    ...(source.sensitiveMedia === true || target.sensitiveMedia === true
-      ? { sensitiveMedia: true }
-      : {}),
-    ...(source.audioAsVoice === true ||
-    sourceInlineDirectives?.audioAsVoice === true ||
-    target.audioAsVoice === true
-      ? { audioAsVoice: true }
-      : {}),
-  });
+  return copyReplyPayloadMetadata(
+    source,
+    copyReplyPayloadMetadata(target, {
+      ...target,
+      ...(attachments ? { attachments } : {}),
+      ...(source.trustedLocalMedia === true || target.trustedLocalMedia === true
+        ? { trustedLocalMedia: true }
+        : {}),
+      ...(source.sensitiveMedia === true || target.sensitiveMedia === true
+        ? { sensitiveMedia: true }
+        : {}),
+      ...(source.audioAsVoice === true ||
+      sourceInlineDirectives?.audioAsVoice === true ||
+      target.audioAsVoice === true
+        ? { audioAsVoice: true }
+        : {}),
+    }),
+  );
 }
 
 function hasMergeableReplySemantics(payload: ReplyPayload): boolean {
