@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   copyReplyPayloadMetadata,
   getReplyPayloadMetadata,
+  isReplyPayloadSessionWriterDeliveryAuthorized,
   setReplyPayloadMetadata,
   type ReplyPayload,
 } from "../../auto-reply/reply-payload.js";
@@ -31,6 +32,24 @@ function selectRawReplies(params: {
       input: { kind: "raw", payload },
     })),
   }).map(readChatSendReplyPayload);
+}
+
+const staleWriterAuthority = {
+  expectedSessionId: "session-before-replacement",
+  expectedWriterRunId: "run-before-replacement",
+  sessionKey: "agent:main:webchat",
+} as const;
+
+function expectStaleWriterRejected(payload: object) {
+  expect(getReplyPayloadMetadata(payload)).toMatchObject({
+    sessionWriterDeliveryAuthority: staleWriterAuthority,
+  });
+  expect(
+    isReplyPayloadSessionWriterDeliveryAuthorized(payload, {
+      activeWriterRunId: "replacement-run",
+      sessionId: "replacement-session",
+    }),
+  ).toBe(false);
 }
 
 describe("selectChatSendFinalReplyInputs", () => {
@@ -154,23 +173,29 @@ describe("selectChatSendFinalReplyInputs", () => {
     const deliveredReplies = [
       {
         kind: "block" as const,
-        payload: {
-          text: "done",
-          mediaUrl: "file:///tmp/result.png",
-          trustedLocalMedia: true,
-        },
+        payload: setReplyPayloadMetadata(
+          {
+            text: "done",
+            mediaUrl: "file:///tmp/result.png",
+            trustedLocalMedia: true,
+          },
+          { assistantMessageIndex: 4 },
+        ),
       },
       {
         kind: "final" as const,
-        payload: {
-          text: "done",
-          mediaUrls: ["/tmp/result.png"],
-          sensitiveMedia: true,
-          replyToId: "message-1",
-          attachments: [
-            { path: "/tmp/result.png", name: "Result chart.png", mimeType: "image/png" },
-          ],
-        },
+        payload: setReplyPayloadMetadata(
+          {
+            text: "done",
+            mediaUrls: ["/tmp/result.png"],
+            sensitiveMedia: true,
+            replyToId: "message-1",
+            attachments: [
+              { path: "/tmp/result.png", name: "Result chart.png", mimeType: "image/png" },
+            ],
+          },
+          { sessionWriterDeliveryAuthority: staleWriterAuthority },
+        ),
       },
     ];
     const originalReplies = structuredClone(deliveredReplies);
@@ -196,30 +221,34 @@ describe("selectChatSendFinalReplyInputs", () => {
         attachment: { name: "Result chart.png", mimeType: "image/png" },
       },
     ]);
+    expect(getReplyPayloadMetadata(replies[0]!)).toMatchObject({ assistantMessageIndex: 4 });
+    expectStaleWriterRejected(replies[0]!);
     expect(deliveredReplies).toEqual(originalReplies);
   });
 
   it("keeps unmatched final text while deduplicating its media", () => {
-    expect(
-      selectRawReplies({
-        deliveredReplies: [
-          {
-            kind: "block",
-            payload: { text: "progress", mediaUrl: "/tmp/result.png" },
-          },
-          {
-            kind: "final",
-            payload: {
+    const replies = selectRawReplies({
+      deliveredReplies: [
+        {
+          kind: "block",
+          payload: { text: "progress", mediaUrl: "/tmp/result.png" },
+        },
+        {
+          kind: "final",
+          payload: setReplyPayloadMetadata(
+            {
               text: "done",
               mediaUrl: "file:///tmp/result.png",
               audioAsVoice: true,
             },
-          },
-        ],
-        foldCommandBlocks: true,
-        suppressReplies: false,
-      }),
-    ).toEqual([
+            { sessionWriterDeliveryAuthority: staleWriterAuthority },
+          ),
+        },
+      ],
+      foldCommandBlocks: true,
+      suppressReplies: false,
+    });
+    expect(replies).toEqual([
       {
         text: "progress",
         mediaUrl: undefined,
@@ -233,6 +262,7 @@ describe("selectChatSendFinalReplyInputs", () => {
         audioAsVoice: true,
       },
     ]);
+    expectStaleWriterRejected(replies[1]!);
   });
 
   it.each([
