@@ -19,6 +19,8 @@ import {
   getTaskById,
   hasActiveTaskForChildSessionKey,
   listTaskRecordPage,
+  listTasksForFlowId,
+  listTasksForOwnerKey,
   listTasksForRelatedSessionKey,
 } from "./task-registry-query.js";
 import { createTaskRecord, linkTaskToFlowById } from "./task-registry-record-api.js";
@@ -254,7 +256,18 @@ it.each(["native update", "store readback"] as const)(
 it.each(["native update", "atomic publication"] as const)(
   "indexes the row actually replaced after reentrant activity publication during %s",
   (writer) => {
-    const task = createTask({ runId: "run-before-flush", notifyPolicy: "silent" });
+    const created = createTask({
+      runId: "run-before-flush",
+      notifyPolicy: "silent",
+    });
+    const flow = createTaskFlowForTask({ task: created });
+    if (!flow) {
+      throw new Error("task flow creation failed");
+    }
+    const task = expectDefined(
+      linkTaskToFlowById({ taskId: created.taskId, flowId: flow.flowId }),
+      "linked task",
+    );
     const completed = { ...task, status: "succeeded" as const, endedAt: Date.now() };
     const store = getTaskRegistryStore();
     let reentered = false;
@@ -276,7 +289,13 @@ it.each(["native update", "atomic publication"] as const)(
             event.task.status === "running"
           ) {
             reentered = true;
-            observerUpdate = updateTask(task.taskId, { runId: "run-from-observer" });
+            observerUpdate = updateTask(task.taskId, {
+              runId: "run-from-observer",
+              ownerKey: "agent:main:owner-from-observer",
+              requesterSessionKey: "agent:main:requester-from-observer",
+              childSessionKey: "agent:main:child-from-observer",
+              parentFlowId: undefined,
+            });
             if (writer === "atomic publication") {
               // The outer publisher resumes with this last committed record after the observer.
               store.upsertTaskWithDeliveryState({ task: completed });
@@ -297,6 +316,20 @@ it.each(["native update", "atomic publication"] as const)(
     expect(observerUpdate).toMatchObject({ runId: "run-from-observer" });
     expect(findTaskByRunId("run-from-observer")).toBeUndefined();
     expect(findTaskByRunId(task.runId!)?.taskId).toBe(task.taskId);
+    expect(listTasksForOwnerKey("agent:main:owner-from-observer")).toEqual([]);
+    expect(listTasksForOwnerKey(task.ownerKey).map((row) => row.taskId)).toEqual([task.taskId]);
+    for (const sessionKey of [
+      "agent:main:requester-from-observer",
+      "agent:main:child-from-observer",
+    ]) {
+      expect(listTasksForRelatedSessionKey(sessionKey)).toEqual([]);
+    }
+    for (const sessionKey of [task.requesterSessionKey, task.childSessionKey!]) {
+      expect(listTasksForRelatedSessionKey(sessionKey).map((row) => row.taskId)).toEqual([
+        task.taskId,
+      ]);
+    }
+    expect(listTasksForFlowId(task.parentFlowId!).map((row) => row.taskId)).toEqual([task.taskId]);
     expect(getTaskById(task.taskId)).toMatchObject({ runId: task.runId, status: "succeeded" });
     expect(store.loadSnapshot().tasks.get(task.taskId)).toMatchObject({
       runId: task.runId,
