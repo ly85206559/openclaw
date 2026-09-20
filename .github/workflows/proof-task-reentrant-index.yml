@@ -1,0 +1,25 @@
+name: Task reentrant index proof
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  focused-test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout proof source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          cache-mode: restore
+          node-version: 24.x
+          install-bun: "false"
+
+      - name: Run focused regression
+        run: node scripts/run-vitest.mjs src/tasks/task-registry-session-index.test.ts
