@@ -319,6 +319,19 @@ export function updateRunIdIndex(
   indexState.taskIdsByRunId.set(nextRunId, ids);
 }
 
+/** Update every process-local membership after installing the replacement row. */
+export function updateTaskIndexes(previous: TaskRecord | undefined, next: TaskRecord): void {
+  updateRunIdIndex(previous, next);
+  if (previous) {
+    deleteOwnerKeyIndex(previous.taskId, previous);
+    deleteParentFlowIdIndex(previous.taskId, previous);
+    deleteRelatedSessionKeyIndex(previous.taskId, previous);
+  }
+  addOwnerKeyIndex(next.taskId, next);
+  addParentFlowIdIndex(next.taskId, next);
+  addRelatedSessionKeyIndex(next.taskId, next);
+}
+
 export function removeTaskIndexes(task: TaskRecord): void {
   deleteRunIdIndex(task.taskId, task.runId);
   deleteOwnerKeyIndex(task.taskId, task);
@@ -327,10 +340,7 @@ export function removeTaskIndexes(task: TaskRecord): void {
 }
 
 export function addTaskIndexes(task: TaskRecord): void {
-  addRunIdIndex(task.taskId, task.runId);
-  addOwnerKeyIndex(task.taskId, task);
-  addParentFlowIdIndex(task.taskId, task);
-  addRelatedSessionKeyIndex(task.taskId, task);
+  updateTaskIndexes(undefined, task);
 }
 
 export function taskIdsInScope(scope?: TaskRegistryMutationScope): Iterable<string> {
