@@ -1,0 +1,53 @@
+name: PR 152396 silent usage Prometheus proof
+
+on:
+  push:
+    branches: [proof/pr-152396-silent-usage-prometheus-20260921]
+
+permissions:
+  contents: read
+
+jobs:
+  proof:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Checkout proof source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Verify exact PR source and proof-only delta
+        shell: bash
+        run: |
+          set -euo pipefail
+          product_head=853b71ee9b8908dea76a3a54af5fb3087aeeccba
+          test "$(git rev-parse HEAD^)" = "$product_head"
+          test "$(git diff --name-only "$product_head" HEAD | sort | tr '\n' ' ')" = ".github/workflows/proof-pr-152396-silent-usage.yml test/e2e/qa-lab/runtime/pr-152396-silent-usage-prometheus.e2e.test.ts "
+          echo "Validated product head: $product_head"
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          cache-mode: restore
+          node-version: 24.x
+          install-bun: "false"
+
+      - name: Run connected Gateway and exporter proof
+        shell: bash
+        env:
+          OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1"
+        run: |
+          set -o pipefail
+          mkdir -p .artifacts/pr-152396-silent-usage-prometheus
+          node scripts/run-vitest.mjs test/e2e/qa-lab/runtime/pr-152396-silent-usage-prometheus.e2e.test.ts --reporter=verbose 2>&1 | tee .artifacts/pr-152396-silent-usage-prometheus/proof.log
+
+      - name: Upload proof evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr-152396-silent-usage-prometheus
+          path: .artifacts/pr-152396-silent-usage-prometheus/**
+          if-no-files-found: error
+          retention-days: 90
