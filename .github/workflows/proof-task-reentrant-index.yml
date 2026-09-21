@@ -26,3 +26,5 @@ jobs:
 
       - name: Run isolated SQLite runtime trace
         run: pnpm exec tsx scripts/repro/task-reentrant-index-proof.ts
+        env:
+          NODE_ENV: test
