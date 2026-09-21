@@ -23,3 +23,6 @@ jobs:
 
       - name: Run focused regression
         run: node scripts/run-vitest.mjs src/tasks/task-registry-session-index.test.ts
+
+      - name: Run isolated SQLite runtime trace
+        run: pnpm exec tsx scripts/repro/task-reentrant-index-proof.ts
