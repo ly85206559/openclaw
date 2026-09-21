@@ -75,6 +75,7 @@ function readPool(): ReadPool {
     ensureSqliteLibrarySelected();
     state.pool = createOwnedWorkerTaskPool({
       workerUrl: resolveRuntimeProcessEntrypointUrl("stateRead"),
+      workerOptions: { resourceLimits: { maxOldGenerationSizeMb: 512 } },
       maxWorkers: 2,
       idleTimeoutMs: SQLITE_IDLE_HANDLE_TTL_MS,
       maxPendingTasks: DEFAULT_WORKER_PENDING_TASKS,
