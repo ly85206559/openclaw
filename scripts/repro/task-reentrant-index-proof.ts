@@ -92,7 +92,12 @@ try {
     assertIds(`after atomic ${name}`, ids, atomicOrder);
   }
 
-  const created = createTask({ runId: "run-before-flush" });
+  const created = createTask({
+    runId: "run-before-flush",
+    ownerKey: "agent:main:reentrant-owner",
+    requesterSessionKey: "agent:main:reentrant-requester",
+    childSessionKey: "agent:main:reentrant-child",
+  });
   const flow = expectDefined(createTaskFlowForTask({ task: created }), "created reentrant flow");
   const task = expectDefined(
     linkTaskToFlowById({ taskId: created.taskId, flowId: flow.flowId }),
