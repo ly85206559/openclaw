@@ -1,0 +1,104 @@
+name: PR 152393 chat.send writer authority proof
+
+on:
+  push:
+    branches: [proof/pr-152393-chat-send-writer-20260921]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  NODE_VERSION: "24.19.0"
+  PRODUCT_HEAD: 035b709cf3ab247e70270d01000e386bc5331aef
+  PROOF_TEST: src/gateway/server-methods/chat-send-writer-authority.proof.isolated-gateway.test.ts
+
+jobs:
+  proof:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout proof commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Verify exact product parent and proof-only delta
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .artifacts/pr-152393-chat-send-writer
+          proof_head="$(git rev-parse HEAD)"
+          parent_count="$(git rev-list --parents -n 1 HEAD | awk '{ print NF - 1 }')"
+          test "$parent_count" -eq 1
+          test "$(git rev-parse HEAD^)" = "$PRODUCT_HEAD"
+          git diff --name-only "$PRODUCT_HEAD" HEAD | sort > /tmp/pr-152393-changed.txt
+          printf '%s\n' \
+            .github/proof/pr-152393-chat-send-writer.isolated-gateway.test.ts \
+            .github/workflows/proof-pr-152393-chat-send-writer.yml \
+            | sort > /tmp/pr-152393-expected.txt
+          diff -u /tmp/pr-152393-expected.txt /tmp/pr-152393-changed.txt
+          {
+            printf 'product_head=%s\n' "$PRODUCT_HEAD"
+            printf 'proof_head=%s\n' "$proof_head"
+            printf 'direct_parent=%s\n' "$(git rev-parse HEAD^)"
+            printf 'changed_files:\n'
+            sed 's/^/  /' /tmp/pr-152393-changed.txt
+          } | tee .artifacts/pr-152393-chat-send-writer/lineage.txt
+          echo "PR_152393_PRODUCT_HEAD=$PRODUCT_HEAD" >> "$GITHUB_ENV"
+          echo "PR_152393_PROOF_HEAD=$proof_head" >> "$GITHUB_ENV"
+
+      - name: Install proof test at the registered Gateway test boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp .github/proof/pr-152393-chat-send-writer.isolated-gateway.test.ts "$PROOF_TEST"
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          cache-mode: restore
+          node-version: ${{ env.NODE_VERSION }}
+          install-bun: "false"
+
+      - name: Run registered chat.send proof
+        shell: bash
+        env:
+          NO_COLOR: "1"
+        run: |
+          set -uo pipefail
+          artifact_dir=.artifacts/pr-152393-chat-send-writer
+          set +e
+          /usr/bin/time -v -o "$artifact_dir/timing.txt" \
+            node scripts/run-vitest.mjs "$PROOF_TEST" --reporter=verbose \
+            2>&1 | tee "$artifact_dir/proof.log"
+          test_status="${PIPESTATUS[0]}"
+          set -e
+
+          grep 'PROOF_RECEIPT ' "$artifact_dir/proof.log" \
+            | sed 's/^.*PROOF_RECEIPT //' \
+            > "$artifact_dir/receipts.ndjson" || true
+          jq -s \
+            --arg productHead "$PR_152393_PRODUCT_HEAD" \
+            --arg proofHead "$PR_152393_PROOF_HEAD" \
+            '{productHead: $productHead, proofHead: $proofHead, cases: .}' \
+            "$artifact_dir/receipts.ndjson" \
+            > "$artifact_dir/receipts.json"
+
+          receipt_count="$(wc -l < "$artifact_dir/receipts.ndjson" | tr -d ' ')"
+          if [[ "$test_status" -eq 0 && "$receipt_count" -ne 4 ]]; then
+            echo "Expected four proof receipts, found $receipt_count" >&2
+            exit 1
+          fi
+          exit "$test_status"
+
+      - name: Upload proof receipts
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: pr-152393-chat-send-writer-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .artifacts/pr-152393-chat-send-writer/**
+          if-no-files-found: error
+          retention-days: 90
