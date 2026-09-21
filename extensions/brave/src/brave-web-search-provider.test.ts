@@ -391,6 +391,40 @@ describe("brave web search provider", () => {
     expect(cached).toEqual({ ...first, cached: true });
   });
 
+  it("caps and caches llm-context results by the requested count", async () => {
+    const mockFetch = vi.fn(async () =>
+      jsonResponse({
+        grounding: {
+          generic: [
+            { url: "https://example.com/first", title: "First", snippets: ["first"] },
+            { url: "https://example.com/second", title: "Second", snippets: ["second"] },
+            { url: "https://example.com/third", title: "Third", snippets: ["third"] },
+          ],
+        },
+      }),
+    );
+    global.fetch = mockFetch as typeof global.fetch;
+    const tool = createBraveTool({
+      webSearch: { apiKey: "brave-test-key", mode: "llm-context" },
+    });
+    const query = "brave llm-context result count owner";
+
+    const first = await tool.execute({ query, count: 1 });
+    const cached = await tool.execute({ query, count: 1 });
+    const second = await tool.execute({ query, count: 2 });
+
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect(first).toMatchObject({
+      provider: "brave",
+      mode: "llm-context",
+      count: 1,
+      results: [{ url: "https://example.com/first" }],
+    });
+    expect(first.results).toHaveLength(1);
+    expect(cached).toEqual({ ...first, cached: true });
+    expect(second.results).toHaveLength(2);
+  });
+
   it("reports malformed Brave web search JSON as a provider error", async () => {
     vi.stubEnv("BRAVE_API_KEY", "");
     const mockFetch = vi.fn(async (_input?: unknown, _init?: unknown) => {
