@@ -10,7 +10,7 @@ import type {
   PackageIntegrityFingerprint,
   PackageLauncherFingerprint,
 } from "../../infra/package-update-integrity.js";
-import type { UpdateRunResult } from "../../infra/update-runner.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
 import type { WindowsTaskAutoStartRecovery } from "./update-command-windows-task.js";
 
@@ -49,6 +49,9 @@ export type PreManagedServiceStop = {
   serviceEnv?: NodeJS.ProcessEnv;
   serviceDefinitionEnv?: NodeJS.ProcessEnv;
   serviceNodeRunner?: string;
+  servicePort?: number;
+  /** Original service generation, which can differ from the invoking CLI package. */
+  serviceIdentity?: { version: string; buildId?: string };
   /** Original account observed from the pinned native user-manager connection. */
   serviceManagerUid?: number;
   serviceSystemdIdentity?: SystemdServiceIdentity;

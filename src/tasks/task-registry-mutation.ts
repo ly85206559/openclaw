@@ -1,5 +1,3 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import {
   getTaskFlowById,
   updateFlowRecordByIdExpectedRevision,
@@ -24,16 +22,10 @@ import {
 } from "./task-registry-state.js";
 import { prepareTaskRecordUpdate } from "./task-registry-transition.operation.js";
 import {
-  addOwnerKeyIndex,
-  deleteOwnerKeyIndex,
-  addParentFlowIdIndex,
-  deleteParentFlowIdIndex,
-  addRelatedSessionKeyIndex,
-  deleteRelatedSessionKeyIndex,
-  updateRunIdIndex,
+  updateTaskIndexes,
   recordTaskRegistryProjectionWrite,
 } from "./task-registry.process-state.js";
-import { tryPersistTaskDeliveryStateUpsert, tryPersistTaskUpsert } from "./task-registry.store.js";
+import { tryPersistTaskUpsert } from "./task-registry.store.js";
 import {
   isTerminalTaskStatus,
   type TaskDeliveryState,
@@ -118,13 +110,6 @@ export function publishTaskRecordUpdate(
   const published = persisted ? next : current;
   const becomesTerminal =
     !isTerminalTaskStatus(current.status) && isTerminalTaskStatus(next.status);
-  const sessionIndexChanged =
-    normalizeOptionalString(current.requesterSessionKey) !==
-      normalizeOptionalString(next.requesterSessionKey) ||
-    normalizeOptionalString(current.ownerKey) !== normalizeOptionalString(next.ownerKey) ||
-    normalizeOptionalString(current.childSessionKey) !==
-      normalizeOptionalString(next.childSessionKey);
-  const parentFlowIndexChanged = current.parentFlowId?.trim() !== next.parentFlowId?.trim();
   if (persisted) {
     const indexedCurrent = tasks.get(taskId);
     tasks.set(taskId, next);
@@ -133,17 +118,7 @@ export function publishTaskRecordUpdate(
     if (becomesTerminal) {
       clearTaskActivity(taskId);
     }
-    updateRunIdIndex(indexedCurrent, next);
-    if (sessionIndexChanged) {
-      deleteOwnerKeyIndex(taskId, current);
-      addOwnerKeyIndex(taskId, next);
-      deleteRelatedSessionKeyIndex(taskId, current);
-      addRelatedSessionKeyIndex(taskId, next);
-    }
-    if (parentFlowIndexChanged) {
-      deleteParentFlowIdIndex(taskId, current);
-      addParentFlowIdIndex(taskId, next);
-    }
+    updateTaskIndexes(indexedCurrent, next);
   }
   // Storage no-ops still repair linked flows and retry failed observer publications.
   syncFlowFromTaskAfterTaskMutation(next, "update");
@@ -162,36 +137,6 @@ export function publishTaskRecordUpdate(
     previous: cloneTaskRecordForObserver(current),
   }));
   return { task: cloneTaskRecord(next), isCurrent: () => tasks.get(taskId) === published };
-}
-
-export function upsertTaskDeliveryState(state: TaskDeliveryState): TaskDeliveryState {
-  return withTaskRegistryMutation(
-    () => {
-      const current = taskDeliveryStates.get(state.taskId);
-      const next: TaskDeliveryState = {
-        taskId: state.taskId,
-        ...(state.requesterOrigin
-          ? { requesterOrigin: normalizeDeliveryContext(state.requesterOrigin) }
-          : {}),
-        ...(state.lastNotifiedEventAt != null
-          ? { lastNotifiedEventAt: state.lastNotifiedEventAt }
-          : {}),
-      };
-      if (!next.requesterOrigin && typeof next.lastNotifiedEventAt !== "number" && !current) {
-        return cloneTaskDeliveryState({ taskId: state.taskId });
-      }
-      if (!tryPersistTaskDeliveryStateUpsert(next)) {
-        return current
-          ? cloneTaskDeliveryState(current)
-          : cloneTaskDeliveryState({ taskId: state.taskId });
-      }
-      taskDeliveryStates.set(state.taskId, next);
-      recordTaskRegistryProjectionWrite("delivery", state.taskId);
-      bumpTaskRegistryRevision();
-      return cloneTaskDeliveryState(next);
-    },
-    () => cloneTaskDeliveryState(taskDeliveryStates.get(state.taskId) ?? { taskId: state.taskId }),
-  );
 }
 
 export function getTaskDeliveryState(taskId: string): TaskDeliveryState | undefined {

@@ -4,6 +4,11 @@ const currentModuleUrl = import.meta.url;
 export const SQLITE_READONLY_CHILD_ARG = "--openclaw-sqlite-readonly-child";
 
 export const runtimeProcessEntrypoints = {
+  codeModeNode: {
+    currentModuleUrl,
+    sourceWorkerName: "../agents/code-mode-node.worker",
+    distWorkerPath: "agents/code-mode-node.worker.js",
+  },
   cronReadOnly: {
     currentModuleUrl,
     sourceWorkerName: "../cron/store/read-only.worker",
@@ -54,6 +59,11 @@ export const runtimeProcessEntrypoints = {
     sourceWorkerName: "../state/openclaw-state.worker",
     distWorkerPath: "state/openclaw-state.worker.js",
   },
+  authProfileInlineUsage: {
+    currentModuleUrl,
+    sourceWorkerName: "../agents/auth-profiles/inline-usage.worker",
+    distWorkerPath: "agents/auth-profiles/inline-usage.worker.js",
+  },
   agentDatabaseExecution: {
     currentModuleUrl,
     sourceWorkerName: "../state/openclaw-agent-execution.worker",
@@ -73,6 +83,11 @@ export const runtimeProcessEntrypoints = {
     currentModuleUrl,
     sourceWorkerName: "../boards/sqlite-board-store.worker",
     distWorkerPath: "boards/sqlite-board-store.worker.js",
+  },
+  heartbeatOutcomeStore: {
+    currentModuleUrl,
+    sourceWorkerName: "heartbeat-outcome-store.worker",
+    distWorkerPath: "infra/heartbeat-outcome-store.worker.js",
   },
   sqliteStore: {
     currentModuleUrl,
@@ -124,6 +139,11 @@ export const runtimeProcessEntrypoints = {
     sourceWorkerName: "update-candidate-state.worker",
     distWorkerPath: "infra/update-candidate-state.worker.js",
   },
+  doctorLint: {
+    currentModuleUrl,
+    sourceWorkerName: "../commands/doctor-lint.worker",
+    distWorkerPath: "commands/doctor-lint.worker.js",
+  },
   databaseVerify: {
     currentModuleUrl,
     sourceWorkerName: "../state/openclaw-database-verify.worker",
@@ -143,6 +163,11 @@ export const runtimeProcessEntrypoints = {
     currentModuleUrl,
     sourceWorkerName: "../config/sessions/session-transcript.worker",
     distWorkerPath: "config/sessions/session-transcript.worker.js",
+  },
+  sessionManagerMetadata: {
+    currentModuleUrl,
+    sourceWorkerName: "../agents/sessions/session-manager-metadata.worker",
+    distWorkerPath: "agents/sessions/session-manager-metadata.worker.js",
   },
   sessionTranscriptReconcile: {
     currentModuleUrl,

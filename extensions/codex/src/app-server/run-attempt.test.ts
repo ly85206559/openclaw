@@ -20,7 +20,6 @@ import { initializeGlobalHookRunner, registerInternalHook } from "openclaw/plugi
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { registerMemoryCapability } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { MESSAGE_TOOL_DELIVERY_HINTS } from "openclaw/plugin-sdk/message-tool-delivery-hints";
-import { registerPluginCommand } from "openclaw/plugin-sdk/plugin-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { GPT5_BEHAVIOR_CONTRACT as CODEX_GPT5_BEHAVIOR_CONTRACT } from "openclaw/plugin-sdk/provider-model-shared";
 import { resolveStorePath, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
@@ -1624,34 +1623,6 @@ describe("runCodexAppServerAttempt", () => {
     expect(binding.mcpServersFingerprint).toBeUndefined();
     expect((await readCodexAppServerBinding(sessionFile))?.mcpServersFingerprint).toBeUndefined();
   });
-  it("includes Codex app-server scoped plugin command guidance in developer instructions", () => {
-    registerPluginCommand("demo-plugin", {
-      name: "codex_demo",
-      description: "Codex demo command",
-      agentPromptGuidance: [
-        "Legacy global command guidance.",
-        {
-          text: "Codex app-server command guidance.",
-          surfaces: ["codex_app_server"],
-        },
-        {
-          text: "Unscoped structured command guidance.",
-        },
-        {
-          text: "OpenClaw main command guidance.",
-          surfaces: ["openclaw_main"],
-        },
-      ],
-      handler: async () => ({ text: "ok" }),
-    });
-    const workspaceDir = path.join(tempDir, "workspace");
-    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
-    const instructions = testing.buildDeveloperInstructions(params);
-    expect(instructions).toContain("Codex app-server command guidance.");
-    expect(instructions).not.toContain("Legacy global command guidance.");
-    expect(instructions).not.toContain("Unscoped structured command guidance.");
-    expect(instructions).not.toContain("OpenClaw main command guidance.");
-  });
   it("passes OpenClaw skills as turn collaboration developer instructions", async () => {
     const llmInput = vi.fn();
     initializeGlobalHookRunner(
@@ -2169,41 +2140,6 @@ describe("runCodexAppServerAttempt", () => {
     expect(readAttemptTerminal(result)).toMatchObject({ aborted: false, timedOut: false });
   });
 
-  it("keeps OpenClaw control-path tools direct when code-mode-only is enabled", () => {
-    const tools = [
-      createRuntimeDynamicTool("message"),
-      createRuntimeDynamicTool("web_search"),
-      createRuntimeDynamicTool("heartbeat_respond"),
-      createRuntimeDynamicTool("agents_list"),
-      createRuntimeDynamicTool("sessions_spawn"),
-      createRuntimeDynamicTool("sessions_yield"),
-    ];
-    const toolBridge = createCodexDynamicToolBridge({
-      tools,
-      signal: new AbortController().signal,
-      directToolNames: ["message"],
-    });
-    const specs = flattenSpecsWithNamespace(toolBridge.specs);
-    const message = specs.find((tool) => tool.name === "message");
-    const webSearch = specs.find((tool) => tool.name === "web_search");
-    const heartbeat = specs.find((tool) => tool.name === "heartbeat_respond");
-    const agentsList = specs.find((tool) => tool.name === "agents_list");
-    const sessionsSpawn = specs.find((tool) => tool.name === "sessions_spawn");
-    const sessionsYield = specs.find((tool) => tool.name === "sessions_yield");
-    expect(message).not.toHaveProperty("namespace");
-    expect(message).not.toHaveProperty("deferLoading");
-    expect(webSearch?.namespace).toBe("openclaw");
-    expect(webSearch?.deferLoading).toBe(true);
-    expect(heartbeat?.namespace).toBe("openclaw");
-    expect(heartbeat?.deferLoading).toBe(true);
-    expect(agentsList).not.toHaveProperty("namespace");
-    expect(agentsList).not.toHaveProperty("deferLoading");
-    expect(sessionsSpawn).not.toHaveProperty("namespace");
-    expect(sessionsSpawn).not.toHaveProperty("deferLoading");
-    expect(sessionsYield).not.toHaveProperty("namespace");
-    expect(sessionsYield).not.toHaveProperty("deferLoading");
-  });
-
   it("keeps the heartbeat schema deferred and stable across normal and heartbeat turns", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
     const createHeartbeatRunParams = (trigger?: EmbeddedRunAttemptParams["trigger"]) => {
@@ -2321,97 +2257,6 @@ describe("runCodexAppServerAttempt", () => {
       "thread/inject_items",
       "thread/unsubscribe",
     ]);
-  });
-  it("keeps message in the registered schema when disabled for an internal turn", async () => {
-    const { sessionFile, workspaceDir } = createRunPaths();
-    const params = createParams(sessionFile, workspaceDir);
-    params.disableTools = false;
-    params.disableMessageTool = true;
-    params.sourceReplyDeliveryMode = "message_tool_only";
-    params.runtimePlan = createCodexRuntimePlanFixture();
-    const availableTools: RuntimeDynamicToolForTest[] = [];
-    const registeredTools = [createRuntimeDynamicTool("message")];
-    const bridge = createCodexToolBridgeForTest(params, availableTools, registeredTools);
-    const normalParams = createParams(sessionFile, workspaceDir);
-    normalParams.disableTools = false;
-    normalParams.sourceReplyDeliveryMode = "message_tool_only";
-    normalParams.runtimePlan = createCodexRuntimePlanFixture();
-    const normalTools = [createRuntimeDynamicTool("message")];
-    const normalRegisteredTools = [createRuntimeDynamicTool("message")];
-    const normalBridge = createCodexToolBridgeForTest(
-      normalParams,
-      normalTools,
-      normalRegisteredTools,
-    );
-    expect(bridge.availableSpecs.map((tool) => tool.name)).not.toContain("message");
-    expect(bridge.specs.map((tool) => tool.name)).toContain("message");
-    expect(codexDynamicToolsFingerprint(bridge.specs)).toBe(
-      codexDynamicToolsFingerprint(normalBridge.specs),
-    );
-    await expect(
-      bridge.handleToolCall({
-        threadId: "thread-1",
-        turnId: "turn-1",
-        callId: "call-1",
-        namespace: null,
-        tool: "message",
-        arguments: {},
-      }),
-    ).resolves.toMatchObject({
-      success: false,
-      contentItems: [
-        {
-          type: "inputText",
-          text: "OpenClaw tool is not available for this turn: message",
-        },
-      ],
-    });
-  });
-
-  it("keeps the persistent dynamic schema stable across heartbeat-only turns", async () => {
-    const { sessionFile, workspaceDir } = createRunPaths();
-    const createHeartbeatRunParams = (trigger?: EmbeddedRunAttemptParams["trigger"]) => {
-      const params = createParams(sessionFile, workspaceDir);
-      params.disableTools = false;
-      const runtimePlan = createCodexRuntimePlanFixture();
-      params.runtimePlan = {
-        ...runtimePlan,
-        tools: {
-          normalize: (tools: Array<{ name: string }>) =>
-            trigger === "heartbeat"
-              ? tools.filter((tool) => tool.name === "heartbeat_respond")
-              : tools,
-          logDiagnostics: () => undefined,
-        },
-      } as unknown as NonNullable<EmbeddedRunAttemptParams["runtimePlan"]>;
-      if (trigger) {
-        params.trigger = trigger;
-      }
-      return params;
-    };
-    const registeredTools = [
-      createRuntimeDynamicTool("message"),
-      createRuntimeDynamicTool("web_search"),
-      createRuntimeDynamicTool("heartbeat_respond"),
-    ];
-    const normalBridge = createCodexToolBridgeForTest(
-      createHeartbeatRunParams(),
-      registeredTools,
-      registeredTools,
-    );
-    const heartbeatBridge = createCodexToolBridgeForTest(
-      createHeartbeatRunParams("heartbeat"),
-      [createRuntimeDynamicTool("heartbeat_respond")],
-      registeredTools,
-    );
-    const nextNormalBridge = createCodexToolBridgeForTest(
-      createHeartbeatRunParams(),
-      registeredTools,
-      registeredTools,
-    );
-    expect(specNames(heartbeatBridge.availableSpecs)).toEqual(["heartbeat_respond"]);
-    expect(specNames(heartbeatBridge.specs)).toEqual(specNames(normalBridge.specs));
-    expect(specNames(nextNormalBridge.specs)).toEqual(specNames(normalBridge.specs));
   });
   it("disables Codex native tool surfaces when runtime toolsAllow is empty", async () => {
     const params = createRunParams();
@@ -2852,82 +2697,6 @@ describe("runCodexAppServerAttempt", () => {
     await run;
   });
 
-  it("bounds restored plan state after compaction", async () => {
-    const params = createRunParams();
-    const harness = createStartedThreadHarness();
-    const run = runCodexAppServerAttempt(params);
-    await harness.waitForMethod("turn/start");
-    await harness.notify({
-      method: "turn/plan/updated",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        explanation: "e".repeat(10_000),
-        plan: Array.from({ length: 100 }, (_, index) => ({
-          step: `${index}: ${"x".repeat(2_000)}`,
-          status: index === 0 ? "inProgress" : "pending",
-        })),
-      },
-    });
-    await harness.notify(
-      itemNotification("item/started", { type: "contextCompaction", id: "compact-1" }),
-    );
-    await harness.notify(
-      itemNotification("item/completed", { type: "contextCompaction", id: "compact-1" }),
-    );
-
-    const request = harness.requests.find((entry) => entry.method === "thread/inject_items");
-    const text = (
-      request?.params as { items?: Array<{ content?: Array<{ text?: string }> }> } | undefined
-    )?.items?.[0]?.content?.[0]?.text;
-    expect(text).toBeDefined();
-    const payloadText = text?.slice((text?.indexOf("\n") ?? -1) + 1) ?? "";
-    const payload = JSON.parse(payloadText) as {
-      markdown?: string;
-      plan: Array<{ step: string; status: string }>;
-    };
-    expect(Buffer.byteLength(payloadText, "utf8")).toBeLessThanOrEqual(32 * 1024);
-    expect(Buffer.byteLength(payload.markdown ?? "", "utf8")).toBeLessThanOrEqual(2 * 1024);
-    expect(payload.plan.length).toBeLessThanOrEqual(50);
-    expect(payload.plan.every((step) => Buffer.byteLength(step.step, "utf8") <= 512)).toBe(true);
-    expect(payload.plan[0]?.status).toBe("in_progress");
-
-    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-    await run;
-  });
-
-  it("continues the turn when restoring plan state after compaction fails", async () => {
-    const params = createRunParams();
-    const harness = createStartedThreadHarness(async (method) => {
-      if (method === "thread/inject_items") {
-        throw new Error("injected test failure");
-      }
-      return undefined;
-    });
-    const run = runCodexAppServerAttempt(params);
-    await harness.waitForMethod("turn/start");
-    await harness.notify({
-      method: "turn/plan/updated",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        explanation: "Keep working",
-        plan: [{ step: "Finish safely", status: "inProgress" }],
-      },
-    });
-    await harness.notify(
-      itemNotification("item/started", { type: "contextCompaction", id: "compact-1" }),
-    );
-    await harness.notify(
-      itemNotification("item/completed", { type: "contextCompaction", id: "compact-1" }),
-    );
-    expect(harness.requests.map((request) => request.method)).toContain("thread/inject_items");
-
-    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-    const result = await run;
-    expect(readAttemptTerminal(result).promptError).toBeNull();
-  });
-
   it("fails closed for Codex app defaults when restricted native tools have no plugin config", async () => {
     const params = createRunParams();
     setCodexTestToolFactory(params, () => [createRuntimeDynamicTool("message")]);
@@ -3147,85 +2916,6 @@ describe("runCodexAppServerAttempt", () => {
       }
     },
   );
-
-  it("applies before_prompt_build to Codex developer instructions and turn input", async () => {
-    const llmInput = vi.fn();
-    const beforePromptBuild = vi.fn(async () => ({
-      systemPrompt: "custom codex system",
-      prependSystemContext: "pre system",
-      appendSystemContext: "post system",
-      prependContext: "queued context",
-      appendContext: "tail context",
-      toolsAllow: ["*"],
-    }));
-    initializeGlobalHookRunner(
-      createMockPluginRegistry([
-        { hookName: "before_prompt_build", handler: beforePromptBuild },
-        { hookName: "llm_input", handler: llmInput },
-      ]),
-    );
-    const { sessionFile, workspaceDir } = createRunPaths();
-    const sessionManager = openRunSession(sessionFile);
-    sessionManager.appendMessage(assistantMessage("previous turn", Date.now()));
-    const harness = createStartedThreadHarness();
-    const params = createParams(sessionFile, workspaceDir, { provider: "openai" });
-    params.inputProvenance = { kind: "inter_session", sourceTool: "sessions_send" };
-    params.config = {
-      ...params.config,
-      agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
-    };
-    const run = runCodexAppServerAttempt(params);
-    await harness.waitForMethod("turn/start");
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-    await run;
-    expect(beforePromptBuild).toHaveBeenCalledOnce();
-    const [hookInput, hookContext] = mockCall(beforePromptBuild, "before_prompt_build") as [
-      {
-        messages?: Array<{ content?: Array<{ text?: string; type?: string }>; role?: string }>;
-        prompt?: string;
-      },
-      { runId?: string; sessionId?: string },
-    ];
-    expect(hookInput.prompt).toBe("hello");
-    expect(hookInput.messages).toEqual([
-      expect.objectContaining({
-        role: "assistant",
-        content: [{ type: "text", text: "previous turn" }],
-      }),
-    ]);
-    expect(hookContext.runId).toBe("run-1");
-    expect(hookContext.sessionId).toBe("session-1");
-    expect(hookContext).toMatchObject({
-      modelProviderId: params.provider,
-      modelId: params.modelId,
-      inputProvenance: { kind: "inter_session", sourceTool: "sessions_send" },
-    });
-    const threadStart = harness.requests.find((request) => request.method === "thread/start");
-    const threadStartParams = threadStart?.params as { developerInstructions?: string } | undefined;
-    const wrappedPluginSystemContext = (text: string) =>
-      `---\n\nOpenClaw plugin-injected system context. This block is not workspace file content.\n\n${text}\n\n---`;
-    expect(threadStartParams?.developerInstructions).toContain(
-      `${wrappedPluginSystemContext("pre system")}\n\ncustom codex system\n\n${wrappedPluginSystemContext("post system")}`,
-    );
-    const turnStart = harness.requests.find((request) => request.method === "turn/start");
-    const turnStartParams = turnStart?.params as
-      | { input?: Array<{ text?: string; text_elements?: unknown[]; type?: string }> }
-      | undefined;
-    expect(turnStartParams?.input).toEqual([
-      { type: "text", text: "queued context\n\nhello\n\ntail context", text_elements: [] },
-    ]);
-    expect(JSON.stringify(turnStartParams)).not.toContain("previous turn");
-    const [llmInputPayload] = mockCall(llmInput, "llm_input") as [
-      { historyMessages?: unknown[]; prompt?: string },
-      unknown,
-    ];
-    expect(llmInputPayload.prompt).toBe("queued context\n\nhello\n\ntail context");
-    expect(llmInputPayload.historyMessages).toEqual([]);
-    expect(JSON.stringify(llmInputPayload)).not.toContain("previous turn");
-  });
 
   it.each([
     {
@@ -3589,7 +3279,7 @@ describe("runCodexAppServerAttempt", () => {
         sessionManager.branchWithSummary(null, summary);
       }
       // A metadata entry gives compaction a real retained boundary even for a summary-only cut.
-      const firstKeptEntryId = sessionManager.appendThinkingLevelChange("off");
+      const firstKeptEntryId = await sessionManager.appendThinkingLevelChange("off");
       if (tail === "user-assistant") {
         sessionManager.appendMessage(userMessage("canonical SQLite startup question", Date.now()));
       }

@@ -3808,6 +3808,10 @@
     "target": "代码模式快速上手"
   },
   {
+    "source": "Code Mode executors",
+    "target": "代码模式执行器"
+  },
+  {
     "source": "Code Mode configuration",
     "target": "代码模式配置"
   },
@@ -4898,5 +4902,21 @@
   {
     "source": "typesafe",
     "target": "typesafe"
+  },
+  {
+    "source": "Local ONNX decision models",
+    "target": "本地 ONNX 决策模型"
+  },
+  {
+    "source": "ONNX",
+    "target": "ONNX"
+  },
+  {
+    "source": "onnx",
+    "target": "onnx"
+  },
+  {
+    "source": "Onnx plugin reference",
+    "target": "ONNX 插件参考"
   }
 ]

@@ -5,7 +5,10 @@ import {
   readDaemonRuntimePin,
   readDaemonRuntimePinForInstall,
 } from "../../daemon/runtime-pin-state.js";
-import { resolveServiceEntrypoint } from "../../daemon/service-layout.js";
+import {
+  resolveManagedServiceNodeRunner,
+  resolveServiceEntrypoint,
+} from "../../daemon/service-layout.js";
 import { fingerprintGatewayServiceDefinition } from "../../daemon/service-rebind.js";
 import type { GatewayServiceCommandConfig } from "../../daemon/service-types.js";
 import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
@@ -27,16 +30,13 @@ import {
 import { UpdatePreMutationError, type UpdateCommandOptions } from "./shared.js";
 import { captureUpdateCommandExecutorAuthority } from "./update-command-executor.js";
 import { verifyPreviousGatewayForUpdate } from "./update-command-readiness.js";
-import { UpdateCommandRecoveryPendingError } from "./update-command-recovery.js";
+import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import type {
   OriginalManagedServiceRuntime,
   PreManagedServiceStop,
 } from "./update-command-service-context-types.js";
 import { revalidateManagedGatewayServiceAfterUpdate } from "./update-command-service-maintenance.js";
-import {
-  assertGatewayServiceManagementAllowedForUpdate,
-  resolveManagedServiceNodeRunner,
-} from "./update-command-service-plan.js";
+import { assertGatewayServiceManagementAllowedForUpdate } from "./update-command-service-plan.js";
 
 async function nodeIdentity(nodeRunner: string): Promise<string> {
   const real = await fs.realpath(nodeRunner);

@@ -4,21 +4,24 @@ import { hostname } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as restartHealthProbe from "../cli/daemon-cli/restart-health-probe.js";
 import { waitForGatewayHealthyRestart } from "../cli/daemon-cli/restart-health.js";
 import {
   ServiceInspectionError,
   ServiceOwnershipRefusalError,
 } from "../daemon/service-inspection-error.js";
-import type { SystemdServiceReadBinding } from "../daemon/service-types.js";
 import type { GatewayService } from "../daemon/service.js";
 import { createMockGatewayService, mockSystemAccountHome } from "../daemon/service.test-helpers.js";
 import { createSystemdCommandQuery } from "../daemon/systemd-command-query.js";
 import { readLoadedSystemdServiceRuntime } from "../daemon/systemd-loaded-runtime.js";
 import * as gatewayLock from "../infra/gateway-lock.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import * as packageJson from "../infra/package-json.js";
+import * as portsInspect from "../infra/ports-inspect.js";
 import { tryAcquireExclusiveSqliteCoordinator } from "../infra/sqlite-coordinator.js";
 import * as sqliteSnapshotSource from "../infra/sqlite-snapshot-source.js";
 import { acquireGatewayLifecycleCoordinator } from "../infra/state-database-coordinator.js";
+import * as updateGitRuntime from "../infra/update-git-runtime.js";
 import * as updateRunDriver from "../infra/update-run-driver.js";
 import { readUpdateRunDriver } from "../infra/update-run-driver.js";
 import {
@@ -38,6 +41,7 @@ import {
 import { withEnvAsync } from "../test-utils/env.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { beginDoctorMaintenance } from "./doctor-maintenance.js";
+import { stoppedSystemdBinding } from "./doctor-maintenance.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   resolveService: vi.fn<() => GatewayService>(),
@@ -48,6 +52,14 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../daemon/service.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../daemon/service.js")>()),
   resolveGatewayService: (...args: []) => mocks.resolveService(...args),
+}));
+
+vi.mock("../cli/update-cli/update-command-service-drain.js", () => ({
+  withGatewayMaintenanceDrain: async (_params: unknown, stop: () => Promise<unknown>) =>
+    await stop(),
+}));
+vi.mock("../daemon/systemd-maintenance.js", () => ({
+  prepareSystemdGatewayMaintenance: async () => false,
 }));
 
 vi.mock("./doctor-service-repair-policy.js", async (importOriginal) => ({
@@ -98,6 +110,23 @@ beforeEach(() => {
   mockSystemAccountHome();
   mocks.stops = 0;
   vi.mocked(waitForGatewayHealthyRestart).mockClear();
+  // Exercise the real owner-lease reader without depending on a host listener or dist build.
+  vi.spyOn(packageJson, "readPackageVersion").mockResolvedValue("2026.9.5");
+  vi.spyOn(updateGitRuntime, "readBuiltGatewayBuildId").mockResolvedValue("doctor-fixture-build");
+  vi.spyOn(portsInspect, "inspectPortUsage").mockImplementation(async (port) => ({
+    port,
+    status: "busy",
+    listeners: [],
+    hints: ["process details are unavailable"],
+  }));
+  vi.spyOn(restartHealthProbe, "confirmGatewayReachable").mockResolvedValue({
+    reachable: true,
+    gatewayVersion: "2026.9.5",
+    gatewayBuildId: "doctor-fixture-build",
+    activatedPluginErrors: [],
+    unavailablePlugins: [],
+    channelProbeErrors: [],
+  });
 });
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
@@ -151,58 +180,6 @@ type LegacyCatalog =
   | "future-content"
   | "conflict-on-recheck"
   | "different-state";
-
-function stoppedSystemdBinding(onPassiveRead: () => void): SystemdServiceReadBinding {
-  const unit = "openclaw-gateway.service";
-  const unitPath = "/org/freedesktop/systemd1/unit/openclaw_2dgateway_2eservice";
-  const properties: Record<string, unknown> = {
-    Id: unit,
-    LoadState: "loaded",
-    ActiveState: "inactive",
-    SubState: "dead",
-    StartLimitBurst: 5,
-    ActiveEnterTimestampMonotonic: 100,
-    InactiveEnterTimestampMonotonic: 200,
-    Result: "success",
-    NRestarts: 0,
-    MainPID: 0,
-    ExecMainStatus: 0,
-    ExecMainCode: 1,
-    KillMode: "control-group",
-    TasksCurrent: Number("18446744073709551615"),
-    MemoryCurrent: 0,
-  };
-  return {
-    unit,
-    managerUid: 2001,
-    destination: ":1.42",
-    verify() {},
-    async close() {},
-    async query(args, _signatures, _deadline, inspection) {
-      if (args[0] === "call") {
-        if (args[4] === "LoadUnit" || args[4] === "GetUnit") {
-          return [[unitPath]];
-        }
-        if (args[4] === "GetProcesses") {
-          return [[[]]];
-        }
-      } else if (args[0] === "get-property") {
-        const assertRead = inspection?.assertReadCurrent ?? inspection?.assertCurrent;
-        // The native peer checks custody around each individual property read.
-        return args.slice(4).map((name) => {
-          assertRead?.();
-          onPassiveRead();
-          if (!Object.hasOwn(properties, name)) {
-            throw new Error(`Unexpected systemd property: ${name}`);
-          }
-          assertRead?.();
-          return properties[name];
-        });
-      }
-      throw new Error(`Unexpected systemd query: ${args.join(" ")}`);
-    },
-  };
-}
 
 async function runDoctorFinishForStoppedUnit(
   scenario: StoppedUnitState,

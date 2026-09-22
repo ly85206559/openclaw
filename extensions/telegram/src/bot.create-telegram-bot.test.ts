@@ -18,6 +18,7 @@ import type {
   PluginStateKeyedStore,
   PluginStateSyncKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { questionGatewayRuntime } from "openclaw/plugin-sdk/question-gateway-runtime";
 import type { GetReplyOptions, MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import {
   clearRuntimeConfigSnapshot,
@@ -3880,38 +3881,33 @@ describe("createTelegramBot", () => {
       ctx: Record<string, unknown>,
     ) => Promise<void>;
 
-    await callbackHandler({
-      update: { update_id: 222 },
-      callbackQuery: {
-        id: "cb-1",
-        data: "ping",
+    const callbackCtx = (id: string, data: string) =>
+      makeCallbackRetryContext({
+        updateId: 222,
+        id,
+        data,
+        messageId: 9001,
         from: { id: 789, username: "testuser" },
-        message: {
-          chat: { id: 123, type: "private" },
-          date: 1736380800,
-          message_id: 9001,
-        },
-      },
-      me: { username: "openclaw_bot" },
-      getFile: async () => ({}),
-    });
-    await callbackHandler({
-      update: { update_id: 222 },
-      callbackQuery: {
-        id: "cb-question-duplicate",
-        data: "tgq1:ask_0123456789abcdef0123456789abcdef:1",
-        from: { id: 789, username: "testuser" },
-        message: {
-          chat: { id: 123, type: "private" },
-          date: 1736380800,
-          message_id: 9001,
-        },
-      },
-      me: { username: "openclaw_bot" },
-      getFile: async () => ({}),
-    });
-    expect(replySpy).toHaveBeenCalledTimes(1);
-    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cb-question-duplicate");
+        message: { chat: { id: 123, type: "private" } },
+      });
+    const resolveQuestion = vi
+      .spyOn(questionGatewayRuntime, "resolveOption")
+      .mockRejectedValue(new Error("Unexpected duplicate question resolution"));
+    try {
+      // Admission owns dedupe state; the duplicate handler must still acknowledge its button.
+      await runTelegramMiddlewareChain({
+        ctx: callbackCtx("cb-1", "ping"),
+        finalHandler: callbackHandler,
+      });
+      await callbackHandler(
+        callbackCtx("cb-question-duplicate", "tgq1:ask_0123456789abcdef0123456789abcdef:1"),
+      );
+      expect(replySpy).toHaveBeenCalledTimes(1);
+      expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cb-question-duplicate");
+      expect(resolveQuestion).not.toHaveBeenCalled();
+    } finally {
+      resolveQuestion.mockRestore();
+    }
 
     replySpy.mockClear();
 
@@ -6471,15 +6467,21 @@ describe("createTelegramBot", () => {
 
   it("retries model selection callbacks after a bubbled session-store failure", async () => {
     createTelegramBot({ token: "tok" });
-    const callbackHandler = getOnHandler("callback_query");
     const runMiddlewareChain = (ctx: Record<string, unknown>) =>
-      runTelegramTestMiddlewareChain(middlewareUseSpy, ctx, callbackHandler);
+      runTelegramTestMiddlewareChain(middlewareUseSpy, ctx, getOnHandler("callback_query"));
 
-    const applySessionModelSelectionSpy = vi.spyOn(
-      modelSessionRuntime,
-      "applySessionModelSelection",
-    );
-    applySessionModelSelectionSpy.mockRejectedValueOnce(new Error("session store boom"));
+    const applySessionModelSelectionSpy = vi
+      .spyOn(modelSessionRuntime, "applySessionModelSelection")
+      .mockRejectedValueOnce(new Error("session store boom"))
+      .mockResolvedValueOnce({
+        status: "applied",
+        provider: "openai",
+        model: "gpt-5.4",
+        effectiveModelRef: "openai/gpt-5.4",
+        agentRuntime: "openclaw",
+        changed: true,
+        contextTokens: 128_000,
+      });
 
     const ctx = makeCallbackRetryContext({
       updateId: 890,
@@ -6491,20 +6493,14 @@ describe("createTelegramBot", () => {
     try {
       await expect(runMiddlewareChain(ctx)).rejects.toThrow("session store boom");
       await runMiddlewareChain(ctx);
+      expect(applySessionModelSelectionSpy).toHaveBeenCalledTimes(2);
     } finally {
       applySessionModelSelectionSpy.mockRestore();
     }
 
-    expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
-    const finalEditMessageText = editMessageTextSpy.mock.calls.at(-1)?.[2];
-    expect(typeof finalEditMessageText === "string" ? finalEditMessageText : "").toContain(
-      "Session-only model selection. Runtime set to <b>codex</b> from configured policy.",
-    );
-    expect(
-      editMessageTextSpy.mock.calls.some((call) =>
-        (typeof call[2] === "string" ? call[2] : "").includes("Failed to change model"),
-      ),
-    ).toBe(false);
+    expect(editMessageTextSpy.mock.calls.map((call) => call[2])).toEqual([
+      "✅ Model changed to <b>openai/gpt-5.4</b>\n\nSession-only model selection. Runtime set to <b>openclaw</b>. The agent default in openclaw.json is unchanged. This chat keeps the model selection across /new and /reset; use /model default -s to clear the session model selection.",
+    ]);
   });
 
   it("shows a permanent rejection when model selection is locked", async () => {

@@ -24,6 +24,7 @@ import {
   getOpenClawAgentDatabaseIfOpen,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { clearOpenClawAgentIntegrityVerification } from "../../state/openclaw-quarantine-store.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -85,7 +86,7 @@ vi.mock("./session-accessor.sqlite-reclamation-worker.js", async (importOriginal
     await importOriginal<typeof import("./session-accessor.sqlite-reclamation-worker.js")>();
   return {
     ...actual,
-    withSqliteReclamationWorker: ((options, claim, run, assertRequestCurrent) =>
+    withSqliteReclamationWorker: ((options, claim, run, assertRequestCurrent, signal) =>
       actual.withSqliteReclamationWorker(
         options,
         claim,
@@ -123,6 +124,7 @@ vi.mock("./session-accessor.sqlite-reclamation-worker.js", async (importOriginal
           }
         },
         assertRequestCurrent,
+        signal,
       )) satisfies typeof actual.withSqliteReclamationWorker,
   };
 });
@@ -678,6 +680,7 @@ test.each([false, true])(
   async (rejected) => {
     const { databaseOptions, plan } = createFixture();
     closeOpenClawAgentDatabasesForTest(databaseOptions.env.OPENCLAW_STATE_DIR);
+    clearOpenClawAgentIntegrityVerification(databaseOptions.path, databaseOptions.env);
     const file = path.join(tempDirs.make("openclaw-writer-log-"), "writer.log");
     const diagnostics: SqliteSessionReclamationDiagnostics = {};
     const workers: Array<{ worker: Worker; id: number }> = [];
@@ -881,6 +884,7 @@ test.each([
   async ({ elapsedMs, rejected, failLog }) => {
     const { databaseOptions, plan } = createFixture();
     closeOpenClawAgentDatabasesForTest(databaseOptions.env.OPENCLAW_STATE_DIR);
+    clearOpenClawAgentIntegrityVerification(databaseOptions.path, databaseOptions.env);
     const file = path.join(tempDirs.make("openclaw-reclamation-log-"), "reclamation.log");
     await fs.writeFile(file, "");
     setLoggerOverride({ level: "info", consoleLevel: "silent", file });

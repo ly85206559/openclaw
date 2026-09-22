@@ -1,13 +1,58 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { Selectable } from "kysely";
+import type { McpOAuthReadOnlyOperations } from "../agents/mcp-oauth-store.kernel.js";
+import type {
+  SandboxBrowserRegistryEntry,
+  SandboxRegistryEntry,
+} from "../agents/sandbox/registry.types.js";
+import type { SubagentRunReadRecord } from "../agents/subagents/registry/subagent-registry-read.types.js";
+import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import type { WorkspaceStateSnapshot } from "../agents/workspace-state-store.kernel.js";
 import type {
   ExecutionIdentityInspectionQuery,
   ExecutionIdentityInspectionOutcome,
 } from "../audit/execution-identity-inspection.types.js";
+import type {
+  CronRunRecoveryReadCommand,
+  CronRunRecoveryObservation,
+} from "../cron/store/run-recovery-read.types.js";
 import type { FleetCellRecord } from "../fleet/registry.types.js";
+import type {
+  ListTerminalOperatorApprovalsInput,
+  ListTerminalOperatorApprovalsResult,
+} from "../gateway/operator-approval-store.types.js";
+import type {
+  WorkerPlacementConflictBinding,
+  WorkerSessionPlacementReadResult,
+} from "../gateway/worker-environments/placement-read-projection.types.js";
+import type { WorkerSessionPlacementChangeSnapshot } from "../gateway/worker-environments/placement-record.js";
+import type {
+  WorkerEnvironmentFacts,
+  WorkerEnvironmentPrunePage,
+  WorkerEnvironmentPruneReadInput,
+} from "../gateway/worker-environments/store-worker-contract.js";
+import type {
+  DevicePairingReadCommand,
+  DevicePairingReadReply,
+} from "../infra/device-pairing-read.types.js";
+import type { readExecApprovalsConfigRow } from "../infra/exec-approvals-sqlite.js";
+import type {
+  ConversationRef,
+  SessionBindingRecord,
+} from "../infra/outbound/session-binding.types.js";
 import type { SqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
+import type {
+  readInterruptedUpdateCandidate,
+  readUpdateRunRecord,
+  readUpdateRuns,
+  UpdateRunListInput,
+} from "../infra/update-run-read.kernel.js";
+import type {
+  PluginBlobReadCommand,
+  PluginBlobReadReply,
+} from "../plugin-state/plugin-blob-worker-contract.js";
 import type { AsyncWorkScope } from "../shared/async-work-scope.js";
+import type { SkillLibraryReadOnlyOperations } from "../skills/library/selection-read.kernel.js";
 import type { OnboardingRecommendationsRecord } from "./onboarding-recommendations.contract.js";
 import type { OpenClawAgentDatabaseRegistryReadResult } from "./openclaw-agent-db-contract.js";
 import type { ConfigMachineState } from "./openclaw-state-db.generated.js";
@@ -29,14 +74,56 @@ export type OpenClawStateReadAuthority = {
 };
 
 export type OpenClawStateReadCommand =
+  | {
+      [Kind in keyof McpOAuthReadOnlyOperations]: {
+        type: Kind;
+        input: McpOAuthReadOnlyOperations[Kind]["input"];
+      };
+    }[keyof McpOAuthReadOnlyOperations]
+  | { type: "conversationBindings.inspect"; conversation: ConversationRef }
+  | DevicePairingReadCommand
+  | {
+      type: "operatorApprovals.history";
+      input: ListTerminalOperatorApprovalsInput;
+    }
+  | PluginBlobReadCommand
+  | { type: "subagents.sessionList" }
+  | {
+      type: "subagents.runs";
+      scope: { kind: "session"; sessionKey: string } | { kind: "ids"; runIds: readonly string[] };
+    }
+  | CronRunRecoveryReadCommand
+  | { type: "exec-approvals.read" }
+  | {
+      [Kind in keyof SkillLibraryReadOnlyOperations]: {
+        type: Kind;
+        input: SkillLibraryReadOnlyOperations[Kind]["input"];
+      };
+    }[keyof SkillLibraryReadOnlyOperations]
   | { type: "agentDatabaseRegistry.read" }
+  | { type: "workerEnvironments.snapshot"; ids?: readonly string[] }
+  | { type: "workerEnvironments.pruneCandidates"; input: WorkerEnvironmentPruneReadInput }
   | { type: "onboardingRecommendations.read"; configKey: string }
-  | { type: "userProfiles.avatar.reconcile"; profileId: string }
+  | { type: "userProfiles.reconcile"; profileId: string }
+  | { type: "userProfiles.email.resolve"; email: string }
   | { type: "audit.run.inspect"; input: ExecutionIdentityInspectionQuery }
+  | { type: "updateRuns.get"; runId: string }
+  | { type: "updateRuns.list"; input: UpdateRunListInput }
+  | { type: "updateRuns.interruptedCandidate" }
   | { type: "fleet.list" }
+  | { type: "workerPlacements.changeSnapshot" }
   | { type: "fleet.get"; tenantId: string }
   | { type: "nodeHost.config" }
-  | { type: "workspace.snapshot"; workspaceDir: string };
+  | { type: "workspace.snapshot"; workspaceDir: string }
+  | { type: "sandboxRegistry.list" }
+  | { type: "sandboxRegistry.get"; containerName: string }
+  | { type: "sandboxRegistry.runtimeIds"; backendId: string; scopeKey: string }
+  | { type: "sandboxRegistry.browsers" }
+  | {
+      type: "workers.placementProjection";
+      sessionIds: readonly string[];
+      conflictBindings: readonly WorkerPlacementConflictBinding[];
+    };
 export type OpenClawStateReadRequest = {
   context: SqliteWorkerStateContext;
   databasePath: string;
@@ -48,10 +135,77 @@ export type OpenClawStateReadRequest = {
 };
 export type OpenClawStateReadReply = (
   | {
+      [Kind in keyof McpOAuthReadOnlyOperations]: {
+        ok: true;
+        type: Kind;
+        sourceAdmitted: true;
+        value: McpOAuthReadOnlyOperations[Kind]["output"];
+      };
+    }[keyof McpOAuthReadOnlyOperations]
+  | {
+      ok: true;
+      type: "conversationBindings.inspect";
+      sourceAdmitted: true;
+      record: SessionBindingRecord | null;
+    }
+  | DevicePairingReadReply
+  | {
+      ok: true;
+      type: "operatorApprovals.history";
+      sourceAdmitted: true;
+      history: ListTerminalOperatorApprovalsResult;
+    }
+  | PluginBlobReadReply
+  | {
+      [Kind in keyof SkillLibraryReadOnlyOperations]: {
+        ok: true;
+        type: Kind;
+        sourceAdmitted: true;
+        value: SkillLibraryReadOnlyOperations[Kind]["output"];
+      };
+    }[keyof SkillLibraryReadOnlyOperations]
+  | {
+      ok: true;
+      type: "userProfiles.email.resolve";
+      sourceAdmitted: true;
+      profileId: string | undefined;
+    }
+  | {
+      ok: true;
+      type: "cron.observeRunRecovery";
+      sourceAdmitted: true;
+      observation: CronRunRecoveryObservation;
+    }
+  | {
+      ok: true;
+      type: "subagents.sessionList";
+      sourceAdmitted: true;
+      runs: Map<string, SubagentRunReadRecord>;
+    }
+  | {
+      ok: true;
+      type: "subagents.sessionList";
+      sourceAdmitted: true;
+      unavailable: { message: string; error: OpenClawStateWorkerErrorPayload | undefined };
+    }
+  | { ok: true; type: "subagents.runs"; sourceAdmitted: true; runs: Map<string, SubagentRunRecord> }
+  | {
       ok: true;
       type: "agentDatabaseRegistry.read";
       sourceAdmitted?: true;
       result: OpenClawAgentDatabaseRegistryReadResult;
+    }
+  | {
+      ok: true;
+      type: "workerEnvironments.pruneCandidates";
+      sourceAdmitted: true;
+      page: WorkerEnvironmentPrunePage;
+    }
+  | {
+      ok: true;
+      type: "workerEnvironments.snapshot";
+      sourceAdmitted: true;
+      facts: WorkerEnvironmentFacts;
     }
   | {
       ok: true;
@@ -61,7 +215,7 @@ export type OpenClawStateReadReply = (
     }
   | {
       ok: true;
-      type: "userProfiles.avatar.reconcile";
+      type: "userProfiles.reconcile";
       sourceAdmitted: true;
       profile: ProfileDisplayRow | undefined;
     }
@@ -72,7 +226,37 @@ export type OpenClawStateReadReply = (
       result: ExecutionIdentityInspectionOutcome;
     }
   | { ok: true; type: "admit" }
+  | {
+      ok: true;
+      type: "exec-approvals.read";
+      sourceAdmitted: true;
+      row: ReturnType<typeof readExecApprovalsConfigRow>;
+    }
+  | {
+      ok: true;
+      type: "updateRuns.get";
+      sourceAdmitted: true;
+      run: ReturnType<typeof readUpdateRunRecord>;
+    }
+  | {
+      ok: true;
+      type: "updateRuns.list";
+      sourceAdmitted: true;
+      runs: ReturnType<typeof readUpdateRuns>;
+    }
+  | {
+      ok: true;
+      type: "updateRuns.interruptedCandidate";
+      sourceAdmitted: true;
+      run: ReturnType<typeof readInterruptedUpdateCandidate>;
+    }
   | { ok: true; type: "fleet.list"; sourceAdmitted: true; cells: FleetCellRecord[] }
+  | {
+      ok: true;
+      type: "workerPlacements.changeSnapshot";
+      sourceAdmitted: true;
+      placements: WorkerSessionPlacementChangeSnapshot[];
+    }
   | { ok: true; type: "fleet.get"; sourceAdmitted: true; cell: FleetCellRecord | undefined }
   | {
       ok: true;
@@ -81,6 +265,31 @@ export type OpenClawStateReadReply = (
       row: Pick<Selectable<ConfigMachineState>, "value_json" | "updated_at_ms"> | undefined;
     }
   | { ok: true; type: "workspace.snapshot"; sourceAdmitted: true; snapshot: WorkspaceStateSnapshot }
+  | {
+      ok: true;
+      type: "sandboxRegistry.list";
+      sourceAdmitted: true;
+      entries: SandboxRegistryEntry[];
+    }
+  | {
+      ok: true;
+      type: "sandboxRegistry.get";
+      sourceAdmitted: true;
+      entry: SandboxRegistryEntry | null;
+    }
+  | { ok: true; type: "sandboxRegistry.runtimeIds"; sourceAdmitted: true; runtimeIds: string[] }
+  | {
+      ok: true;
+      type: "sandboxRegistry.browsers";
+      sourceAdmitted: true;
+      entries: SandboxBrowserRegistryEntry[];
+    }
+  | {
+      ok: true;
+      type: "workers.placementProjection";
+      sourceAdmitted: true;
+      result: WorkerSessionPlacementReadResult;
+    }
   | {
       ok: false;
       sourceAdmitted?: true;
@@ -94,7 +303,16 @@ export type OpenClawStateReadReply = (
 
 export type OpenClawStateReadOutcome =
   | { value: Extract<OpenClawStateReadReply, { ok: true }> }
-  | { error: unknown; sourceAdmitted?: true };
+  | { error: unknown; sourceAdmitted?: boolean };
+
+export type OpenClawStateReadPhase = "before-read" | "read" | "unobserved";
+export type OpenClawStateReadOptions = {
+  /** Reuse the caller's captured authority instead of admitting a newer lifecycle. */
+  context?: OpenClawStateWorkerContext;
+  /** Publication and authority reads must not inherit an inspection snapshot. */
+  current?: boolean;
+  mapError?: (error: unknown, phase: OpenClawStateReadPhase) => unknown;
+};
 
 export type ReadResource = { close(): Promise<void> };
 export type RetainedReadScope = {

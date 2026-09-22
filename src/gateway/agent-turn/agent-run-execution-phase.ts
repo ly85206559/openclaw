@@ -132,8 +132,20 @@ export async function startAgentRunExecution(params: {
     const abortController = abortRegistration.controller;
     const operationalRunInstance = prepared.operationalRunInstance;
     const sessionKey = abortEntry?.sessionKey;
+    const assertTaskSettlementCurrent = () => {
+      params.assertContextCurrent?.();
+      assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
+      // Cancellation closes execution, but its retained producer still records the outcome.
+      if (
+        !leaseActive ||
+        (abortRegistration.registered && !prepared.activeGatewayWorkAdmission.isActive())
+      ) {
+        throw new Error("Agent task settlement no longer owns this Gateway run");
+      }
+    };
     const assertDispatchCurrent = () => {
       params.assertContextCurrent?.();
+      prepared.operatorAuthority?.assertCurrent();
       abortController.signal.throwIfAborted();
       assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
       if (
@@ -425,6 +437,7 @@ export async function startAgentRunExecution(params: {
           withAgentRunDispatchExecutionIdentity(
             {
               assertCurrent: assertDispatchCurrent,
+              assertSettlementCurrent: assertTaskSettlementCurrent,
               admittedRunEntry: abortEntry,
               commandRuntimeContext: {
                 config: prepared.replyDispatchRuntime.config,
@@ -512,6 +525,7 @@ export async function startAgentRunExecution(params: {
                 forceCodeModeTools: params.request.forceCodeModeTools,
                 ...(executionIdentityAdmission ? { executionIdentityAdmission } : {}),
                 operationalRunInstance: prepared.operationalRunInstance,
+                operatorAuthority: prepared.operatorAuthority,
                 onAdmittedRunContext: (admittedRunContext) => {
                   skillLibraryAuthoring?.bind(admittedRunContext);
                   bindGatewayContextResolver(

@@ -1,3 +1,4 @@
+import { MessageChannel, receiveMessageOnPort } from "node:worker_threads";
 import type { Result } from "@openclaw/normalization-core/result";
 import { createSqliteLifecycleAggregateError } from "../infra/sqlite-coordinator.js";
 import { assertTransactionUsable } from "../infra/sqlite-transaction.js";
@@ -21,6 +22,10 @@ import {
   retainAgentDatabase,
 } from "./openclaw-agent-db-lifecycle.js";
 import { ensureOpenClawAgentDatabasePermissions } from "./openclaw-agent-db-permissions.js";
+import {
+  getOpenClawAgentDatabaseValidation,
+  type OpenClawAgentDatabaseValidation,
+} from "./openclaw-agent-db-validation-cache.js";
 import { getOpenClawAgentDatabaseIfOpen, openOpenClawAgentDatabase } from "./openclaw-agent-db.js";
 import type {
   AgentDatabaseExecutionIdentity,
@@ -71,6 +76,7 @@ export function openExistingSqliteWorkerBackend(
   let identity: AgentDatabaseExecutionIdentity | undefined;
   let openingFailure: { error: unknown } | undefined;
   const openWriter = () => {
+    let validation: OpenClawAgentDatabaseValidation | undefined;
     if (!database) {
       // Promotion needs the current command's source authority before any durable open work.
       admitOpen();
@@ -83,17 +89,30 @@ export function openExistingSqliteWorkerBackend(
         sharedBorrow = retainOpenClawStateDatabase(shared);
       }
       const lease = prepareOpenClawAgentDatabaseWorkerLease(options, shared, input.leaseId);
+      const { port1, port2 } = new MessageChannel();
       try {
-        requestSqliteWorkerOperationAdmission({
-          stage: "prepare",
-          facts: {
-            kind: "shared-owner",
-            identity: requireOpenClawStateDatabaseIdentity(shared),
-            lease: lease.receipt,
+        requestSqliteWorkerOperationAdmission(
+          {
+            stage: "prepare",
+            facts: {
+              kind: "shared-owner",
+              identity: requireOpenClawStateDatabaseIdentity(shared),
+              lease: lease.receipt,
+              validationPort: port2,
+            },
           },
-        });
+          [port2],
+        );
+        // The host posts before granting admission; shared revocation remains live after transfer.
+        // SAFETY: this private port receives only the host's typed validation receipt.
+        lease.validation = receiveMessageOnPort(port1)?.message as
+          | OpenClawAgentDatabaseValidation
+          | undefined;
       } catch (error) {
         throw new SqliteWorkerOpenRefusedError(error);
+      } finally {
+        port1.close();
+        port2.close();
       }
       assertFileIdentity();
       let registration: OpenClawAgentDatabaseRegistrationCommit | undefined;
@@ -152,13 +171,24 @@ export function openExistingSqliteWorkerBackend(
         incarnation: nativeIdentity.incarnation,
         nativeLocation: nativeIdentity.filename,
       };
+      validation = getOpenClawAgentDatabaseValidation(opened);
     }
     if (!database || !database.db.isOpen || getOpenClawAgentDatabaseIfOpen(options) !== database) {
       throw new Error("Agent execution lost its retained native database");
     }
-    requestSqliteWorkerOperationAdmission({ stage: "prepare", facts: { identity } });
+    requestSqliteWorkerOperationAdmission({ stage: "prepare", facts: { identity, validation } });
     return database;
   };
+  const admit = (stage: "transaction" | "commit") => {
+    assertFileIdentity();
+    requestSqliteWorkerOperationAdmission({ stage, facts: { identity } });
+    if (stage === "commit") {
+      ensureOpenClawAgentDatabasePermissions(input.databasePath, options);
+    }
+  };
+  let providerReview:
+    | typeof import("../config/sessions/provider-review-store.worker.js")
+    | undefined;
   const domain = createAgentDatabaseDomainOwner({
     databasePath: input.databasePath,
     assertCurrent() {
@@ -167,13 +197,7 @@ export function openExistingSqliteWorkerBackend(
       assertFileIdentity();
       return current.db;
     },
-    admit(stage) {
-      assertFileIdentity();
-      requestSqliteWorkerOperationAdmission({ stage, facts: { identity } });
-      if (stage === "commit") {
-        ensureOpenClawAgentDatabasePermissions(input.databasePath, options);
-      }
-    },
+    admit,
   });
   let closed = false;
   const assertOpen = () => {
@@ -183,6 +207,11 @@ export function openExistingSqliteWorkerBackend(
   };
   return {
     prepare(command) {
+      if (command.type === "session.providerReview.compare") {
+        return import("../config/sessions/provider-review-store.worker.js").then((module) => {
+          providerReview = module;
+        });
+      }
       if (
         command.type === "database.domain.bind" ||
         command.type === "database.domain.execute" ||
@@ -217,6 +246,14 @@ export function openExistingSqliteWorkerBackend(
       if (command.type === "database.prepareWrite") {
         openWriter();
         return undefined;
+      }
+      if (command.type === "session.providerReview.compare" && providerReview) {
+        return providerReview.compareSessionProviderReviewInWorker(
+          openWriter(),
+          options,
+          command.input,
+          admit,
+        );
       }
       throw new Error("Unknown agent database operation");
     },

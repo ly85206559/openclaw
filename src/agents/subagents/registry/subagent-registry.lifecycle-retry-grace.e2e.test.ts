@@ -12,13 +12,14 @@ import { maybeSpawnVisibleSession } from "../../tools/sessions-spawn-visible.js"
 import { createSessionsYieldTool } from "../../tools/sessions-yield-tool.js";
 import { testing as subagentAnnounceDeliveryTesting } from "../announce/subagent-announce-delivery.test-support.js";
 import { testing as subagentAnnounceOutputTesting } from "../announce/subagent-announce-output.test-support.js";
-import { testing as subagentAnnounceTesting } from "../announce/subagent-announce.js";
+import { announceTesting as subagentAnnounceTesting } from "../announce/subagent-announce-overrides.test-support.js";
 import { maybeWakeRequesterAfterAllChildrenSettled } from "../announce/subagent-announce.requester-settle-wake.js";
-import type {
-  LifecycleData,
-  LifecycleEvent,
-  SessionStoreEntry,
-  GatewayRequest,
+import {
+  getAgentResultsForChildSession,
+  type LifecycleData,
+  type LifecycleEvent,
+  type SessionStoreEntry,
+  type GatewayRequest,
 } from "./subagent-registry.lifecycle-fixture.test-support.js";
 import { createLifecycleWaits } from "./subagent-registry.lifecycle-waits.test-support.js";
 import * as mod from "./subagent-registry.test-helpers.js";
@@ -74,7 +75,9 @@ const loadConfigMock = vi.fn(() => ({
   agents: { defaults: { subagents: { archiveAfterMinutes: 0 } } },
   session: { mainKey: "main", scope: "per-sender" },
 }));
-vi.mock("../../../config/sessions.js", () => ({
+vi.mock("../../../config/sessions.js", async () => ({
+  ...(await import("../../../config/sessions/targets.js")),
+  ...(await import("../../../config/sessions/main-session.js")),
   loadSessionStore: vi.fn(() => sessionStore),
   resolveAgentIdFromSessionKey: (key: string) => key.match(/^agent:([^:]+)/)?.[1] ?? "main",
   resolveSessionStorePathCore: () => sessionStorePath,
@@ -102,11 +105,6 @@ vi.mock("../../../browser-lifecycle-cleanup.js", () => ({
 vi.mock("../spawn/subagent-depth.js", () => ({
   getSubagentDepthFromSessionStore: () => 0,
 }));
-
-const loadSubagentRegistryRuntimeForTest = async () =>
-  ({
-    replaceSubagentRunAfterSteer: mod.replaceSubagentRunAfterSteerCore,
-  }) as unknown as typeof import("./subagent-registry-runtime.js");
 
 describe("subagent registry lifecycle error grace", () => {
   let previousFastTestEnv: string | undefined;
@@ -169,7 +167,6 @@ describe("subagent registry lifecycle error grace", () => {
       callGateway: callGatewayMock as typeof import("../../../gateway/call.js").callGateway,
       getRuntimeConfig:
         loadConfigMock as typeof import("../../../config/config.js").getRuntimeConfig,
-      loadSubagentRegistryRuntime: loadSubagentRegistryRuntimeForTest,
     });
     subagentAnnounceDeliveryTesting.setDepsForTest({
       callGateway: callGatewayMock as typeof import("../../../gateway/call.js").callGateway,
@@ -191,6 +188,8 @@ describe("subagent registry lifecycle error grace", () => {
         return event === undefined ? undefined : { event };
       },
       findSessionTranscriptArchiveEventReadOnly: async () => undefined,
+      readSessionMessagesAsync: async ({ sessionKey }) =>
+        chatHistoryBySessionKey.get(sessionKey ?? "") ?? [],
       callGateway: callGatewayMock as typeof import("../../../gateway/call.js").callGateway,
       getRuntimeConfig:
         loadConfigMock as typeof import("../../../config/config.js").getRuntimeConfig,
@@ -235,8 +234,17 @@ describe("subagent registry lifecycle error grace", () => {
       }
       await vi.advanceTimersByTimeAsync(100);
       await flushAsync();
+      await vi.dynamicImportSettled();
     }
-    throw new Error(`expected ${expectedCount} agent call(s), got ${getAgentCalls().length}`);
+    const pending = mod.listSubagentRunsForRequester(MAIN_REQUESTER_SESSION_KEY).map((run) => ({
+      runId: run.runId,
+      execution: run.execution,
+      delivery: run.delivery,
+      requesterSettleWake: run.requesterSettleWake,
+    }));
+    throw new Error(
+      `expected ${expectedCount} agent call(s), got ${getAgentCalls().length}: ${JSON.stringify(pending)}`,
+    );
   };
 
   function registerCompletionRun(
@@ -332,29 +340,6 @@ describe("subagent registry lifecycle error grace", () => {
         idempotencyKey.startsWith("announce:requester-settle:")
       );
     });
-  }
-
-  function getAgentResultsForChildSession(childSessionKey: string): string[] {
-    return getAgentCalls()
-      .filter((request) => {
-        const inputProvenance = request.params?.inputProvenance;
-        if (!inputProvenance || typeof inputProvenance !== "object") {
-          return false;
-        }
-        return (
-          (inputProvenance as { sourceSessionKey?: unknown }).sourceSessionKey === childSessionKey
-        );
-      })
-      .flatMap((request) => {
-        const internalEvents = request.params?.internalEvents;
-        const event =
-          Array.isArray(internalEvents) &&
-          internalEvents[0] &&
-          typeof internalEvents[0] === "object"
-            ? (internalEvents[0] as { result?: string })
-            : undefined;
-        return typeof event?.result === "string" ? [event.result] : [];
-      });
   }
 
   it("yields an owned visible child and delivers its requester final exactly once", async () => {
@@ -737,7 +722,7 @@ describe("subagent registry lifecycle error grace", () => {
     await flushAsync();
 
     await waitForAgentCallCount(1);
-    expect(getAgentResultsForChildSession("agent:main:subagent:freeze")).toEqual([
+    expect(getAgentResultsForChildSession(getAgentCalls(), "agent:main:subagent:freeze")).toEqual([
       "Final answer X",
     ]);
 
@@ -767,7 +752,7 @@ describe("subagent registry lifecycle error grace", () => {
     await flushAsync();
 
     await waitForAgentCallCount(2);
-    expect(getAgentResultsForChildSession("agent:main:subagent:freeze")).toEqual([
+    expect(getAgentResultsForChildSession(getAgentCalls(), "agent:main:subagent:freeze")).toEqual([
       "Final answer X",
       "Final answer X",
     ]);
@@ -794,7 +779,7 @@ describe("subagent registry lifecycle error grace", () => {
     await flushAsync();
 
     await waitForAgentCallCount(1);
-    expect(getAgentResultsForChildSession("agent:main:subagent:refresh")).toEqual([
+    expect(getAgentResultsForChildSession(getAgentCalls(), "agent:main:subagent:refresh")).toEqual([
       "Both spawned. Waiting for completion events...",
     ]);
 
@@ -849,7 +834,7 @@ describe("subagent registry lifecycle error grace", () => {
     });
     expect(runAfterRefresh.completion?.capturedAt).toBeGreaterThanOrEqual(firstCapturedAt);
     await waitForAgentCallCount(2);
-    expect(getAgentResultsForChildSession("agent:main:subagent:refresh")).toEqual([
+    expect(getAgentResultsForChildSession(getAgentCalls(), "agent:main:subagent:refresh")).toEqual([
       "Both spawned. Waiting for completion events...",
       "All 3 subagents complete. Here's the final summary.",
     ]);
@@ -905,10 +890,9 @@ describe("subagent registry lifecycle error grace", () => {
     await flushAsync();
 
     await waitForAgentCallCount(2);
-    expect(getAgentResultsForChildSession("agent:main:subagent:refresh-silent")).toEqual([
-      "All work complete, final summary",
-      "All work complete, final summary",
-    ]);
+    expect(
+      getAgentResultsForChildSession(getAgentCalls(), "agent:main:subagent:refresh-silent"),
+    ).toEqual(["All work complete, final summary", "All work complete, final summary"]);
   });
 
   it("regression, captures frozen completion output with 100KB cap and retains it for keep-mode cleanup", async () => {
@@ -1100,13 +1084,11 @@ describe("subagent registry lifecycle error grace", () => {
 
     await waitForAgentCallCount(4);
 
-    expect(getAgentResultsForChildSession("agent:main:subagent:parallel-a")).toEqual([
-      "Final answer A",
-      "Final answer A",
-    ]);
-    expect(getAgentResultsForChildSession("agent:main:subagent:parallel-b")).toEqual([
-      "Final answer B",
-      "Final answer B",
-    ]);
+    expect(
+      getAgentResultsForChildSession(getAgentCalls(), "agent:main:subagent:parallel-a"),
+    ).toEqual(["Final answer A", "Final answer A"]);
+    expect(
+      getAgentResultsForChildSession(getAgentCalls(), "agent:main:subagent:parallel-b"),
+    ).toEqual(["Final answer B", "Final answer B"]);
   });
 });

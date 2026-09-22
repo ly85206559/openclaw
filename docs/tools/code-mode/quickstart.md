@@ -39,6 +39,12 @@ omitted, `false`, or an object without an explicit `enabled` value, unless an
 agent or model override enables it. Configuring limits or other Code Mode
 options does not enable it.
 
+When enabled, Code Mode defaults to Node's `node:vm` executor for trusted
+execution. Select QuickJS in the same settings panel or set
+`tools.codeMode.executor: "quickjs"` for hardened guest isolation. Read
+[Code Mode executors](/tools/code-mode/executors) before choosing: `node:vm`
+is not a security boundary.
+
 See [Automatic per-model activation](/tools/code-mode/configuration#automatic-per-model-activation) for the
 exact semantics and the shipped model list.
 
@@ -54,6 +60,7 @@ Set explicit limits for tighter bounds:
   tools: {
     codeMode: {
       enabled: true,
+      executor: "quickjs",
       timeoutMs: 10000,
       memoryLimitBytes: 67108864,
       maxOutputBytes: 65536,
@@ -187,7 +194,8 @@ return shipments.filter((shipment) => !shipment.paid).length;
 Every load returns an independent JSON copy. Modifying it does not change the
 saved value. Use `await results.delete(id)` to release capacity. Missing or
 expired references reject with a catchable error. `API.read("results.d.ts")`
-provides the TypeScript declarations; loaded data remains `unknown` until checked.
+provides TypeScript-style documentation; loaded data is declared as `unknown`,
+so inspect its shape before composing it.
 
 References last only for the current agent run and catalog. They survive cell
 completion and `wait`, but not run end, abort, catalog replacement, permission
@@ -237,7 +245,7 @@ one from an unawaited call or timer callback, fails the cell instead of silently
 reporting success. Handlers attached after a suspension still handle their
 original promises.
 
-JavaScript syntax errors, TypeScript transform errors, and uncaught nested tool
+JavaScript syntax errors and uncaught nested tool
 failures become failed `exec` or `wait` results. The model can read the error,
 correct its code, inspect the current state, and continue with the normal tool
 surface. A failed cell does not impose a separate recovery mode or mutation budget.

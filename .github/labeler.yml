@@ -25,6 +25,11 @@
           - "docs/nodes/camera.md"
           - "docs/nodes/location-command.md"
           - "docs/platforms/linux.md"
+"plugin: code-mode-quickjs":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/code-mode-quickjs/**"
+          - "docs/plugins/reference/code-mode-quickjs.md"
 "plugin: cua-computer":
   - changed-files:
       - any-glob-to-any-file:
@@ -40,6 +45,12 @@
           - "extensions/typesafe/**"
           - "docs/plugins/typesafe.md"
           - "docs/plugins/reference/typesafe.md"
+"plugin: onnx":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/onnx/**"
+          - "docs/plugins/onnx.md"
+          - "docs/plugins/reference/onnx.md"
 "channel: a2a":
   - changed-files:
       - any-glob-to-any-file:

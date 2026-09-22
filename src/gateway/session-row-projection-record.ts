@@ -157,6 +157,18 @@ export function first(candidates: Row[], storePaths: Iterable<string>) {
   return undefined;
 }
 
+export function firstReferenced(
+  ref: string,
+  rows: ReadonlyMap<string, Row>,
+  byKey: ReadonlyMap<string, ReadonlySet<string>>,
+  storePaths: Iterable<string>,
+) {
+  return first(
+    [...(byKey.get(ref) ?? [])].flatMap((id) => rows.get(id) ?? []),
+    storePaths,
+  );
+}
+
 export function present(
   record: MaterializedRow,
   context: SessionListRowContext,
@@ -178,11 +190,12 @@ export function present(
     excludedChildKeys: options.excludedChildKeys,
   });
   Object.assign(row, record.facts?.present());
+  // Undefined omits wire fields without converting each presented row to dictionary storage.
   if (!options.includeDerivedTitles) {
-    delete row.derivedTitle;
+    row.derivedTitle = undefined;
   }
   if (!options.includeLastMessage) {
-    delete row.lastMessagePreview;
+    row.lastMessagePreview = undefined;
   }
   return row;
 }

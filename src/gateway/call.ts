@@ -30,11 +30,7 @@ import {
 import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createAbortError } from "../infra/abort-signal.js";
-import {
-  loadDeviceIdentityIfPresent,
-  loadOrCreateDeviceIdentity,
-  type DeviceIdentity,
-} from "../infra/device-identity.js";
+import type { DeviceIdentity } from "../infra/device-identity.js";
 import { isVitestRuntimeEnv } from "../infra/env.js";
 import { extractErrorCodeOrErrno } from "../infra/error-graph-internal.js";
 import type { DeviceAuthEntry } from "../shared/device-auth.js";
@@ -44,6 +40,7 @@ import { VERSION } from "../version.js";
 import { resolveGatewayAuth } from "./auth-resolve.js";
 import {
   loadStoredOperatorDeviceAuthToken,
+  resolveDeviceIdentityForGatewayCall,
   shouldOmitDeviceIdentityForGatewayCall,
 } from "./call-device-auth.js";
 import {
@@ -95,7 +92,8 @@ import { assertGatewayCliMessageContext } from "./operator-cli-message-input.js"
 import {
   GatewayTransportError,
   type GatewayTransportErrorKind,
-  formatGatewayTimeoutError,
+  createGatewayCloseTransportError,
+  createGatewayTimeoutTransportError,
   isGatewayTransportError,
 } from "./transport-error.js";
 export type { GatewayConnectionDetails };
@@ -111,7 +109,10 @@ export type GatewayRequestFunction = <T = Record<string, unknown>>(
   opts?: GatewayClientRequestOptions,
 ) => Promise<T>;
 
-type CallGatewayBaseOptions = Pick<GatewayClientOptions, "caps" | "clientName" | "mode"> & {
+type CallGatewayBaseOptions = Pick<
+  GatewayClientOptions,
+  "caps" | "clientName" | "mode" | "preparedDeviceAuth"
+> & {
   url?: string;
   /** Require this resolved endpoint without overriding target selection or authentication. */
   expectUrl?: string;
@@ -463,20 +464,6 @@ export function buildGatewayConnectionDetails(
   });
 }
 
-export function resolveDeviceIdentityForGatewayCall(
-  sharedStateMode?: "read-only",
-): DeviceIdentity | null {
-  try {
-    return sharedStateMode === "read-only"
-      ? loadDeviceIdentityIfPresent()
-      : loadOrCreateDeviceIdentity();
-  } catch {
-    // Read-only or restricted environments should still be able to call the
-    // gateway with token/password auth without crashing before the RPC.
-    return null;
-  }
-}
-
 function resolveGatewayCallAuth(config: OpenClawConfig) {
   return resolveGatewayAuth({
     authConfig: config.gateway?.auth,
@@ -637,29 +624,6 @@ function ensureRemoteModeUrlConfigured(params: {
 
 export { resolveGatewayCredentialsWithSecretInputs } from "./credentials-secret-inputs.js";
 
-function formatGatewayCloseError(
-  code: number,
-  reason: string,
-  connectionDetails: GatewayConnectionDetails,
-): string {
-  const reasonText = normalizeOptionalString(reason) || "no close reason";
-  const hint =
-    code === 1006 ? "abnormal closure (no close frame)" : code === 1000 ? "normal closure" : "";
-  const suffix = hint ? ` ${hint}` : "";
-  let message = `gateway closed (${code}${suffix}): ${reasonText}\n${connectionDetails.message}`;
-  // Add troubleshooting hints for common issues
-  if (code === 1006) {
-    message +=
-      "\n\nPossible causes:" +
-      "\n- Connection dropped without a close frame (retry; check network and gateway load)" +
-      "\n- Gateway not yet ready to accept connections (retry after a moment)" +
-      "\n- TLS mismatch (connecting with ws:// to a wss:// gateway, or vice versa)" +
-      "\n- Gateway process stopped or became unreachable (confirm it is still running)" +
-      "\nRun `openclaw doctor` for diagnostics.";
-  }
-  return message;
-}
-
 /** Wrap raw socket-level connect failures (ECONNREFUSED etc.) into one actionable message. */
 function createGatewayUnreachableTransportError(params: {
   cause: Error;
@@ -675,35 +639,6 @@ function createGatewayUnreachableTransportError(params: {
       "Start it with `openclaw gateway run` or check `openclaw gateway status`.",
       params.connectionDetails.message,
     ].join("\n"),
-  });
-}
-
-function createGatewayCloseTransportError(params: {
-  code: number;
-  reason: string;
-  connectionDetails: GatewayConnectionDetails;
-}): GatewayTransportError {
-  const reasonText = normalizeOptionalString(params.reason) || "no close reason";
-  return new GatewayTransportError({
-    kind: "closed",
-    code: params.code,
-    reason: reasonText,
-    connectionDetails: params.connectionDetails,
-    message: formatGatewayCloseError(params.code, params.reason, params.connectionDetails),
-  });
-}
-
-function createGatewayTimeoutTransportError(params: {
-  timeoutMs: number;
-  connectionDetails: GatewayConnectionDetails;
-  requestDispatched: boolean;
-}): GatewayTransportError {
-  const { timeoutMs, connectionDetails, requestDispatched } = params;
-  return new GatewayTransportError({
-    kind: "timeout",
-    timeoutMs,
-    connectionDetails,
-    message: formatGatewayTimeoutError(timeoutMs, connectionDetails, requestDispatched),
   });
 }
 
@@ -982,6 +917,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
             code,
             reason,
             connectionDetails: params.connectionDetails,
+            requestDispatched: primaryRequestStarted,
           }),
         );
       },
@@ -1120,9 +1056,9 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
         ? null
         : resolveDeviceIdentityForGatewayCall(opts.sharedStateMode)
       : opts.deviceIdentity;
-  let storedAuth: DeviceAuthEntry | null | undefined;
+  let storedAuth: DeviceAuthEntry | null | undefined = opts.preparedDeviceAuth;
   if (useStoredDeviceAuth) {
-    storedAuth = await loadStoredOperatorDeviceAuthToken(
+    storedAuth ??= await loadStoredOperatorDeviceAuthToken(
       deviceIdentity,
       deviceAuthScope,
       opts.sharedStateMode,

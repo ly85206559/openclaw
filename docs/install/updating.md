@@ -39,6 +39,16 @@ prints `candidate-config-read-failed` and leaves the service definition unchange
 Reads follow the restored package after a rollback. Inspect the reported problem
 with the updated CLI after the update.
 
+When a writable managed Gateway service points at another global installation,
+the update keeps the active CLI's installation as its target and refreshes the
+service through `gateway install --force` before verifying the restarted Gateway.
+The old service command remains the recovery identity until that handoff succeeds.
+Reconciliation failures are recorded as warnings with a manual repair command.
+Deployment-owned definitions retain their existing installation owner.
+Pending package-publication recovery in either the CLI or selected service
+installation blocks writable preparation. Follow the package recovery command
+reported by the update before retrying; Doctor does not clear those artifacts.
+
 The installed 2026.9.4 updater can refuse with `managed-service-preflight` before
 the target code runs. To reach a release containing this repair, use the
 [manual package-manager procedure](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun)
@@ -46,6 +56,12 @@ with the same owning package manager, prefix, and state/configuration. Back up
 first, stop the Gateway through its actual supervisor or foreground process owner,
 replace the package, run Doctor, and restart through that same owner.
 `--no-restart` cannot repair the old admission check.
+
+Updaters without the admission fix first shipped in 2026.7.2-beta.5, including
+2026.6.34–2026.6.35 and the 2026.7.33–2026.7.35 extended-stable line, refuse before staging with
+`plugins.load.paths: plugin path not found` when a configured plugin path is missing.
+Restore the custom plugin directory or remove its configured path, then update.
+`openclaw doctor --fix` repairs recognized bundled-path aliases but preserves unrelated custom paths.
 
 <Note>
 On macOS, the 2026.9.4 Gateway's `update.run` action or `/update` can hand off
@@ -93,7 +109,7 @@ owner around the manual replacement. This recovery does not add CLI-managed
 FreeBSD rc.d service updates.
 </Note>
 
-An already-installed registry package version or Git target SHA still runs plugin maintenance, repairs eligible old OpenClaw release pins, and restarts a running managed Gateway only when plugins change and `--no-restart` is not set; unchanged runs finish as `skipped` / `already-current`.
+An already-installed registry package version or Git target SHA still runs plugin maintenance, repairs eligible old OpenClaw release pins, and restarts a running managed Gateway when plugins change or its service points at another installation, unless `--no-restart` is set. Unchanged runs finish as `skipped` / `already-current`.
 
 Plugin maintenance does not fail an otherwise successful core update. If a plugin
 cannot be updated, OpenClaw continues with the remaining plugins, keeps the previous
@@ -244,11 +260,22 @@ identityless update-history row. The Gateway watcher publishes after the deadlin
 a later database open can also publish it. See the precise timing and residual
 old-CLI limitation in [Database schemas](/reference/database-schemas#schema-bumps-and-older-updaters).
 
-If an agent database also needs migration, required state metadata is missing,
-or the state-content migration fails, Doctor instead reports
-`update-schema-bump-unfenced` with database versions and manual update commands.
-Let the failed update finish restoring the previous package. OpenClaw 2026.9.2
-leaves the Gateway service stopped after failed post-install verification. Run
+When agent databases also need migration, the candidate first rehearses Doctor
+on private copies while the published updater can still roll back its package.
+After package commit, the fresh post-core process acquires current executor
+authority and delegates Doctor. Doctor verifies a retained recovery archive
+covering each agent database before migrating live state. The updater then
+restarts the Gateway.
+
+Missing state metadata or unverified backup coverage can still produce
+`update-schema-bump-unfenced` with database versions and recovery instructions.
+Before package commit, let the failed update finish restoring the previous
+package. OpenClaw 2026.9.2 leaves the Gateway service stopped after failed
+post-install verification. After package commit, the old package backup is gone:
+finish `openclaw doctor --fix` with the installed compatible build, then run
+`openclaw gateway start`. Package rollback cannot undo migrated state.
+
+If the compatible package still needs installation, run
 the manual update from a shell outside the Gateway, replacing `<target>` with
 the exact target version from the refusal:
 
@@ -289,13 +316,21 @@ connected chat. Natural-language requests use the existing `gateway` tool's
 action without granting configuration reads or other Gateway controls. Explicit tool
 restrictions still apply.
 
+Operator-created scheduled automations can also call `gateway` → `update.run`
+without a chat owner identity. The Gateway uses the active scheduled run's
+authority; a notification destination does not become its requester. Jobs created
+by external chat users and webhook turns do not gain this authority. External
+chat update requests still require `commands.ownerAllowFrom`; the refusal tells
+the operator which sender to add.
+
 `/update` is the model-independent fallback: it works without a functioning model
 or access to the `gateway` tool. The tool, slash command, and Control UI all use
 the same Gateway update handler and current authorization checks.
 
-The new version is checked while the old Gateway serves, and an already-current
-update restarts it only when plugins change. Update runs can send these notices
-in that chat as the Gateway observes the recorded milestones:
+The new version is checked while the old Gateway serves. An already-current
+update restarts a running Gateway when plugins change or its service points at a
+different installation. Update runs can send these notices in that chat as the
+Gateway observes the recorded milestones:
 
 1. An acknowledgement when the update is accepted.
 2. `⏳ Restarting the gateway now (v<from> → v<to>)…` when activation is recorded before the Gateway stops.
@@ -326,10 +361,12 @@ to finish its restart notice attempt. That wait is capped at 10 seconds so a
 stalled notice cannot block activation.
 
 The report includes the outcome, recorded phase durations, failed steps,
-verification facts, and the next action when needed. A run sends each notice
-at most once; an update that stops before restart sends only the notices for
-phases it reached. If the update cannot start, the bot records and explains why
-and provides the manual command when available.
+verification facts, and the next action when needed. Failed-step summaries preserve
+the initiating cause ahead of trailing recovery advice, using recorded failure
+facts when available. Local run history retains verification findings and backup
+recovery paths separately from the excerpt. A run sends each notice at most once;
+an update that stops before restart sends only the notices for phases it reached. If the update cannot
+start, the bot records and explains why and provides the manual command when available.
 The agent relays the returned recovery instructions to the operator. Manual
 update commands run in a terminal outside the Gateway service; the agent must
 not execute them in the shell of the Gateway hosting its session. A missing

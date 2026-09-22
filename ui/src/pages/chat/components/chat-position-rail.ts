@@ -62,6 +62,7 @@ class ChatPositionRailDirective extends AsyncDirective {
     { id: string; messageId: string; visible: boolean }
   >();
   private visibleIds = new Set<string>();
+  private initialVisibilityPending = true;
   private targetsChanged = true;
   private followActive = false;
   private layoutVisible = false;
@@ -210,6 +211,7 @@ class ChatPositionRailDirective extends AsyncDirective {
       ?.querySelector('[aria-current="true"]')
       ?.setAttribute("aria-current", "false");
     this.visibleIds.clear();
+    this.initialVisibilityPending = true;
     this.activeId = undefined;
   }
 
@@ -229,6 +231,14 @@ class ChatPositionRailDirective extends AsyncDirective {
           }
           this.followingResize = false;
           this.resizeScrollTarget = undefined;
+        } else if (
+          observation.type === "resize" &&
+          this.layoutVisible &&
+          this.scrollElement?.clientHeight
+        ) {
+          // Retain the committed viewport before another composer change can replace it.
+          this.syncReaderViewport();
+          this.scheduleLayout();
         }
       });
       // Publish the first visible pixel after an initially zero-area edge touch.
@@ -243,7 +253,8 @@ class ChatPositionRailDirective extends AsyncDirective {
               message.visible = entry.isIntersecting && entry.intersectionRatio > 0;
             }
           }
-          this.syncVisibleMarks();
+          // Publish current position, retained markers, and Tab entry in one layout commit.
+          this.scheduleLayout();
         },
         { root, threshold: [0, Number.EPSILON, 1] },
       );
@@ -319,7 +330,7 @@ class ChatPositionRailDirective extends AsyncDirective {
     }
   }
 
-  private syncVisibleMarks() {
+  private syncReaderViewport() {
     const root = this.transcriptElement;
     if (root) {
       const viewport = {
@@ -331,19 +342,22 @@ class ChatPositionRailDirective extends AsyncDirective {
         // Intersections can precede resize compensation. Preserve the reader's
         // rail offset while keeping any keyboard-focused marker in view.
         this.followingResize = true;
-        this.followActive =
+        this.followActive ||=
           this.markerElements.get(this.interaction.focusedId ?? "")?.matches(":focus-visible") ??
           false;
         if (this.followActive) {
           this.scheduleLayout();
         }
-        const atEnd = this.resizeScrollTarget?.atEnd ?? previous.anchorToEnd;
+        // A measured end supersedes startup's non-end estimate; smooth follow may still be pending.
+        const atEnd = this.resizeScrollTarget?.atEnd || previous.anchorToEnd;
         const maxOffset = Math.max(0, root.scrollHeight - viewport.height);
         this.resizeScrollTarget = {
           offset: atEnd ? maxOffset : Math.min(previous.scrollTop, maxOffset),
           atEnd,
         };
-      } else if (previous && viewport.scrollTop !== previous.scrollTop) {
+      }
+      // Navigation and a resize can arrive in the same observer delivery.
+      if (previous && viewport.scrollTop !== previous.scrollTop) {
         const target = this.resizeScrollTarget?.offset;
         // Smooth resize compensation crosses intermediate offsets before its target.
         // The transcript input owner above retires it when the reader takes over.
@@ -363,6 +377,10 @@ class ChatPositionRailDirective extends AsyncDirective {
       }
       this.readerViewport = viewport;
     }
+  }
+
+  private syncVisibleMarks() {
+    this.syncReaderViewport();
     const visible = new Set(
       Array.from(this.observedMessages.values())
         .filter((message) => message.visible)
@@ -379,6 +397,12 @@ class ChatPositionRailDirective extends AsyncDirective {
       }
     }
     this.visibleIds = visible;
+    if (this.initialVisibilityPending && visible.size > 0) {
+      // Startup resizes can precede the first measured message. Anchor that
+      // initial position before preserving rail offsets through later resizes.
+      this.followActive = true;
+      this.scheduleLayout();
+    }
     const visibleMessageIds = new Set(
       Array.from(this.observedMessages.values())
         .filter((message) => message.visible)
@@ -396,6 +420,7 @@ class ChatPositionRailDirective extends AsyncDirective {
       this.markerElements.get(this.activeId ?? "")?.setAttribute("aria-current", "false");
       this.activeId = activeId;
       this.markerElements.get(activeId ?? "")?.setAttribute("aria-current", "true");
+      this.syncTabStop();
       if (!this.followingResize) {
         this.followActive = true;
       }
@@ -440,6 +465,9 @@ class ChatPositionRailDirective extends AsyncDirective {
           : undefined) ?? this.activeId;
       if (current) {
         this.revealMarker(current);
+        if (this.visibleIds.size > 0) {
+          this.initialVisibilityPending = false;
+        }
       }
     }
     this.viewportHeight = scroller.clientHeight;

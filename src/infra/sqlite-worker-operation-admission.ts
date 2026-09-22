@@ -1,7 +1,12 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { DatabaseSync } from "node:sqlite";
 import { serialize } from "node:v8";
-import { MessageChannel, receiveMessageOnPort, type MessagePort } from "node:worker_threads";
+import {
+  MessageChannel,
+  receiveMessageOnPort,
+  type MessagePort,
+  type Transferable,
+} from "node:worker_threads";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -16,7 +21,6 @@ import type {
 const REQUESTED = 0;
 const GRANTED = 1;
 const REFUSED = 2;
-const ADMISSION_TIMEOUT_MS = 5_000;
 
 /** Only the factory's admission before agent open may certify this refusal. */
 export const SqliteWorkerOpenRefusedError = resolveGlobalSingleton(
@@ -141,6 +145,9 @@ export function createSqliteWorkerOperationAdmission(
     } catch (error) {
       refuse(decision, error);
       return;
+    } finally {
+      // Repeated preparation requests must not retain every settled decision.
+      decisions.delete(decision);
     }
     if (Atomics.load(decision, 0) === REQUESTED) {
       refuse(decision, new SqliteWorkerError("SQLite worker admission was not granted", "closed"));
@@ -278,16 +285,23 @@ export function settleSqliteWorkerOperationContext(
 }
 
 /** Called on the SQLite worker, after transaction entry and before its row mutation. */
-export function requestSqliteWorkerOperationAdmission(request: SqliteWorkerAdmissionRequest): void {
+export function requestSqliteWorkerOperationAdmission(
+  request: SqliteWorkerAdmissionRequest,
+  transferList: Transferable[] = [],
+): void {
   const scope = currentAdmission.getStore();
   if (!scope?.active) {
     throw new SqliteWorkerError("SQLite operation requires its retained admission", "unavailable");
   }
   const decision = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
-  scope.port.postMessage({ ...request, decision: decision.buffer }, []);
-  Atomics.wait(decision, 0, REQUESTED, ADMISSION_TIMEOUT_MS);
+  scope.port.postMessage({ ...request, decision: decision.buffer }, transferList);
+  // Host scheduling delay does not revoke the retained owner's authority. The
+  // broker keeps this port through settlement and joins worker exit on failure;
+  // only the live host owner can grant or refuse the pending request.
+  while (Atomics.load(decision, 0) === REQUESTED) {
+    Atomics.wait(decision, 0, REQUESTED);
+  }
   if (Atomics.load(decision, 0) !== GRANTED) {
-    Atomics.compareExchange(decision, 0, REQUESTED, REFUSED);
     throw new SqliteWorkerError("SQLite transaction admission was refused", "closed");
   }
 }
