@@ -1,0 +1,78 @@
+name: PR 155365 registered web_search proof
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  BASE_SHA: 295b26fb838dda94b303af7d33f3c98d8acec5b7
+  TARGET_SHA: 398e74b5944dc71cf57ff6edddd59afc12f3bfc2
+
+jobs:
+  registered-tool-proof:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 3
+          persist-credentials: false
+      - name: Verify proof-only commit ancestry
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD^)" = "${TARGET_SHA}"
+          test "$(git rev-parse HEAD^^)" = "${BASE_SHA}"
+          test "$(git diff --name-only "${TARGET_SHA}" HEAD | sort)" = $'.github/proof/pr-155365-registered-web-search.mts\n.github/workflows/pr-146956-focused-proof.yml'
+          cp .github/proof/pr-155365-registered-web-search.mts "${RUNNER_TEMP}/pr-155365-proof.mts"
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.19.0
+      - name: Enable Corepack
+        run: corepack enable
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Prove current-main failure through registered web_search
+        shell: bash
+        run: |
+          set -euo pipefail
+          git checkout --detach "${BASE_SHA}"
+          EXPECT_INVALID_DROPPED=0 \
+            PROOF_EXACT_SHA="${BASE_SHA}" \
+            PROOF_OUTPUT="${RUNNER_TEMP}/before.json" \
+            node --import tsx "${RUNNER_TEMP}/pr-155365-proof.mts" | tee "${RUNNER_TEMP}/before.log"
+      - name: Prove exact-head behavior through registered web_search
+        shell: bash
+        run: |
+          set -euo pipefail
+          git checkout --detach "${TARGET_SHA}"
+          EXPECT_INVALID_DROPPED=1 \
+            PROOF_EXACT_SHA="${TARGET_SHA}" \
+            PROOF_OUTPUT="${RUNNER_TEMP}/after.json" \
+            node --import tsx "${RUNNER_TEMP}/pr-155365-proof.mts" | tee "${RUNNER_TEMP}/after.log"
+      - name: Run focused regression with measured duration
+        shell: bash
+        run: |
+          set -euo pipefail
+          /usr/bin/time -f 'focused_wall_seconds=%e' -o "${RUNNER_TEMP}/focused-time.txt" \
+            node scripts/run-vitest.mjs src/agents/tools/web-search-output.security.test.ts \
+            | tee "${RUNNER_TEMP}/focused.log"
+          cat "${RUNNER_TEMP}/focused-time.txt"
+      - name: Verify candidate patch
+        run: git diff --check "${BASE_SHA}" "${TARGET_SHA}"
+      - name: Upload proof receipts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: pr-155365-registered-web-search-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/before.json
+            ${{ runner.temp }}/before.log
+            ${{ runner.temp }}/after.json
+            ${{ runner.temp }}/after.log
+            ${{ runner.temp }}/focused.log
+            ${{ runner.temp }}/focused-time.txt
+          if-no-files-found: error
+          retention-days: 30
