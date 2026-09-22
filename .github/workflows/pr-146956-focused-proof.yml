@@ -1,0 +1,95 @@
+name: Clock runtime proof for PRs 155846 155848 155850
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  runtime-proof:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - pr: 155846
+            head: 989fff03af64e472b5950050949bfbca48521498
+            script: pr-155846-slack-runtime.mts
+            tests: extensions/slack/src/client.test.ts
+          - pr: 155848
+            head: 962cd57c5d6cd8484ae1449ab38c305735ae0d88
+            script: pr-155848-browser-runtime.mts
+            tests: src/meeting-bot/browser-audio-capture-source.test.ts
+          - pr: 155850
+            head: 81a245ded09792b60aa20930118a2524e6d9d400
+            script: pr-155850-native-runtime.mts
+            tests: src/meeting-bot/realtime-output-owner.test.ts src/meeting-bot/realtime-local-audio-transport.test.ts
+    env:
+      TARGET_SHA: ${{ matrix.head }}
+      BASE_SHA: 8aefa9e43c0f34793f88c2691049b86644fab7dc
+      PROOF_SCRIPT: ${{ matrix.script }}
+      FOCUSED_TESTS: ${{ matrix.tests }}
+      CI: "true"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Preserve harness and resolve immutable source
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/clock-proof"
+          cp ".github/proof/${PROOF_SCRIPT}" "${RUNNER_TEMP}/clock-proof/harness.mts"
+          git fetch --no-tags https://github.com/openclaw/openclaw.git "${BASE_SHA}" "${TARGET_SHA}"
+          test "$(git rev-parse "${TARGET_SHA}^")" = "${BASE_SHA}"
+          git checkout --detach "${TARGET_SHA}"
+          test "$(git rev-parse HEAD)" = "${TARGET_SHA}"
+          git diff --check "${BASE_SHA}" "${TARGET_SHA}"
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.20.0
+      - name: Prepare clean dependencies
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+      - name: Install real Chromium
+        if: matrix.pr == 155848
+        run: pnpm exec playwright install --with-deps chromium
+      - name: Observe baseline defect
+        shell: bash
+        run: |
+          set -euo pipefail
+          git checkout --detach "${BASE_SHA}"
+          test "$(git rev-parse HEAD)" = "${BASE_SHA}"
+          cp "${RUNNER_TEMP}/clock-proof/harness.mts" .proof-runtime.mts
+          PROOF_EXPECT_FIXED=0 PROOF_EXACT_SHA="${BASE_SHA}" \
+            PROOF_OUTPUT="${RUNNER_TEMP}/clock-proof/before.json" \
+            timeout 240s node --import tsx .proof-runtime.mts | tee "${RUNNER_TEMP}/clock-proof/before.log"
+      - name: Observe exact PR head
+        shell: bash
+        run: |
+          set -euo pipefail
+          git checkout --detach "${TARGET_SHA}"
+          test "$(git rev-parse HEAD)" = "${TARGET_SHA}"
+          cp "${RUNNER_TEMP}/clock-proof/harness.mts" .proof-runtime.mts
+          PROOF_EXPECT_FIXED=1 PROOF_EXACT_SHA="${TARGET_SHA}" \
+            PROOF_OUTPUT="${RUNNER_TEMP}/clock-proof/after.json" \
+            timeout 240s node --import tsx .proof-runtime.mts | tee "${RUNNER_TEMP}/clock-proof/after.log"
+      - name: Measure focused regression cost
+        shell: bash
+        run: |
+          set -euo pipefail
+          /usr/bin/time -f 'focused_wall_seconds=%e' -o "${RUNNER_TEMP}/clock-proof/focused-time.txt" \
+            node scripts/run-vitest.mjs ${FOCUSED_TESTS} | tee "${RUNNER_TEMP}/clock-proof/focused.log"
+          cat "${RUNNER_TEMP}/clock-proof/focused-time.txt"
+      - name: Preserve proof receipts
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: clock-proof-${{ matrix.pr }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/clock-proof/
+          if-no-files-found: error
+          retention-days: 30
