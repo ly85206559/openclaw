@@ -1,21 +1,26 @@
 import type { Context, Model } from "@openclaw/llm-core";
+import { resolveOpenAIThinkingApi } from "@openclaw/model-catalog-core/model-catalog-types";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   ResponseFormatTextConfig,
   ResponseInput,
 } from "openai/resources/responses/responses.js";
 import { resolveCacheRetention } from "../providers/cache-retention.js";
-import { resolveOpenAIResponsesCacheParams } from "../providers/openai-prompt-cache.js";
+import { resolveOpenAIPromptCacheParams } from "../providers/openai-prompt-cache.js";
 import {
-  normalizeOpenAIReasoningEffort,
-  resolveOpenAIReasoningEffortForModel,
+  isOpenAIGpt6Model,
   supportsOpenAITemperature,
   type OpenAIApiReasoningEffort,
 } from "../providers/openai-reasoning-effort.js";
-import { convertResponsesToolPayload } from "../providers/openai-responses-tools.js";
+import {
+  resolveOpenAISimpleReasoningEffort,
+  resolveOpenAIRequestReasoning,
+} from "../providers/openai-request-reasoning.js";
+import { prepareResponsesTools } from "../providers/openai-responses-tools.js";
 import { reconcileOpenAIResponsesToolChoice } from "../providers/openai-tool-projection.js";
 import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
 import { resolveOpenAIStrictToolSetting } from "./host-policy.js";
+import { usesNativeOpenAICodexResponsesBackend } from "./openai-completions-compat.js";
 import type { OpenAIResponsesReplayMode } from "./openai-responses-compaction-replay.js";
 import {
   OPENAI_CODEX_RESPONSES_DEFAULT_INSTRUCTIONS,
@@ -31,11 +36,7 @@ import {
   buildResponsesInputMessage,
   convertResponsesMessages,
 } from "./openai-responses-replay-internal.js";
-import {
-  getCompat,
-  resolveOpenAIStrictToolFlagWithDiagnostics,
-  usesNativeOpenAICodexResponsesBackend,
-} from "./openai-transport-params.js";
+import { getCompat } from "./openai-transport-params.js";
 import { resolvePromptCacheKey, type OpenAIModeModel } from "./openai-transport-shared.js";
 import { sanitizeTransportPayloadText } from "./transport-stream-shared.js";
 
@@ -45,14 +46,6 @@ const OPENAI_RESPONSES_TOOL_CALL_PROVIDERS = new Set([
   "azure-openai-responses",
   "github-copilot",
 ]);
-
-function resolveOpenAIReasoningEffort(
-  options: OpenAIResponsesOptions | undefined,
-): OpenAIApiReasoningEffort {
-  return normalizeOpenAIReasoningEffort(
-    options?.reasoningEffort ?? options?.reasoning ?? "high",
-  ) as OpenAIApiReasoningEffort;
-}
 
 function hasResponsesWebSearchTool(tools: unknown): boolean {
   if (!Array.isArray(tools)) {
@@ -82,10 +75,7 @@ function raiseMinimalReasoningForResponsesWebSearch(params: {
     return params.effort;
   }
   for (const effort of ["low", "medium", "high"] as const) {
-    const resolved = resolveOpenAIReasoningEffortForModel({
-      model: params.model,
-      effort,
-    });
+    const resolved = resolveOpenAIRequestReasoning(params.model, effort).effort;
     if (resolved && resolved !== "none" && resolved !== "minimal") {
       return resolved;
     }
@@ -97,6 +87,7 @@ const OPENAI_CODEX_RESPONSES_UNSUPPORTED_PARAMS = [
   "max_output_tokens",
   "metadata",
   "prompt_cache_retention",
+  "prompt_cache_options",
   "service_tier",
   "temperature",
   "top_p",
@@ -150,7 +141,7 @@ function buildOpenAIResponsesInstructionsText(context: Context): string | undefi
 // compared `input` array, so it can vary freely per turn with no effect on
 // continuation eligibility. Routes that opt out via `compat.supportsInstructions:
 // false` (see openai-responses-payload-policy.ts) get no instructions field at
-// all -- convertOpenAIResponsesMessagesForRequest embeds the prompt back into
+// all -- request construction embeds the prompt back into
 // `input` for those instead.
 function resolveOpenAIResponsesInstructions(
   model: Model,
@@ -205,7 +196,7 @@ function ensureOpenAIResponsesNonEmptyInput(messages: ResponseInput, context: Co
   );
 }
 
-function resolveOpenAIResponsesTextFormat(
+export function resolveOpenAIResponsesTextFormat(
   responseFormat: Record<string, unknown>,
 ): ResponseFormatTextConfig {
   if (
@@ -222,30 +213,6 @@ function resolveOpenAIResponsesTextFormat(
   return responseFormat as unknown as ResponseFormatTextConfig;
 }
 
-function convertOpenAIResponsesMessagesForRequest(
-  model: Model,
-  context: Context,
-  options: OpenAIResponsesOptions | undefined,
-  replayMode: OpenAIResponsesReplayMode,
-): ResponseInput {
-  const isNativeCodexResponses = usesNativeOpenAICodexResponsesBackend(model);
-  const payloadPolicy = resolveOpenAIResponsesPayloadPolicy(model, {
-    storeMode: "disable",
-  });
-  const policyAllowsReplayIds =
-    payloadPolicy.explicitStore !== false && !payloadPolicy.shouldStripStore;
-  const replayResponsesItemIds =
-    !isNativeCodexResponses && (options?.replayResponsesItemIds ?? policyAllowsReplayIds);
-  return convertResponsesMessages(model, context, OPENAI_RESPONSES_TOOL_CALL_PROVIDERS, {
-    includeSystemPrompt: !payloadPolicy.usesInstructionsField,
-    replayReasoningItems: true,
-    replayResponsesItemIds,
-    authProfileId: options?.authProfileId,
-    sessionId: options?.sessionId,
-    replayMode,
-  });
-}
-
 export function buildOpenAIResponsesParams(
   model: Model,
   context: Context,
@@ -254,12 +221,27 @@ export function buildOpenAIResponsesParams(
   replayMode: OpenAIResponsesReplayMode = "checkpoint",
 ) {
   const payloadPolicy = resolveOpenAIResponsesPayloadPolicy(model, {
-    storeMode: "disable",
+    storeMode: "transport-default",
   });
-  const messages = convertOpenAIResponsesMessagesForRequest(model, context, options, replayMode);
+  const policyAllowsReplayIds =
+    payloadPolicy.explicitStore !== false && !payloadPolicy.shouldStripStore;
+  const replayResponsesItemIds =
+    !usesNativeOpenAICodexResponsesBackend(model) &&
+    (options?.replayResponsesItemIds ?? policyAllowsReplayIds);
+  const messages = convertResponsesMessages(model, context, OPENAI_RESPONSES_TOOL_CALL_PROVIDERS, {
+    includeSystemPrompt: !payloadPolicy.usesInstructionsField,
+    replayReasoningItems: true,
+    replayResponsesItemIds,
+    authProfileId: options?.authProfileId,
+    sessionId: options?.sessionId,
+    replayMode,
+  });
   ensureOpenAIResponsesNonEmptyInput(messages, context);
   const cacheRetention = resolveCacheRetention(options?.cacheRetention);
-  const promptCacheKey = resolvePromptCacheKey(options, cacheRetention);
+  const compat = getCompat(model);
+  const promptCacheKey = compat.supportsPromptCacheKey
+    ? resolvePromptCacheKey(options, cacheRetention)
+    : undefined;
   const instructions = resolveOpenAIResponsesInstructions(
     model,
     context,
@@ -270,11 +252,7 @@ export function buildOpenAIResponsesParams(
     input: messages,
     stream: true,
     prompt_cache_key: promptCacheKey,
-    ...resolveOpenAIResponsesCacheParams(
-      model,
-      cacheRetention,
-      model.baseUrl?.includes("api.openai.com"),
-    ),
+    ...resolveOpenAIPromptCacheParams(model, cacheRetention, compat),
     ...(instructions ? { instructions } : {}),
     ...(metadata ? { metadata } : {}),
   };
@@ -286,8 +264,11 @@ export function buildOpenAIResponsesParams(
   if (options?.temperature !== undefined && supportsOpenAITemperature(model)) {
     params.temperature = options.temperature;
   }
-  // Astra rejects top_p independently of the temperature compatibility setting.
-  if (options?.topP !== undefined && model.id !== "gpt-6-astra") {
+  // Native GPT-6 rejects top_p; Azure deployments retain their configured sampling.
+  if (
+    options?.topP !== undefined &&
+    (!isOpenAIGpt6Model(model) || resolveOpenAIThinkingApi(model.api) === "azure-openai-responses")
+  ) {
     params.top_p = options.topP;
   }
   if (options?.responseFormat !== undefined) {
@@ -300,68 +281,49 @@ export function buildOpenAIResponsesParams(
     params.service_tier = options.serviceTier;
   }
   if (context.tools) {
-    const converted = convertResponsesToolPayload(
-      context.tools,
-      {
-        model,
-        strict: resolveOpenAIStrictToolSetting(model as OpenAIModeModel, {
-          transport: "stream",
-        }),
-      },
-      (projection, setting) =>
-        resolveOpenAIStrictToolFlagWithDiagnostics(projection, setting, {
-          transport: "responses",
-          model: model as OpenAIModeModel,
-        }),
-    );
+    const tools = context.tools;
+    const strict = resolveOpenAIStrictToolSetting(model as OpenAIModeModel, {
+      transport: "stream",
+      supportsStrictMode: compat.supportsStrictMode,
+    });
+    const { projection, tools: converted } = prepareResponsesTools(tools, strict, model);
     if (
-      converted.tools.length > 0 ||
-      (converted.projection.inputToolCount === 0 && converted.projection.diagnostics.length === 0)
+      converted.length > 0 ||
+      (projection.inputToolCount === 0 && projection.diagnostics.length === 0)
     ) {
-      params.tools = converted.tools;
+      params.tools = converted;
     }
     if (options?.toolChoice) {
-      const toolChoice = reconcileOpenAIResponsesToolChoice(
-        options.toolChoice,
-        converted.projection,
-      );
+      const toolChoice = reconcileOpenAIResponsesToolChoice(options.toolChoice, projection);
       if (toolChoice !== undefined) {
         params.tool_choice = toolChoice;
       }
     }
   }
   if (model.reasoning) {
-    if (options?.reasoningEffort || options?.reasoning || options?.reasoningSummary) {
-      const requestedReasoningEffort = resolveOpenAIReasoningEffort(options);
-      const resolvedReasoningEffort = resolveOpenAIReasoningEffortForModel({
+    const reasoning = options?.reasoning;
+    const requestedEffort =
+      options?.reasoningEffort ??
+      (reasoning === "none" ? "none" : resolveOpenAISimpleReasoningEffort(model, reasoning)) ??
+      (options?.reasoningSummary ? "high" : payloadPolicy.defaultManagedReasoningEffort);
+    const resolvedEffort =
+      requestedEffort === undefined
+        ? undefined
+        : resolveOpenAIRequestReasoning(model, requestedEffort).effort;
+    if (resolvedEffort !== undefined) {
+      const effort = raiseMinimalReasoningForResponsesWebSearch({
         model,
-        effort: requestedReasoningEffort,
+        effort: resolvedEffort,
+        tools: params.tools,
       });
-      const reasoningEffort = resolvedReasoningEffort
-        ? raiseMinimalReasoningForResponsesWebSearch({
-            model,
-            effort: resolvedReasoningEffort,
-            tools: params.tools,
-          })
-        : undefined;
-      if (reasoningEffort) {
-        params.reasoning = {
-          effort: reasoningEffort,
-          ...(reasoningEffort === "none" ? {} : { summary: options?.reasoningSummary || "auto" }),
-        };
-        if (reasoningEffort !== "none") {
-          params.include = ["reasoning.encrypted_content"];
-        }
-      }
-    } else if (model.provider !== "github-copilot") {
-      const reasoningEffort = resolveOpenAIReasoningEffortForModel({
-        model,
-        effort: "none",
-      });
-      if (reasoningEffort) {
-        params.reasoning = {
-          effort: reasoningEffort,
-        };
+      const summary =
+        effort !== "none" &&
+        (options?.reasoningEffort || options?.reasoning || options?.reasoningSummary)
+          ? options.reasoningSummary || "auto"
+          : undefined;
+      params.reasoning = { effort, ...(summary ? { summary } : {}) };
+      if (summary) {
+        params.include = ["reasoning.encrypted_content"];
       }
     }
   }

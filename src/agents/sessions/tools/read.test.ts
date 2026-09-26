@@ -4,6 +4,7 @@ import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import JSZip from "jszip";
 import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
@@ -45,6 +46,44 @@ function textContent(result: { content: Array<{ type: string; text?: string }> }
   const first = result.content[0];
   return first?.type === "text" ? (first.text ?? "") : "";
 }
+
+async function createOoxmlDocument(mainMime: string, partPath: string): Promise<Buffer> {
+  const zip = new JSZip();
+  zip.file(
+    "[Content_Types].xml",
+    `<Types><Override PartName="${partPath}" ContentType="${mainMime}.main+xml"/></Types>`,
+  );
+  zip.file(partPath.slice(1), "<xml/>");
+  return await zip.generateAsync({ type: "nodebuffer" });
+}
+
+const DOCUMENT_FIXTURES = [
+  ["PDF", async () => Buffer.from("%PDF-1.7\n1 0 obj\n<<>>\nendobj\n%%EOF", "ascii")],
+  [
+    "DOCX",
+    () =>
+      createOoxmlDocument(
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "/word/document.xml",
+      ),
+  ],
+  [
+    "XLSX",
+    () =>
+      createOoxmlDocument(
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "/xl/workbook.xml",
+      ),
+  ],
+  [
+    "PPTX",
+    () =>
+      createOoxmlDocument(
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "/ppt/presentation.xml",
+      ),
+  ],
+] as const;
 
 const plainTheme = {
   fg: (_token: string, text: string) => text,
@@ -390,24 +429,62 @@ describe("read tool", () => {
     );
   });
 
-  it("does not classify plaintext from a custom backend by its extension", async () => {
-    const tool = createReadToolDefinition("/workspace", {
-      operations: {
-        access: async () => {},
-        readFile: async () => Buffer.from("plain text"),
-      },
-    });
+  it.each(["png", "pdf", "docx", "xlsx", "pptx"])(
+    "does not classify plaintext from a custom backend by its .%s extension",
+    async (extension) => {
+      const tool = createReadToolDefinition("/workspace", {
+        operations: {
+          access: async () => {},
+          readFile: async () => Buffer.from("plain text"),
+        },
+      });
 
-    const result = await tool.execute(
-      "call-custom-png",
-      { path: "report.png" },
-      undefined,
-      undefined,
-      {} as never,
-    );
+      const result = await tool.execute(
+        "call-custom-text",
+        { path: `report.${extension}` },
+        undefined,
+        undefined,
+        {} as never,
+      );
 
-    expect(textContent(result)).toBe("plain text");
-  });
+      expect(textContent(result)).toBe("plain text");
+    },
+  );
+
+  it.each(DOCUMENT_FIXTURES)(
+    "does not decode %s bytes from a renamed .bin file",
+    async (label, createDocument) => {
+      const document = await createDocument();
+      const fileName = `${label.toLowerCase()}.bin`;
+      const tempDir = tempDirs.make("openclaw-read-document-");
+      const readFile = vi.fn(async () => document);
+      const decodeText = vi.fn(() => "document reached text decoder");
+      if (label === "PDF") {
+        await fs.writeFile(path.join(tempDir, fileName), document);
+      }
+      const tool =
+        label === "PDF"
+          ? createReadToolDefinition(tempDir)
+          : createReadToolDefinition("/workspace", {
+              operations: { access: async () => {}, readFile, decodeText },
+            });
+
+      const result = await tool.execute(
+        "call-document",
+        { path: fileName },
+        undefined,
+        undefined,
+        {} as never,
+      );
+
+      expect(textContent(result)).toMatch(
+        /^Read did not return file contents because it detected a binary document \[.+\]\. Use an available document parser or converter, or convert the file to text, Markdown, or CSV, then read the converted file\.$/,
+      );
+      expect(result.details.kind).toBe("text");
+      expect(readFile).toHaveBeenCalledTimes(label === "PDF" ? 0 : 1);
+      expect(decodeText).not.toHaveBeenCalled();
+    },
+  );
 
   it("resolves one Unicode-equivalent filename and names the correction", async () => {
     const tempDir = tempDirs.make("openclaw-read-unicode-");
@@ -425,6 +502,7 @@ describe("read tool", () => {
 
     expect(textContent(result)).toContain("Resolved filename");
     expect(textContent(result)).toContain("matched");
+    expect(result.details).toEqual({ kind: "text", content: "matched" });
   });
 
   it("counts filename-resolution notes inside the complete 50 KiB read ceiling", async () => {
@@ -655,9 +733,10 @@ describe("read tool", () => {
       undefined,
       {} as never,
     );
-    const firstChunk = textContent(first).replace(/\n\n\[Showing[^\]]*\]$/, "");
-    const secondChunk = textContent(second).replace(/\n\n\[\d+ more lines[^\]]*\]$/, "");
-    expect(`${firstChunk}${secondChunk}`).toBe(longLine);
+    if (first.details.kind !== "truncated" || second.details.kind !== "truncated") {
+      throw new Error("Expected both partial pages to retain their continuation");
+    }
+    expect(first.details.content + second.details.content).toBe(longLine);
     expect(textContent(second)).toContain("offset=3");
   });
 
@@ -725,6 +804,11 @@ describe("read tool", () => {
     );
 
     expect(textContent(result)).toBe("alpha\n\n[2 more lines in file. Use offset=2 to continue.]");
+    expect(result.details).toMatchObject({
+      kind: "truncated",
+      content: "alpha",
+      continuation: { kind: "line", offset: 2, limit: 1 },
+    });
   });
 
   it.each([
@@ -847,30 +931,33 @@ describe("read tool", () => {
     expect(textContent(result)).toBe("import value\nconst marker = '\uFEFF';");
   });
 
-  it("preserves an injected backend decoder's exact UTF-16 text", async () => {
-    const bytes = Buffer.from([0xc4, 0xe3, 0xba, 0xc3]);
-    const tool = createReadToolDefinition("/workspace", {
-      operations: {
-        decodeText: ({ buffer, absolutePath }) =>
-          `${absolutePath}:${buffer.toString("hex")}:\ud800a🦞b\udc00`,
-        access: async () => {},
-        detectImageMimeType: async () => null,
-        readFile: async () => bytes,
-      },
-    });
-    const result = await tool.execute(
-      "call-1",
-      { path: "legacy.txt" },
-      undefined,
-      undefined,
-      {} as never,
-    );
+  it.each(["\ud800a🦞b\udc00", "\ud800first\udc00\nsecond🦞\ud800\n"])(
+    "preserves an injected backend decoder's exact UTF-16 text: %j",
+    async (decoded) => {
+      const bytes = Buffer.from([0xc4, 0xe3, 0xba, 0xc3]);
+      const tool = createReadToolDefinition("/workspace", {
+        operations: {
+          decodeText: ({ buffer, absolutePath }) =>
+            `${absolutePath}:${buffer.toString("hex")}:${decoded}`,
+          access: async () => {},
+          detectImageMimeType: async () => null,
+          readFile: async () => bytes,
+        },
+      });
+      const result = await tool.execute(
+        "call-1",
+        { path: "legacy.txt" },
+        undefined,
+        undefined,
+        {} as never,
+      );
 
-    expect(decodeWindowsTextFileBufferMock).not.toHaveBeenCalled();
-    expect(textContent(result)).toBe(
-      `${path.resolve("/workspace", "legacy.txt")}:c4e3bac3:\ud800a🦞b\udc00`,
-    );
-  });
+      expect(decodeWindowsTextFileBufferMock).not.toHaveBeenCalled();
+      expect(textContent(result)).toBe(
+        `${path.resolve("/workspace", "legacy.txt")}:c4e3bac3:${decoded}`,
+      );
+    },
+  );
 
   it("waits for an aliased queued write before reading the same new file", async () => {
     const tempDir = tempDirs.make("openclaw-read-write-order-");

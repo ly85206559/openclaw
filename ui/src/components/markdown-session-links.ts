@@ -10,7 +10,7 @@ import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
 import { hasMarkdownLinkBoundaries } from "./markdown-link-boundary.ts";
 
-export const SESSION_LINK_SCAN_RE = /agent:[^\s<>"'`]*[^\s<>"'`.,;:!?)}\]]/g;
+const SESSION_LINK_SCAN_RE = /agent:[^\s<>"'`]*[^\s<>"'`.,;:!?)}\]]/g;
 
 type SessionKeyTarget = {
   sessionKey: string;
@@ -35,7 +35,7 @@ function parseSessionLinkKey(raw: string): SessionKeyTarget | null {
   return { sessionKey, agentId: parsed.agentId };
 }
 
-export function parseMarkdownSessionUrl(raw: string, basePath?: string, mainKey?: string) {
+function parseMarkdownSessionUrl(raw: string, basePath?: string, mainKey?: string) {
   if (!/^(?:https?:\/\/|\/)/i.test(raw.trim())) {
     return null;
   }
@@ -54,7 +54,18 @@ export function parseMarkdownSessionUrl(raw: string, basePath?: string, mainKey?
   }
 }
 
-export function installMarkdownSessionLinks(markdownParser: MarkdownIt, scanPattern: RegExp): void {
+export function parseLocalMarkdownSessionUrl(
+  raw: string,
+  options: { basePath?: string; mainKey?: string; publicOrigin?: string } = {},
+) {
+  const path = parseMarkdownSessionUrl(raw, options.basePath, options.mainKey);
+  return path &&
+    (path.url.origin === globalThis.location.origin || path.url.origin === options.publicOrigin)
+    ? path
+    : null;
+}
+
+export function installMarkdownSessionLinks(markdownParser: MarkdownIt): void {
   // Capture cleaned hrefs before file decoration can claim session-shaped paths.
   markdownParser.core.ruler.before("file-links", "session-links", (state) => {
     if (state.env?.sessionLinks !== true) {
@@ -113,7 +124,7 @@ export function installMarkdownSessionLinks(markdownParser: MarkdownIt, scanPatt
             label.content = content;
             replacements.push(label);
           };
-          for (const match of token.content.matchAll(scanPattern)) {
+          for (const match of token.content.matchAll(SESSION_LINK_SCAN_RE)) {
             const end = match.index + match[0].length;
             const open = new state.Token("link_open", "a", 1);
             if (
@@ -165,12 +176,13 @@ export function markdownSessionLinkFromEvent(
     "openclaw-session-progress-hovercard-provider",
   )?.context;
   const href = anchor?.getAttribute("href") ?? anchor?.dataset.sessionHref;
-  const path = href ? parseMarkdownSessionUrl(href, basePath ?? context?.basePath) : null;
-  if (
-    !path ||
-    (path.url.origin !== globalThis.location.origin &&
-      path.url.origin !== markdownSessionPublicOrigin(context))
-  ) {
+  const path = href
+    ? parseLocalMarkdownSessionUrl(href, {
+        basePath: basePath ?? context?.basePath,
+        publicOrigin: markdownSessionPublicOrigin(context),
+      })
+    : null;
+  if (!path) {
     return null;
   }
   const { url, target: parsed } = path;

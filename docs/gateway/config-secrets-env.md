@@ -52,6 +52,30 @@ Reference env vars in any config string with `${VAR_NAME}`:
 - Escape with `$${VAR}` to produce a literal `${VAR}` value.
 - Works with `$include`.
 
+#### Default values
+
+Add a fallback with `${VAR_NAME:-fallback}`. It is used when the variable is unset or empty:
+
+```json5
+{
+  mcp: {
+    servers: {
+      nautobot: {
+        env: { NAUTOBOT_TIMEOUT: "${NAUTOBOT_TIMEOUT:-60}" },
+      },
+    },
+  },
+}
+```
+
+- A reference with a fallback always resolves, so it never emits a missing-var warning.
+- An empty fallback is allowed: `${VAR:-}` resolves to an empty string.
+- The fallback is literal text. It must not contain `$` or `{`, so a nested reference such as `${A:-${B}}` is not a fallback expression; it stays literal and only the inner `${B}` substitutes.
+- Only `:-` is supported. Other shell operators (`:=`, `:?`, `:+`, `-`, `#`, `%`, `/`, `^`) are left untouched as literal text. Bash's `-` is omitted deliberately: OpenClaw treats unset and empty as the same state, so it could not differ from `:-`.
+- Escaping still wins: `$${VAR:-x}` produces the literal `${VAR:-x}` and reads nothing from the environment.
+- Authored fallbacks survive config write-back; OpenClaw restores `${VAR:-fallback}` rather than inlining the value it resolved to.
+- A fallback is config text, not a secret store. Put credentials in `env.vars` or a [SecretRef](#secretref) and reference them bare.
+
 ---
 
 ## Secrets
@@ -195,8 +219,9 @@ Split config into multiple files:
 - Nested includes: up to 10 levels deep.
 - Paths: resolved relative to the including file, but must stay inside the top-level config directory (`dirname` of `openclaw.json`). Absolute/`../` forms are allowed only when they still resolve inside that boundary. Set `OPENCLAW_INCLUDE_ROOTS` (absolute paths) to allow additional roots outside the config directory.
 - Limits: paths must not contain null bytes and must be strictly shorter than 4096 characters before and after resolution; each included file is capped at 2 MB.
-- OpenClaw-owned writes that change only one top-level section backed by a single-file include write through to that included file. For example, `plugins install` updates `plugins: { $include: "./plugins.json5" }` in `plugins.json5` and leaves `openclaw.json` intact.
-- Root includes, include arrays, and includes with sibling overrides are read-only for OpenClaw-owned writes; those writes fail closed instead of flattening the config.
+- OpenClaw-owned writes whose changed keys are all owned by one single-file include at an object-key path write through to the deepest owning include. This supports top-level sections and nested object-map entries, including numeric object keys, while leaving `openclaw.json` intact. Write-through only targets include files inside the top-level config directory; includes admitted through `OPENCLAW_INCLUDE_ROOTS` stay read-only for OpenClaw-owned writes.
+- Root includes (every section of a config whose root object authors `$include`), actual array-entry includes, include arrays, sibling overrides, files shared by multiple logical paths, changes spanning ownership boundaries, nested includes beneath a merged same-path or ancestor owner, and includes whose own file still authors a nested `$include` directive are read-only for OpenClaw-owned writes; those writes fail closed instead of flattening the config.
+- `openclaw doctor --fix` writes through the same boundary; a run that mixes a root-owned repair with an include-owned repair is refused as a whole; that refused write leaves every file unchanged (earlier writes in the same run stay saved), and Doctor names the boundary to repair by hand, plus the included file or files when the root file authors that boundary's `$include` (an agent-roster boundary is named without its file).
 - Errors: clear messages for missing files, parse errors, circular includes, invalid path format, and excessive length.
 
 ---

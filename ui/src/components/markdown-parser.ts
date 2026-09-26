@@ -1,8 +1,14 @@
 import MarkdownIt, { type MarkdownIt as MarkdownItParser, type Token } from "markdown-it";
+import markdownItCjkFriendly from "markdown-it-cjk-friendly";
 import markdownItTaskLists from "markdown-it-task-lists";
 import { t } from "../i18n/index.ts";
 import { fileKindForPath, shortestFileLabels } from "./file-kind.ts";
-import { decodeGitHubPathSegment, parseGitHubItemPath } from "./github-link-target.ts";
+import { isGitHubHost } from "./github-link-eligibility.ts";
+import {
+  decodeGitHubPathSegment,
+  parseGitHubItemPath,
+  parseGitHubLinkTarget,
+} from "./github-link-target.ts";
 import {
   installAssistantTranscriptRoleImageRenderer,
   installAssistantTranscriptRoleMarkdown,
@@ -15,9 +21,11 @@ import {
   parseMarkdownFileLinkTarget,
   splitMarkdownFileLineSuffix,
 } from "./markdown-file-links.ts";
+import { installMarkdownGitHubRefs } from "./markdown-github-refs.ts";
+import { installMarkdownHumanMentions } from "./markdown-human-mentions.ts";
 import { hasMarkdownLinkBoundaries } from "./markdown-link-boundary.ts";
 import type { MarkdownRenderEnv } from "./markdown-render-options.ts";
-import { installMarkdownSessionLinks, SESSION_LINK_SCAN_RE } from "./markdown-session-links.ts";
+import { installMarkdownSessionLinks } from "./markdown-session-links.ts";
 import { installMarkdownTables } from "./markdown-tables.ts";
 import { escapeMarkdownHtml } from "./markdown-text.ts";
 
@@ -37,6 +45,10 @@ const GITHUB_LINK_CLASS = "markdown-github-link";
 // Marks anchors whose visible text is the URL itself, which CSS may break at
 // any character. Authored labels keep normal word wrapping.
 const BARE_URL_CLASS = "markdown-bare-url";
+// Anchors minted from a code span that held only a GitHub URL; they carry a
+// generated label exactly like linkify output.
+const CODE_SPAN_LINK_MARKUP = "code-span-url";
+const CODE_SPAN_URL_BREAK_RE = /[\s\p{Cc}]/u;
 
 // Inline-code file links are rendered by the code_inline rule, which runs after
 // every core rule. The core rule therefore parks the resolved target here so the
@@ -71,6 +83,9 @@ function renderRawMarkdownHtml(
   const content = token.content;
   if (progressBars) {
     return PROGRESS_HTML_RE.test(content.trim()) ? content : "";
+  }
+  if (/^<br\s*\/?>$/iu.test(content.trim())) {
+    return block ? "<br>\n" : "<br>";
   }
   return escapeMarkdownHtml(content) + (block ? "\n" : "");
 }
@@ -113,14 +128,20 @@ function formatGitHubLinkLabel(url: URL): string {
   if (segments.length === 2) {
     return segments.map((segment) => decodeGitHubPathSegment(segment) ?? segment).join("/");
   }
-  if (segments[2] === "blob" && segments.length > 4) {
-    const filename = decodeGitHubPathSegment(segments.at(-1) ?? "");
-    if (filename) {
-      return filename;
+  if ((segments[2] === "blob" || segments[2] === "tree") && segments.length > 4) {
+    const basename = decodeGitHubPathSegment(segments.at(-1) ?? "");
+    if (basename) {
+      // Tree URLs can contain slash-separated refs, not just folder paths.
+      // Show the omission rather than presenting the suffix as a folder name.
+      return segments[2] === "tree"
+        ? `${segments
+            .slice(0, 2)
+            .map((segment) => decodeGitHubPathSegment(segment) ?? segment)
+            .join("/")}/…/${basename}`
+        : basename;
     }
   }
-  const fallbackSegments = segments.length > 2 ? segments.slice(2) : segments;
-  const path = fallbackSegments.map((segment) => decodeGitHubPathSegment(segment) ?? segment);
+  const path = segments.map((segment) => decodeGitHubPathSegment(segment) ?? segment);
   return ["github.com", ...path].join("/");
 }
 
@@ -130,10 +151,9 @@ export function createMarkdownParser(): MarkdownItParser {
     breaks: true,
     linkify: true,
   });
+  markdownParser.use(markdownItCjkFriendly);
   const defaultCodeInlineRenderer = markdownParser.renderer.rules.code_inline!;
 
-  // Enable GFM strikethrough (~~text~~) to match original marked.js behavior.
-  // markdown-it uses <s> tags; we added "s" to the sanitizer allowlist.
   markdownParser.enable("strikethrough");
   installAssistantTranscriptRoleMarkdown(markdownParser, escapeMarkdownHtml);
   installMarkdownDetails(markdownParser);
@@ -142,13 +162,6 @@ export function createMarkdownParser(): MarkdownItParser {
   // Disable fuzzy link detection to prevent bare filenames like "README.md"
   // from being auto-linked as "http://README.md". URLs with explicit protocol
   // (https://...) and emails are still linkified.
-  //
-  // Alternative considered: extensions/matrix/src/matrix/format.ts uses fuzzyLink
-  // with a file-extension blocklist to filter false positives at render time.
-  // We chose the www-only approach instead because:
-  // 1. Matches original marked.js GFM behavior exactly (bare domains were never linked)
-  // 2. No blocklist to maintain — new TLDs like .ai, .io, .dev would need constant updates
-  // 3. Predictable behavior — users can always use explicit https:// for any URL
   markdownParser.linkify.set({ fuzzyLink: false });
 
   // Re-enable www. prefix detection per GFM spec: bare URLs without protocol
@@ -170,10 +183,6 @@ export function createMarkdownParser(): MarkdownItParser {
       }
       let length = match[0].length;
 
-      // Strip trailing punctuation per GFM extended autolink spec.
-      // GFM says: ?, !, ., ,, :, *, _, ~ are not part of the autolink if trailing.
-
-      // Balance checking config: closeChar -> openChar mapping.
       // Strip trailing close chars only when unbalanced (more closes than opens).
       // For self-matching pairs like "", open === close (strip if odd count).
       const balancePairs: Record<string, string> = {
@@ -192,7 +201,6 @@ export function createMarkdownParser(): MarkdownItParser {
         for (let index = 0; index < length; index++) {
           const character = tail.charAt(index);
           if (open === close) {
-            // Self-matching pair (e.g., "") — toggle between 0 and 1
             if (character === open) {
               balance[close] = balance[close] === 0 ? 1 : 0;
             }
@@ -206,7 +214,6 @@ export function createMarkdownParser(): MarkdownItParser {
 
       while (length > 0) {
         const character = tail.charAt(length - 1);
-        // GFM trailing punctuation: ?, !, ., ,, :, *, _, ~ stripped unconditionally.
         if (/[?!.,:*_~]/.test(character)) {
           length--;
           continue;
@@ -223,10 +230,8 @@ export function createMarkdownParser(): MarkdownItParser {
             length = index;
             continue;
           }
-          // Not an entity reference, stop stripping
           break;
         }
-        // Handle balanced pairs — only strip close char if unbalanced.
         const open = balancePairs[character];
         if (open !== undefined) {
           if (open === character) {
@@ -313,7 +318,6 @@ export function createMarkdownParser(): MarkdownItParser {
         if (cjkIndex <= 0 || cjkIndex === displayText.length) {
           continue;
         }
-        // Split: URL part and CJK tail from display text
         const trimmedDisplay = displayText.slice(0, cjkIndex);
         const cjkTail = displayText.slice(cjkIndex);
         // Rebuild href by preserving the scheme prefix that linkify added but
@@ -323,7 +327,6 @@ export function createMarkdownParser(): MarkdownItParser {
         const hrefPrefix = prefixLength > 0 ? href.slice(0, prefixLength) : "";
         token.attrSet("href", hrefPrefix + trimmedDisplay);
         textToken.content = trimmedDisplay;
-        // Find link_close and insert CJK text after it
         for (let closeIndex = index + 1; closeIndex < children.length; closeIndex++) {
           if (children[closeIndex]?.type === "link_close") {
             const tailToken = new state.Token("text", "", 0);
@@ -494,31 +497,61 @@ export function createMarkdownParser(): MarkdownItParser {
     }
   });
 
-  installMarkdownSessionLinks(markdownParser, SESSION_LINK_SCAN_RE);
+  installMarkdownSessionLinks(markdownParser);
 
   // Classify web anchors for presentation; runs after linkify so bare URLs are
   // already anchors. The GitHub mark skips links whose only content is an image
-  // (badges/shields), where a mark beside a mark reads as noise. Code spans and
-  // fences need no exclusion: markdown-it does not linkify inside them.
+  // (badges/shields), where a mark beside a mark reads as noise. markdown-it
+  // does not linkify inside code spans or fences; a code span holding nothing
+  // but a GitHub URL is promoted here to the same anchor a bare URL gets, since
+  // models routinely quote links that way and the reference is what matters.
   markdownParser.core.ruler.after("linkify", "web-link-classes", (state) => {
     for (const blockToken of state.tokens) {
       if (blockToken.type !== "inline" || !blockToken.children) {
         continue;
       }
       const children = blockToken.children;
+      let linkDepth = 0;
       for (let index = 0; index < children.length; index++) {
-        const open = children[index];
+        let open = children[index];
+        if (open?.type === "link_close") {
+          linkDepth = Math.max(0, linkDepth - 1);
+          continue;
+        }
+        if (open?.type === "code_inline" && linkDepth === 0) {
+          // The URL parser strips or percent-encodes whitespace and control
+          // characters instead of failing, so a span with prose beside the URL
+          // would fold that prose into the href. CommonMark has already stripped
+          // symmetric padding; anything left is content, and only a span that is
+          // entirely one URL is promoted.
+          const content = open.content;
+          const codeUrl = CODE_SPAN_URL_BREAK_RE.test(content) ? null : parseWebLinkHref(content);
+          if (!codeUrl || !isGitHubHost(codeUrl.hostname)) {
+            continue;
+          }
+          const label = new state.Token("text", "", 0);
+          label.content = content;
+          open = new state.Token("link_open", "a", 1);
+          open.markup = CODE_SPAN_LINK_MARKUP;
+          open.attrSet("href", label.content);
+          children.splice(index, 1, open, label, new state.Token("link_close", "a", -1));
+        }
         if (open?.type !== "link_open") {
           continue;
         }
+        linkDepth += 1;
         const href = String(open.attrGet("href") ?? "");
         const url = href ? parseWebLinkHref(href) : null;
         if (!url) {
           continue;
         }
-        const generatedUrlLabel = open.markup === "linkify" || open.markup === "autolink";
+        const generatedUrlLabel =
+          open.markup === "linkify" ||
+          open.markup === "autolink" ||
+          open.markup === CODE_SPAN_LINK_MARKUP;
         const host = url.hostname.toLowerCase();
-        const githubLink = host === "github.com" || host === "www.github.com";
+        const githubLink = isGitHubHost(host);
+        const githubPreview = githubLink ? parseGitHubLinkTarget(href) : null;
         if (generatedUrlLabel) {
           open.attrJoin("class", BARE_URL_CLASS);
         }
@@ -538,7 +571,7 @@ export function createMarkdownParser(): MarkdownItParser {
         }
         if (githubLink && labelToken) {
           open.attrJoin("class", GITHUB_LINK_CLASS);
-          const item = parseGitHubItemPath(url);
+          const item = githubPreview ?? parseGitHubItemPath(url);
           const label =
             labelToken.type === "text" &&
             children[index + 1] === labelToken &&
@@ -557,7 +590,7 @@ export function createMarkdownParser(): MarkdownItParser {
           if (generatedUrlLabel) {
             labelToken.content = item ? `#${item.number}` : formatGitHubLinkLabel(url);
           }
-          if (generatedUrlLabel || itemChip) {
+          if (!githubPreview && (generatedUrlLabel || itemChip)) {
             open.attrSet("title", href);
           }
         }
@@ -570,6 +603,8 @@ export function createMarkdownParser(): MarkdownItParser {
       }
     }
   });
+
+  installMarkdownGitHubRefs(markdownParser);
 
   // Enable GFM task list checkboxes (- [x] / - [ ]).
   // enabled: false keeps checkboxes read-only (disabled="") — task lists in
@@ -676,7 +711,6 @@ export function createMarkdownParser(): MarkdownItParser {
       ? `<div class="markdown-mermaid">${code}</div>`
       : code;
   };
-  // Override indented code blocks (code_block) with the same treatment as fence
   markdownParser.renderer.rules.code_block = (tokens, index, _options, env) => {
     const content = tokens[index]?.content;
     if (content === undefined) {
@@ -687,5 +721,6 @@ export function createMarkdownParser(): MarkdownItParser {
     });
   };
 
+  installMarkdownHumanMentions(markdownParser);
   return markdownParser;
 }

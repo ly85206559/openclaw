@@ -4,9 +4,34 @@ import {
   annotateInterSessionPromptText,
   INTER_SESSION_PROMPT_PREFIX_BASE,
   isAgentMediatedCompletionSourceTool,
+  normalizeInputProvenance,
   shouldPreserveUserFacingSessionStateForInputProvenance,
   stripInterSessionPromptPrefixForDisplay,
 } from "./input-provenance.js";
+
+describe("normalizeInputProvenance", () => {
+  it("retains cron run identity without changing the model-facing prompt", () => {
+    const provenance = normalizeInputProvenance({
+      kind: "internal_system",
+      sourceTool: "cron",
+      sourcePromptPrefix: "[cron:daily-monitor Daily\nmonitor]",
+      jobId: " daily-monitor ",
+      runId: " run-1 ",
+      sourceSessionKey: "agent:main:cron:daily-monitor:run:run-1",
+    });
+
+    expect(provenance).toEqual({
+      kind: "internal_system",
+      sourceTool: "cron",
+      sourcePromptPrefix: "[cron:daily-monitor Daily\nmonitor]",
+      jobId: "daily-monitor",
+      runId: "run-1",
+      sourceSessionKey: "agent:main:cron:daily-monitor:run:run-1",
+    });
+    const prompt = "[cron:daily-monitor Daily monitor] Read REFRESH.md.\n    Keep indentation.\n";
+    expect(annotateInterSessionPromptText(prompt, provenance)).toBe(prompt);
+  });
+});
 
 describe("annotateInterSessionPromptText", () => {
   it("marks inter-session prompt text as non-user-authored", () => {
@@ -123,6 +148,7 @@ describe("shouldPreserveUserFacingSessionStateForInputProvenance", () => {
     "image_generate",
     "music_generate",
     "subagent_announce",
+    "subagent_settle",
     "subagent_interrupted_resume",
     "video_generate",
   ])("preserves user-facing session state for internal %s handoffs", (sourceTool) => {

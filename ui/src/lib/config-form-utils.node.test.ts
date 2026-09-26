@@ -1,8 +1,10 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
+import { i18n } from "../i18n/index.ts";
+import { configHintTranslationKey } from "../i18n/lib/config-hint-translation.ts";
 import {
-  cloneConfigObject,
   hintForPath,
+  localizedHintForPath,
   removePathValue,
   sanitizeRedactedFormForSubmit,
   serializeConfigForm,
@@ -10,6 +12,48 @@ import {
 } from "./config-form-utils.ts";
 
 describe("hintForPath", () => {
+  it("localizes the matched wildcard while preserving direct precedence and metadata", async () => {
+    const wildcard = {
+      label: "Plugin Enabled",
+      help: "Enable this plugin",
+      advanced: true,
+      order: 7,
+    };
+    const direct = { label: "Specific plugin", sensitive: true };
+    const hints = {
+      "plugins.entries.*.enabled": wildcard,
+      "plugins.entries.specific.enabled": direct,
+    };
+    const key = configHintTranslationKey("plugins.entries.*.enabled", "label", wildcard.label);
+    i18n.registerTranslation("tr", {
+      configHints: {
+        "plugins%2Eentries%2E*%2Eenabled": { label: { [key.split(".").at(-1)!]: "Eklenti etkin" } },
+      },
+    });
+    await i18n.setLocale("tr");
+    try {
+      expect(localizedHintForPath(["plugins", "entries", "demo", "enabled"], hints)).toEqual({
+        ...wildcard,
+        label: "Eklenti etkin",
+      });
+      expect(localizedHintForPath(["plugins", "entries", "specific", "enabled"], hints)).toEqual(
+        direct,
+      );
+      expect(hintForPath(["plugins", "entries", "demo", "enabled"], hints)).toBe(wildcard);
+      expect(localizedHintForPath(["missing"], hints)).toBeUndefined();
+      expect(
+        localizedHintForPath(["plugins", "entries", "demo", "enabled"], {
+          "plugins.entries.*.enabled": { label: "Enable this plugin now" },
+        })?.label,
+      ).toBe("Enable this plugin now");
+    } finally {
+      await i18n.setLocale("en");
+    }
+    expect(localizedHintForPath(["plugins", "entries", "demo", "enabled"], hints)).toEqual(
+      wildcard,
+    );
+  });
+
   it("does not rescan wildcard hints for each path lookup", () => {
     let catalogScans = 0;
     const hints = new Proxy(
@@ -83,9 +127,9 @@ describe("form-utils preserves numeric types", () => {
     expect(cost.input).toBe(0.5);
   });
 
-  it("cloneConfigObject + setPathValue preserves unrelated numeric fields", () => {
+  it("setPathValue preserves unrelated numeric fields", () => {
     const form = makeConfigWithProvider();
-    const cloned = cloneConfigObject(form);
+    const cloned = structuredClone(form);
     setPathValue(cloned, ["gateway", "auth", "token"], "new-token");
     const first = getFirstXaiModel(cloned);
 
@@ -131,7 +175,7 @@ describe("sanitizeRedactedFormForSubmit", () => {
         },
       },
     };
-    const originalForm = cloneConfigObject(form);
+    const originalForm = structuredClone(form);
 
     expect(
       sanitizeRedactedFormForSubmit(form, originalForm, {
@@ -170,7 +214,7 @@ describe("sanitizeRedactedFormForSubmit", () => {
       },
       ui: { theme: "dark" },
     };
-    const originalForm = cloneConfigObject(form);
+    const originalForm = structuredClone(form);
 
     expect(sanitizeRedactedFormForSubmit(form, originalForm, { ui: { theme: "dark" } })).toEqual({
       ui: { theme: "dark" },
@@ -185,7 +229,7 @@ describe("sanitizeRedactedFormForSubmit", () => {
         },
       },
     };
-    const originalForm = cloneConfigObject(form);
+    const originalForm = structuredClone(form);
 
     expect(
       sanitizeRedactedFormForSubmit(form, originalForm, {
@@ -202,7 +246,7 @@ describe("sanitizeRedactedFormForSubmit", () => {
         },
       },
     };
-    const originalForm = cloneConfigObject(form);
+    const originalForm = structuredClone(form);
 
     expect(sanitizeRedactedFormForSubmit(form, originalForm, null)).toEqual(form);
   });

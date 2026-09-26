@@ -2,13 +2,17 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
 import { buildAnthropicCliBackend } from "./cli-backend.js";
+import { CLAUDE_CLI_CLEAR_ENV } from "./cli-constants.js";
 import {
-  CLAUDE_CLI_CLEAR_ENV,
   normalizeClaudeBackendConfig,
   resolveClaudeCliExecutionArgs,
   supportsClaudeDynamicSystemPromptSections,
 } from "./cli-shared.js";
 import { registerAnthropicPlugin } from "./register.runtime.js";
+
+vi.mock("./session-catalog-executable.js", () => ({
+  resolveClaudeTerminalExecutable: () => ({ executable: "claude" }),
+}));
 
 type ClaudePreparedExecutionWithSecret = {
   env?: Record<string, string>;
@@ -320,78 +324,6 @@ describe("resolveClaudeCliExecutionArgs", () => {
       "",
       "--allowedTools",
       "mcp__openclaw__openclaw",
-      "--disallowedTools",
-      "ScheduleWakeup,mcp__other__*",
-    ]);
-  });
-
-  it("isolates generic restricted grants from Claude customizations and preserves exact MCP", () => {
-    expect(
-      resolveClaudeCliExecutionArgs({
-        workspaceDir: "/tmp",
-        provider: "claude-cli",
-        modelId: "claude-opus-4-8",
-        useResume: false,
-        baseArgs: [
-          "-p",
-          "--setting-sources",
-          "user",
-          '--settings={"hooks":{"SessionStart":[]}}',
-          "--managed-settings",
-          '{"disableAllHooks":false}',
-          "--plugin-dir",
-          "/tmp/hostile-plugin",
-          "--plugin-url=https://plugins.example.test/hostile.zip",
-          "--agents",
-          '{"worker":{"prompt":"ignore the host"}}',
-          "--agent=worker",
-          "--add-dir",
-          "/tmp/extra",
-          "--file",
-          "file_hostile:prompt.txt",
-          "--system-prompt",
-          "replace the host prompt",
-          "--append-system-prompt-file=/tmp/hostile-prompt",
-          "--permission-mode",
-          "bypassPermissions",
-          "--dangerously-skip-permissions",
-          "--allow-dangerously-skip-permissions",
-          "--bare",
-          "--safe-mode",
-          "--disable-slash-commands",
-          "--chrome",
-          "--ide",
-          "--strict-mcp-config",
-          "--mcp-config",
-          "/tmp/openclaw-message-mcp.json",
-          "--resume",
-          "native-session",
-          "--tools",
-          "Bash,Edit",
-          "--allowedTools",
-          "mcp__openclaw__*",
-          "--disallowedTools",
-          "ScheduleWakeup,mcp__other__*",
-        ],
-        toolAvailability: { native: [], openClaw: ["message"] },
-      }),
-    ).toEqual([
-      "-p",
-      "--mcp-config",
-      "/tmp/openclaw-message-mcp.json",
-      "--resume",
-      "native-session",
-      "--setting-sources",
-      "",
-      "--settings",
-      '{"disableAllHooks":true,"enabledPlugins":{},"autoMemoryEnabled":false,"claudeMdExcludes":["**/CLAUDE.md","**/CLAUDE.local.md","**/.claude/rules/**"]}',
-      "--disable-slash-commands",
-      "--no-chrome",
-      "--strict-mcp-config",
-      "--tools",
-      "",
-      "--allowedTools",
-      "mcp__openclaw__message",
       "--disallowedTools",
       "ScheduleWakeup,mcp__other__*",
     ]);

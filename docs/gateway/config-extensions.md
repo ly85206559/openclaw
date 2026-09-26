@@ -13,18 +13,18 @@ For the full key index and the other top-level config domains, see [Configuratio
 
 ## MCP
 
-OpenClaw-managed MCP server definitions live under `mcp.servers` and are
-consumed by embedded OpenClaw and other runtime adapters. The `openclaw mcp list`,
-`show`, `set`, and `unset` commands manage this block without connecting to the
-target server during config edits.
+OpenClaw-managed MCP server definitions live under `mcp.servers` for embedded
+OpenClaw and other runtime adapters. `openclaw mcp list`, `show`, `set`, and
+`unset` manage this block without connecting to the servers. The Fetch example
+requires [`uv`/`uvx`](https://docs.astral.sh/uv/getting-started/installation/).
 
 ```json5
 {
   mcp: {
     servers: {
       docs: {
-        command: "npx",
-        args: ["-y", "@modelcontextprotocol/server-fetch"],
+        command: "uvx",
+        args: ["mcp-server-fetch"],
       },
       remote: {
         url: "https://example.com/mcp",
@@ -65,7 +65,7 @@ target server during config edits.
   `openclaw doctor --fix` normalize into the canonical `transport` field.
 - `mcp.servers.<name>.enabled`: set `false` to keep a saved server definition
   while excluding it from embedded OpenClaw MCP discovery and tool projection.
-- `mcp.servers.<name>.requestTimeoutMs`: per-server MCP request timeout in milliseconds.
+- `mcp.servers.<name>.requestTimeoutMs`: per-server MCP request timeout in milliseconds (default 60 seconds). When it is not set, tool listing at session start uses 10 seconds.
 - `mcp.servers.<name>.connectionTimeoutMs`: per-server connection timeout in milliseconds.
 - `mcp.servers.<name>.supportsParallelToolCalls`: optional concurrency hint for
   adapters that can choose whether to issue parallel MCP tool calls.
@@ -97,8 +97,27 @@ target server during config edits.
   block before passing native `mcp_servers` config to Codex. Omit the block to
   keep the server projected for every Codex app-server agent with Codex's
   default MCP approval behavior.
-- Session-scoped bundled MCP runtimes use a built-in 10-minute idle TTL.
-  One-shot embedded runs request run-end cleanup; the TTL is the backstop for long-lived sessions and future callers.
+- Session-scoped MCP runtimes stay alive between turns, including quiet periods
+  and background server work after a tool returns. Session reset/deletion or compaction ID rollover,
+  explicit Stop, and Gateway shutdown retire them and terminate owned stdio
+  children. Completing a turn in a surviving session does not retire its runtime.
+  A detached one-shot run without a surviving runtime session owns its MCP
+  lifetime and retires its runtimes at run end; retained transcripts alone do
+  not keep them alive.
+- `mcp.sessionIdleTtlMs`: optional idle eviction in milliseconds. Unset or `0`
+  keeps the session lifetime above. Positive finite values opt into eviction;
+  fractions round down. For example, `mcp: { sessionIdleTtlMs: 3600000 }` evicts
+  after one hour without use. While enabled, a sweep runs once per minute and
+  preserves active leases and pending acquisitions. This override does not
+  extend a run-owned runtime beyond run end or prevent explicit cleanup.
+  Doctor preserves this key. If an earlier `doctor --fix` removed it, restore the
+  intended value from your config backup; the deleted value cannot be inferred.
+- Each Gateway admits at most 256 OpenClaw-managed MCP runtimes with server connections across sessions
+  and requester partitions, including creation and cleanup in progress. At the
+  limit, existing runtimes stay alive and new admissions fail with a log message
+  directing you to stop or reset unused sessions. A runtime can own multiple
+  configured server connections. Sessions without available MCP servers and
+  sign-in-only catalogs do not consume this limit. Native client runtimes manage their own bounds.
 - MCP config changes retire only changed or removed server connections. Unchanged
   servers keep their transports and tool catalogs; active runs can continue calling
   their tools and resources. The next turn's discovery creates changed servers from the new config. Plugin
@@ -186,7 +205,7 @@ See [MCP](/cli/mcp#openclaw-as-an-mcp-client-registry) and
 - Loaded from package or bundle directories under `~/.openclaw/extensions` and `<workspace>/.openclaw/extensions`, plus files or directories listed in `plugins.load.paths`.
 - Put standalone plugin files in `plugins.load.paths`; auto-discovered extension roots ignore top-level `.js`, `.mjs`, and `.ts` files so helper scripts in those roots do not block startup.
 - Discovery accepts native OpenClaw plugins plus compatible Codex bundles and Claude bundles, including manifestless Claude default-layout bundles.
-- With the default hybrid reload mode, ordinary plugin policy and entry changes hot-reload the plugin runtime. Plugin code, metadata, and discovery-root changes require a Gateway restart; active plugins can also declare restart-triggering config prefixes.
+- With the default hybrid reload mode, ordinary plugin policy, entry, and discovery-path changes hot-reload the plugin runtime. Entry config changes replace the affected instance. Use `openclaw plugins reload <id>` after source or manifest edits; active plugins can still declare restart-triggering config prefixes. See [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect).
 - `allow`: optional allowlist (only listed plugins load). `deny` wins.
 - `plugins.entries.<id>.apiKey`: plugin-level API key convenience field (when supported by the plugin).
 - `plugins.entries.<id>.env`: plugin-scoped env var map.
@@ -354,6 +373,6 @@ See [Plugins](/tools/plugin).
 - Non-loopback binds: these routes require Gateway auth (token/password/trusted-proxy), same as other Gateway HTTP surfaces.
 - Node WebViews typically don't send auth headers; after a macOS node is paired and connected, the Gateway advertises a node-scoped `pluginSurfaceUrls.canvas` capability URL.
 - Capability URLs are bound to the active node WS session and expire quickly. IP-based fallback is not used.
-- Changes require a gateway restart.
+- `host.enabled` hot-applies through the Canvas plugin in the default hybrid reload mode. The `OPENCLAW_SKIP_CANVAS_HOST` environment override still requires a Gateway restart.
 
 ---

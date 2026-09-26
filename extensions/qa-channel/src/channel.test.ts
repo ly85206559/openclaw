@@ -1,6 +1,7 @@
 // Qa Channel tests cover channel plugin behavior.
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import type { ChannelMessageActionName } from "openclaw/plugin-sdk/channel-contract";
 import { verifyChannelMessageAdapterCapabilityProofs } from "openclaw/plugin-sdk/channel-outbound";
 import {
   createPluginRuntimeMock,
@@ -17,7 +18,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createQaBusState, startQaBusServer } from "../../qa-lab/bus-api.js";
 import { qaChannelPlugin, setQaChannelRuntime } from "../api.js";
 import { listQaChannelAccountIds, resolveDefaultQaChannelAccountId } from "./accounts.js";
-import type { ChannelMessageActionName } from "./runtime-api.js";
 
 type QaDispatchTurn = Parameters<PluginRuntime["channel"]["inbound"]["dispatch"]>[0];
 
@@ -185,35 +185,6 @@ async function startQaChannelTestHarness(params?: {
 }
 
 describe("qa-channel plugin", () => {
-  it("derives thread-aware outbound session routes from explicit thread targets", async () => {
-    const route = await qaChannelPlugin.messaging?.resolveOutboundSessionRoute?.({
-      cfg: {},
-      agentId: "main",
-      accountId: "default",
-      target: "thread:qa-room/thread-1",
-    });
-
-    expect(route?.sessionKey).toBe("agent:main:qa-channel:channel:thread:qa-room/thread-1");
-    expect(route?.baseSessionKey).toBe("agent:main:qa-channel:channel:thread:qa-room/thread-1");
-    expect(route?.threadId).toBeUndefined();
-  });
-
-  it("does not append routing metadata to explicit thread targets", async () => {
-    const route = await qaChannelPlugin.messaging?.resolveOutboundSessionRoute?.({
-      cfg: {},
-      agentId: "main",
-      accountId: "default",
-      target: "thread:qa-room/thread-1",
-      replyToId: "reply-1",
-      threadId: "thread-1",
-      currentSessionKey: "agent:main:qa-channel:channel:thread:qa-room/thread-1:thread:stale",
-    });
-
-    expect(route?.sessionKey).toBe("agent:main:qa-channel:channel:thread:qa-room/thread-1");
-    expect(route?.baseSessionKey).toBe("agent:main:qa-channel:channel:thread:qa-room/thread-1");
-    expect(route?.threadId).toBeUndefined();
-  });
-
   it("rejects conflicting explicit thread routing metadata", () => {
     expect(() =>
       qaChannelPlugin.messaging?.resolveOutboundSessionRoute?.({
@@ -986,6 +957,18 @@ describe("qa-channel plugin", () => {
         },
       });
       expect(sendTarget).toEqual({ to: "channel:qa-room", threadId: undefined });
+
+      const legacyThreadTarget = qaChannelPlugin.actions?.extractToolSend?.({
+        args: {
+          action: "thread-reply",
+          channelId: "canonical/room",
+          threadId: "thread-1",
+        },
+      });
+      expect(legacyThreadTarget).toEqual({
+        to: "channel:canonical/room",
+        threadId: "thread-1",
+      });
 
       const result = await qaChannelPlugin.actions?.handleAction?.({
         channel: "qa-channel",

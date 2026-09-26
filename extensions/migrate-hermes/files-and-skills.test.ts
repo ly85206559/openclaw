@@ -4,6 +4,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { loadAuthProfileStoreWithoutExternalProfiles } from "openclaw/plugin-sdk/agent-runtime";
 import { MIGRATION_REASON_TARGET_EXISTS } from "openclaw/plugin-sdk/migration";
+import { resolvePlannedMigrationTargets } from "openclaw/plugin-sdk/migration-runtime";
 import {
   resolvePreferredOpenClawTmpDir,
   tempWorkspace,
@@ -13,7 +14,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildAuthItems } from "./auth.js";
 import { buildHermesMigrationProvider } from "./provider.js";
 import { discoverHermesSource } from "./source.js";
-import { resolveTargets } from "./targets.js";
 import { makeContext, writeFile } from "./test/provider-helpers.js";
 
 let testWorkspace: TempWorkspace;
@@ -225,7 +225,11 @@ describe("Hermes migration file and skill items", () => {
     expect(source.root).toBe(profileRoot);
     expect(source.globalAuthPath).toBe(path.join(hermesRoot, "auth.json"));
     const ctx = makeContext({ source: profileRoot, stateDir, workspaceDir, includeSecrets: true });
-    const items = await buildAuthItems({ ctx, source, targets: resolveTargets(ctx) });
+    const items = await buildAuthItems({
+      ctx,
+      source,
+      targets: resolvePlannedMigrationTargets(ctx),
+    });
     expect(items).toEqual([
       expect.objectContaining({
         source: path.join(hermesRoot, "auth.json"),
@@ -408,7 +412,7 @@ describe("Hermes migration file and skill items", () => {
     expect(
       await fs.readFile(path.join(workspaceDir, "skills", "ship-it", "SKILL.md"), "utf8"),
     ).toBe("# Ship It\n");
-    await expect(fs.access(path.join(reportDir, "summary.md"))).resolves.toBeUndefined();
+    await fs.access(path.join(reportDir, "summary.md"));
     expect(await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf8")).toContain(
       "Imported from Hermes",
     );
@@ -463,19 +467,93 @@ describe("Hermes migration file and skill items", () => {
     expect(itemById(secondResult.items, "memory:MEMORY.md")?.status).toBe("skipped");
   });
 
+  it.each([
+    ["missing", undefined],
+    ["empty", ""],
+    ["comment-only", "# No config values\n"],
+    ["null", "null\n"],
+    ["boolean", "true\n"],
+    ["number", "42\n"],
+    ["string", "review\n"],
+    ["sequence", "- skills:\n    disabled: [review]\n"],
+  ])("plans independent skills with %s Hermes config", async (_, content) => {
+    const root = testWorkspace.dir;
+    const source = path.join(root, "hermes");
+    const workspaceDir = path.join(root, "workspace");
+    const skillSource = path.join(source, "skills", "review");
+    await writeFile(path.join(skillSource, "SKILL.md"), "# Review\n");
+    if (content !== undefined) {
+      await writeFile(path.join(source, "config.yaml"), content);
+    }
+
+    const plan = await buildHermesMigrationProvider().plan(
+      makeContext({ source, stateDir: path.join(root, "state"), workspaceDir }),
+    );
+
+    expect(plan.items).toEqual([
+      expect.objectContaining({
+        id: "skill:review",
+        kind: "skill",
+        action: "copy",
+        status: "planned",
+        source: skillSource,
+        target: path.join(workspaceDir, "skills", "review"),
+        details: { skillName: "review" },
+      }),
+    ]);
+  });
+
+  it("plans nested mapping config alongside independent skills", async () => {
+    const root = testWorkspace.dir;
+    const source = path.join(root, "hermes");
+    const workspaceDir = path.join(root, "workspace");
+    await writeFile(path.join(source, "skills", "review", "SKILL.md"), "# Review\n");
+    await writeFile(
+      path.join(source, "config.yaml"),
+      "skills:\n  disabled: [review]\n  config:\n    review:\n      mode: careful\n",
+    );
+
+    const plan = await buildHermesMigrationProvider().plan(
+      makeContext({ source, stateDir: path.join(root, "state"), workspaceDir }),
+    );
+
+    expect(plan.items).toEqual([
+      expect.objectContaining({
+        id: "config:skill-entry:review",
+        kind: "config",
+        status: "planned",
+        details: {
+          path: ["skills", "entries", "review"],
+          value: { config: { mode: "careful" }, enabled: false },
+        },
+      }),
+      expect.objectContaining({
+        id: "skill:review",
+        kind: "skill",
+        action: "copy",
+        status: "planned",
+        details: { skillName: "review" },
+      }),
+    ]);
+  });
+
   it("fails planning on malformed Hermes YAML", async () => {
     const root = testWorkspace.dir;
     const source = path.join(root, "hermes");
     await writeFile(path.join(source, "config.yaml"), "model: [unterminated\n");
-    await expect(
-      buildHermesMigrationProvider().plan(
-        makeContext({
-          source,
-          stateDir: path.join(root, "state"),
-          workspaceDir: path.join(root, "ws"),
-        }),
-      ),
-    ).rejects.toThrow(`Failed to parse Hermes config at ${path.join(source, "config.yaml")}`);
+    const planning = buildHermesMigrationProvider().plan(
+      makeContext({
+        source,
+        stateDir: path.join(root, "state"),
+        workspaceDir: path.join(root, "ws"),
+      }),
+    );
+    await expect(planning).rejects.toThrow(
+      `Failed to parse Hermes config at ${path.join(source, "config.yaml")}`,
+    );
+    await expect(planning).rejects.toMatchObject({
+      cause: expect.objectContaining({ name: "YAMLParseError" }),
+    });
   });
 
   it("archives unsupported Hermes state without copying raw auth credentials", async () => {
@@ -537,9 +615,7 @@ describe("Hermes migration file and skill items", () => {
         "utf8",
       ),
     ).toBe("{}\n");
-    await expect(
-      fs.access(path.join(reportDir, "archive", "retaindb_queue.db")),
-    ).resolves.toBeUndefined();
+    await fs.access(path.join(reportDir, "archive", "retaindb_queue.db"));
     await expectPathMissing(path.join(reportDir, "archive", "auth.json"));
     await expectPathMissing(path.join(workspaceDir, "logs", "session.log"));
   });

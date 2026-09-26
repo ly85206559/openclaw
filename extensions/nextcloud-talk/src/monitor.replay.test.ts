@@ -2,27 +2,10 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { createMockIncomingRequest, postRawWebhook } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
-import { createNextcloudTalkWebhookServer as createRawNextcloudTalkWebhookServer } from "./monitor.js";
+import { createNextcloudTalkWebhookServer } from "./monitor.js";
 import { createSignedCreateMessageRequest } from "./monitor.test-fixtures.js";
 import { startWebhookServer } from "./monitor.test-harness.js";
 import { generateNextcloudTalkSignature } from "./signature.js";
-import type { NextcloudTalkInboundMessage, NextcloudTalkWebhookServerOptions } from "./types.js";
-import { inspectNextcloudTalkWebhookEnvelope } from "./webhook-spool-state.js";
-
-type TestWebhookServerOptions = Omit<NextcloudTalkWebhookServerOptions, "onWebhook"> & {
-  onMessage: (rawBody: string) => void | Promise<void>;
-};
-
-function createNextcloudTalkWebhookServer(options: TestWebhookServerOptions) {
-  const { onMessage, ...serverOptions } = options;
-  return createRawNextcloudTalkWebhookServer({
-    ...serverOptions,
-    onWebhook: async (rawBody) => {
-      await onMessage(rawBody);
-      return "accepted";
-    },
-  });
-}
 
 async function invokeWebhookRequestListener(params: {
   listener: (req: IncomingMessage, res: ServerResponse) => void;
@@ -42,6 +25,18 @@ async function invokeWebhookRequestListener(params: {
     let status = 0;
     const res = {
       headersSent: false,
+      writableFinished: false,
+      destroyed: false,
+      once() {
+        return this;
+      },
+      off() {
+        return this;
+      },
+      destroy() {
+        this.destroyed = true;
+        return this;
+      },
       writeHead(code: number) {
         status = code;
         this.headersSent = true;
@@ -62,7 +57,7 @@ async function invokeWebhookRequestListener(params: {
 describe("createNextcloudTalkWebhookServer auth order", () => {
   it("closes when abort races with listener startup", async () => {
     const abortController = new AbortController();
-    const webhook = createRawNextcloudTalkWebhookServer({
+    const webhook = createNextcloudTalkWebhookServer({
       host: "127.0.0.1",
       port: 0,
       path: "/nextcloud-abort-startup",
@@ -125,42 +120,6 @@ describe("createNextcloudTalkWebhookServer backend allowlist", () => {
     expect(response.status).toBe(401);
     expect(await response.json()).toEqual({ error: "Invalid backend" });
     expect(onMessage).not.toHaveBeenCalled();
-  });
-});
-
-describe("Nextcloud Talk replay identity fixture", () => {
-  function buildInboundMessage(): NextcloudTalkInboundMessage {
-    return {
-      messageId: "msg-1",
-      roomToken: "room-token",
-      roomName: "Room 1",
-      senderId: "alice",
-      senderName: "Alice",
-      text: "hello",
-      mediaType: "text/plain",
-      timestamp: 1_700_000_000_000,
-      isGroupChat: true,
-    };
-  }
-
-  it("keeps the retired guard identity fields represented", () => {
-    const message = buildInboundMessage();
-    const rawBody = JSON.stringify({
-      type: "Create",
-      actor: { type: "Person", id: message.senderId, name: message.senderName },
-      object: {
-        type: "Note",
-        id: message.messageId,
-        name: message.text,
-        content: message.text,
-        mediaType: message.mediaType,
-      },
-      target: { type: "Collection", id: message.roomToken, name: message.roomName },
-    });
-    expect(inspectNextcloudTalkWebhookEnvelope(rawBody)).toEqual({
-      eventId: message.messageId,
-      laneKey: `room:${message.roomToken}`,
-    });
   });
 });
 
@@ -385,7 +344,7 @@ describe("createNextcloudTalkWebhookServer auth rate limiting", () => {
       secret: "nextcloud-secret", // pragma: allowlist secret
       authRateLimit: { maxRequests: 1 },
       trustedProxies: ["127.0.0.0/8"],
-      onMessage: vi.fn(),
+      onWebhook: async () => "accepted",
     });
     try {
       const listener = server.listeners("request")[0] as

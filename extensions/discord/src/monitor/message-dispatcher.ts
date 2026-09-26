@@ -8,15 +8,14 @@ import { fanInChannelIngressLifecycles } from "openclaw/plugin-sdk/channel-ingre
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
-import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
 import type { Client } from "../internal/discord.js";
-import { buildDiscordInboundJob } from "./inbound-job.js";
 import type {
   createDiscordIngressMonitor,
   DiscordIngressDispatchResult,
   DiscordIngressLifecycle,
 } from "./ingress.js";
 import type { DiscordMessageEvent } from "./listeners.js";
+import { createDiscordLivePolicyReader, type DiscordLivePolicyReader } from "./live-policy.js";
 import { createDiscordAvatarResolver } from "./message-avatar.js";
 import { resolveDiscordMessageChannelId } from "./message-channel-info.js";
 import {
@@ -39,6 +38,7 @@ type DiscordMessageHandlerParams = Omit<
   DiscordMessagePreflightParams,
   "ackReactionScope" | "groupPolicy" | "data" | "client"
 > & {
+  readPolicy?: DiscordLivePolicyReader;
   setStatus?: DiscordMonitorStatusSink;
   abortSignal?: AbortSignal;
   testing?: DiscordMessageHandlerTestingHooks;
@@ -70,11 +70,24 @@ function isNonEmptyString(value: string | undefined): value is string {
 export function createDiscordMessageDispatcher(
   params: DiscordMessageHandlerParams,
 ): DiscordMessageDispatcherWithLifecycle {
-  const { groupPolicy } = resolveOpenProviderRuntimeGroupPolicy({
-    providerConfigPresent: params.cfg.channels?.discord !== undefined,
-    groupPolicy: params.discordConfig?.groupPolicy,
-    defaultGroupPolicy: params.cfg.channels?.defaults?.groupPolicy,
-  });
+  const readPolicy =
+    params.readPolicy ??
+    createDiscordLivePolicyReader({
+      ...params,
+      discordConfig: {
+        ...params.discordConfig,
+        dmPolicy: params.dmPolicy,
+        allowFrom: params.allowFrom,
+        guilds: params.guildEntries,
+        dm: {
+          ...params.discordConfig?.dm,
+          enabled: params.dmEnabled,
+          groupEnabled: params.groupDmEnabled,
+          groupChannels: params.groupDmChannels,
+        },
+      },
+      resolvedAllowlist: { guildEntries: params.guildEntries, allowFrom: params.allowFrom },
+    });
   const readConfig = createRuntimeConfigReader(params.cfg);
   const preflightDiscordMessageImpl = params.testing?.preflightDiscordMessage;
   const messageRunQueue = createDiscordMessageRunQueue({
@@ -150,19 +163,20 @@ export function createDiscordMessageDispatcher(
             return;
           }
           try {
-            const cfg = readConfig();
+            const policy = await readPolicy();
+            const { cfg } = policy;
             const preflight =
               preflightDiscordMessageImpl ??
               (await loadMessagePreflightRuntime()).preflightDiscordMessage;
             const ctx = await preflight({
               ...params,
-              cfg,
+              ...policy,
+              isPolicyCurrent: policy.isCurrent,
               avatarResolver,
               ackReactionScope:
                 params.discordConfig?.ackReactionScope ??
                 cfg.messages?.ackReactionScope ??
                 "group-mentions",
-              groupPolicy,
               abortSignal,
               data: last.data,
               client: last.client,
@@ -191,7 +205,7 @@ export function createDiscordMessageDispatcher(
               ctxBatch.MessageSidFirst = ids[0];
               ctxBatch.MessageSidLast = ids[ids.length - 1];
             }
-            messageRunQueue.enqueue(buildDiscordInboundJob(ctx, { ingressSettlement: ingress }));
+            messageRunQueue.enqueue({ context: ctx, ingressSettlement: ingress });
           } catch (error) {
             if (abortSignal?.aborted) {
               await ingress.cancel();
