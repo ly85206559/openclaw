@@ -5,28 +5,23 @@ import {
   createChannelPartialDeliveryError,
   implicitMentionKindWhen,
   isChannelPartialDeliveryError,
+  logInboundDrop,
   resolveInboundMentionDecision,
 } from "openclaw/plugin-sdk/channel-inbound";
-import {
-  resolveStableChannelMessageIngress,
-  type ChannelIngressContextBinding,
-} from "openclaw/plugin-sdk/channel-ingress-runtime";
+import type { ChannelIngressContextBinding } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
   createMessageReceiptFromOutboundResults,
   listMessageReceiptPlatformIds,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
+import { resolveChannelGroupsConfigPath } from "openclaw/plugin-sdk/channel-policy";
 import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
-// Zalouser plugin module implements monitor behavior.
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
-import {
-  DEFAULT_GROUP_HISTORY_LIMIT,
-  type HistoryEntry,
-  createChannelHistoryWindow,
-} from "openclaw/plugin-sdk/reply-history";
+import { resolvePromptHistoryLimit } from "openclaw/plugin-sdk/number-runtime";
+import { type HistoryEntry, createChannelHistoryWindow } from "openclaw/plugin-sdk/reply-history";
 import {
   deliverTextOrMediaReply,
   resolveSendableOutboundReplyParts,
@@ -43,6 +38,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeStringEntries,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { buildZaloNameIndex } from "./directory-index.js";
 import {
   buildZalouserGroupCandidates,
   findZalouserGroupEntry,
@@ -81,20 +77,6 @@ type ZalouserMonitorResult = {
 };
 
 const ZALOUSER_TEXT_LIMIT = 2000;
-
-function buildNameIndex<T>(items: T[], nameFn: (item: T) => string | undefined): Map<string, T[]> {
-  const index = new Map<string, T[]>();
-  for (const item of items) {
-    const name = normalizeOptionalLowercaseString(nameFn(item));
-    if (!name) {
-      continue;
-    }
-    const list = index.get(name) ?? [];
-    list.push(item);
-    index.set(name, list);
-  }
-  return index;
-}
 
 function resolveUserAllowlistEntries(
   entries: string[],
@@ -224,6 +206,7 @@ async function processMessage(
   message: ZaloInboundMessage,
   account: ResolvedZalouserAccount,
   config: OpenClawConfig,
+  groupsConfigPath: string,
   core: ZalouserCoreRuntime,
   runtime: RuntimeEnv,
   historyState: ZalouserGroupHistoryState,
@@ -343,7 +326,7 @@ async function processMessage(
     config,
   );
   const resolveAccessDecision = async (contextBinding?: ChannelIngressContextBinding) =>
-    await resolveStableChannelMessageIngress({
+    await core.channel.inbound.ingress.resolveStable({
       channelId: "zalouser",
       accountId: account.accountId,
       identity: {
@@ -544,7 +527,14 @@ async function processMessage(
             }
           : null,
     });
-    logVerbose(core, runtime, `zalouser: skip group ${chatId} (mention required, not mentioned)`);
+    logInboundDrop({
+      log: runtime.log,
+      channel: "zalouser",
+      reason: "no mention",
+      target: chatId,
+      onceKey: JSON.stringify([account.accountId, chatId]),
+      hint: `Mention patterns can be derived from the agent identity name. Set ${groupsConfigPath}[${JSON.stringify(chatId)}].requireMention=false to process messages without a mention. Preserve existing groups entries; when adding the first groups map, include "*": {} to keep other chats admitted.`,
+    });
     return;
   }
 
@@ -793,13 +783,17 @@ export async function monitorZalouserProvider(
   const { config } = options;
   let { account } = options;
   const { abortSignal, statusSink, runtime } = options;
+  // Name resolution below copies the map; retain its authored scope before that projection.
+  const groupsConfigPath = resolveChannelGroupsConfigPath({
+    cfg: config,
+    channel: "zalouser",
+    accountId: account.accountId,
+    groups: account.config.groups,
+  });
 
   const core = getZalouserRuntime();
-  const historyLimit = Math.max(
-    0,
-    account.config.historyLimit ??
-      config.messages?.groupChat?.historyLimit ??
-      DEFAULT_GROUP_HISTORY_LIMIT,
+  const historyLimit = resolvePromptHistoryLimit(
+    account.config.historyLimit ?? config.messages?.groupChat?.historyLimit,
   );
   const groupHistories = new Map<string, HistoryEntry[]>();
 
@@ -815,7 +809,7 @@ export async function monitorZalouserProvider(
 
     if (allowNameMatching && (allowFromEntries.length > 0 || groupAllowFromEntries.length > 0)) {
       const friends = await listZaloFriends(profile);
-      const byName = buildNameIndex(friends, (friend) => friend.displayName);
+      const byName = buildZaloNameIndex(friends, (friend) => friend.displayName);
       if (allowFromEntries.length > 0) {
         const { additions, mapping, unresolved } = resolveUserAllowlistEntries(
           allowFromEntries,
@@ -855,7 +849,7 @@ export async function monitorZalouserProvider(
     const groupKeys = Object.keys(groupsConfig).filter((key) => key !== "*");
     if (allowNameMatching && groupKeys.length > 0) {
       const groups = await listZaloGroups(profile);
-      const byName = buildNameIndex(groups, (group) => group.name);
+      const byName = buildZaloNameIndex(groups, (group) => group.name);
       const mapping: string[] = [];
       const unresolved: string[] = [];
       const nextGroups = { ...groupsConfig };
@@ -907,6 +901,7 @@ export async function monitorZalouserProvider(
         message,
         account,
         config,
+        groupsConfigPath,
         core,
         runtime,
         { historyLimit, groupHistories },

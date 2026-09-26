@@ -77,7 +77,7 @@ it("materializes a large dirty git workspace as a credential-free commit-capable
 
   try {
     const result = await handle.syncWorkspace({
-      localPath,
+      source: { kind: "local", path: localPath },
       sessionId: "session:real-git-sync",
       generation: 1,
     });
@@ -155,10 +155,9 @@ it("materializes a large dirty git workspace as a credential-free commit-capable
       acceptedManifestRef = manifestRef;
     });
     const reconciled = await handle.reconcileWorkspace({
-      localPath,
+      source: { kind: "local", path: localPath, journal },
       remoteWorkspaceDir: result.remoteWorkspaceDir,
       baseManifestRef: result.manifestRef,
-      journal,
     });
     expect(reconciled).toMatchObject({ changed: true });
     for (const relative of ownership.unownedFiles) {
@@ -198,10 +197,9 @@ it("materializes a large dirty git workspace as a credential-free commit-capable
     ).rejects.toThrow();
     expect(await git(localPath, "rev-parse", "HEAD")).toBe(baseCommit);
     const unchanged = await handle.reconcileWorkspace({
-      localPath,
+      source: { kind: "local", path: localPath, journal },
       remoteWorkspaceDir: result.remoteWorkspaceDir,
       baseManifestRef: acceptedManifestRef,
-      journal,
     });
     expect(unchanged).toMatchObject({ manifestRef: acceptedManifestRef, changed: false });
     await unchanged.verifyStable();
@@ -233,14 +231,17 @@ it("materializes a large dirty git workspace as a credential-free commit-capable
         fs.writeFile(path.join(manifestPath, `${index}.txt`), ""),
       ),
     );
+    // Non-recursive rsync skips the directory, so no manifest arrives.
     await expect(
       handle.reconcileWorkspace({
-        localPath,
+        source: { kind: "local", path: localPath, journal: memoryWorkspaceJournal() },
         remoteWorkspaceDir: result.remoteWorkspaceDir,
         baseManifestRef: result.manifestRef,
-        journal: memoryWorkspaceJournal(),
       }),
-    ).rejects.toThrow("manifest transfer is not a bounded regular file");
+    ).rejects.toMatchObject({
+      code: "ENOENT",
+      message: expect.stringContaining(path.basename(manifestPath)),
+    });
   } finally {
     await handle.stop();
     await fs.rm(root, { recursive: true });

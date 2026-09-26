@@ -1,4 +1,5 @@
 name: Plugin ClawHub New
+run-name: "plugin-clawhub-new.yml [${{ inputs.release_tag || inputs.ref }}] ${{ inputs.dry_run && 'validation' || 'publish' }} parent=${{ inputs.release_publish_run_id || 'manual' }}/${{ inputs.release_publish_run_attempt || '1' }}"
 
 on:
   workflow_dispatch:
@@ -48,17 +49,18 @@ on:
         type: boolean
 
 concurrency:
-  group: plugin-clawhub-new-${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
+  # Validation gets its own slot; real publication remains serialized by target.
+  group: plugin-clawhub-new-${{ inputs.dry_run && format('dry-run-{0}', github.run_id) || github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
   cancel-in-progress: false
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.19.0"
+  NODE_VERSION: "24.21.0"
   CLAWHUB_REGISTRY: "https://clawhub.ai"
 
 jobs:
   resolve_bootstrap_plan:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-latest'))) || ('ubuntu-latest') }}
     timeout-minutes: 30
     permissions:
       contents: read
@@ -196,6 +198,14 @@ jobs:
           git checkout --detach "${TARGET_REF}"
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
+      - name: Checkout trusted planning tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.workflow_sha }}
+          path: .release-tooling
+          fetch-depth: 1
+
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
@@ -203,8 +213,16 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "false"
 
+      - name: Install trusted plugin tooling dependencies
+        working-directory: .release-tooling
+        env:
+          CI: "true"
+        # Corepack reads this checkout's packageManager before pnpm processes arguments.
+        run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
+
       - name: Validate publishable plugin metadata
         env:
+          TSX_TSCONFIG_PATH: ${{ github.workspace }}/.release-tooling/tsconfig.json
           RELEASE_PLUGINS: ${{ inputs.plugins }}
         run: |
           set -euo pipefail
@@ -212,21 +230,23 @@ jobs:
             echo "Plugin ClawHub bootstrap requires at least one package name in plugins." >&2
             exit 1
           fi
-          pnpm release:plugins:clawhub:check -- --selection-mode selected --plugins "${RELEASE_PLUGINS}"
+          node --import tsx .release-tooling/scripts/plugin-clawhub-release-check.ts --selection-mode selected --plugins "${RELEASE_PLUGINS}"
 
       - name: Resolve plugin bootstrap plan
         id: plan
         env:
+          TSX_TSCONFIG_PATH: ${{ github.workspace }}/.release-tooling/tsconfig.json
           RELEASE_PLUGINS: ${{ inputs.plugins }}
           CLAWHUB_REGISTRY: ${{ env.CLAWHUB_REGISTRY }}
         run: |
           set -euo pipefail
           mkdir -p .local
-          node --import tsx scripts/plugin-clawhub-release-plan.ts \
+          node --import tsx .release-tooling/scripts/plugin-clawhub-release-plan.ts \
             --selection-mode selected \
             --plugins "${RELEASE_PLUGINS}" > .local/plugin-clawhub-release-plan.json
 
           cat .local/plugin-clawhub-release-plan.json
+          jq -r '.warnings[]? | "- Warning: \(.)"' .local/plugin-clawhub-release-plan.json >> "$GITHUB_STEP_SUMMARY"
 
           bootstrap_candidate_count="$(jq -r '(.bootstrapCandidates | length) + (.missingTrustedPublisher | length)' .local/plugin-clawhub-release-plan.json)"
           selected_count="$(jq -r '.all | length' .local/plugin-clawhub-release-plan.json)"
@@ -321,7 +341,7 @@ jobs:
     name: Validate release publish approval
     needs: resolve_bootstrap_plan
     if: github.event_name == 'workflow_dispatch' && inputs.pretag_validation != true && needs.resolve_bootstrap_plan.outputs.has_bootstrap_candidates == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-latest'))) || ('ubuntu-latest') }}
     timeout-minutes: 20
     permissions:
       actions: read
@@ -342,6 +362,12 @@ jobs:
         with:
           persist-credentials: false
           ref: ${{ github.sha }}
+
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
 
       - name: Validate release publish approval run
         env:
@@ -396,7 +422,7 @@ jobs:
   validate_bootstrap_trusted_publisher_cli:
     needs: [resolve_bootstrap_plan, validate_release_publish_approval]
     if: always() && github.event_name == 'workflow_dispatch' && needs.resolve_bootstrap_plan.outputs.has_bootstrap_candidates == 'true' && (inputs.pretag_validation == true || needs.validate_release_publish_approval.result == 'success')
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-latest'))) || ('ubuntu-latest') }}
     timeout-minutes: 10
     permissions:
       contents: read
@@ -445,7 +471,7 @@ jobs:
     name: Pack immutable ClawHub bootstrap artifacts
     needs: [resolve_bootstrap_plan, validate_release_publish_approval]
     if: always() && github.event_name == 'workflow_dispatch' && needs.resolve_bootstrap_plan.outputs.has_bootstrap_candidates == 'true' && (inputs.pretag_validation == true || needs.validate_release_publish_approval.result == 'success')
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-latest'))) || ('ubuntu-latest') }}
     timeout-minutes: 60
     permissions:
       actions: read
@@ -504,6 +530,13 @@ jobs:
           install-bun: "true"
           install-deps: "true"
 
+      - name: Install trusted plugin tooling dependencies
+        working-directory: .release-harness
+        env:
+          CI: "true"
+        # Corepack reads this checkout's packageManager before pnpm processes arguments.
+        run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
+
       - name: Materialize locked ClawHub CLI
         id: clawhub_cli
         run: |
@@ -540,7 +573,6 @@ jobs:
             package_slug="${package_name#@openclaw/}"
             output_dir="${artifact_root}/packages/${package_slug}"
             mkdir -p "${output_dir}"
-            node --import tsx scripts/check-plugin-npm-runtime-builds.mts --package "${package_dir}"
             OPENCLAW_CLAWHUB_PACK_OUTPUT_DIR="${output_dir}" \
               PACKAGE_TAG="${package_tag}" \
               bash .release-harness/scripts/plugin-clawhub-publish.sh --pack "${package_dir}"
@@ -601,6 +633,7 @@ jobs:
               break
             fi
             [[ "${attempt}" -lt 5 ]] || exit 1
+            echo "::warning::Uploaded artifact metadata is unavailable; retrying GitHub acquisition (${attempt}/5)." >&2
             sleep 2
           done
           size="$(

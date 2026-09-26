@@ -1,4 +1,3 @@
-// Sms plugin module implements send behavior.
 import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import {
   createMessageReceiptFromOutboundResults,
@@ -15,6 +14,7 @@ import {
   sanitizeAssistantVisibleText,
   stripMarkdown,
 } from "openclaw/plugin-sdk/text-chunking";
+import { assertSmsCredentialOwnerAvailable } from "./credential-availability.js";
 import { recordInitialSmsDeliveryResult } from "./delivery-observations.js";
 import { getSmsRuntime } from "./runtime.js";
 import { sendSmsViaTwilio, TWILIO_MESSAGE_BODY_MAX_LENGTH } from "./twilio.js";
@@ -188,13 +188,16 @@ async function recordInitialDeliveryBestEffort(
   }
 }
 
-export async function sendSmsTextChunks(params: {
+type SmsSendContext = {
   account: ResolvedSmsAccount;
   to: string;
-  text: string;
   onPlatformSendDispatch?: () => Promise<void>;
   onDeliveryResult?: SmsDeliveryProgress;
-}): Promise<SmsSendResult[]> {
+};
+
+export async function sendSmsTextChunks(
+  params: SmsSendContext & { text: string },
+): Promise<SmsSendResult[]> {
   const chunks = prepareSmsTextChunks({
     text: params.text,
     configuredLimit: params.account.textChunkLimit,
@@ -202,20 +205,34 @@ export async function sendSmsTextChunks(params: {
   if (chunks.length === 0) {
     throw new Error("SMS send requires non-empty text.");
   }
+  return await sendSmsMessages(
+    params,
+    chunks.map((text) => ({ text })),
+    "text",
+  );
+}
+
+async function sendSmsMessages(
+  params: SmsSendContext,
+  messages: Array<{ text?: string; mediaUrls?: readonly string[] }>,
+  kind: SmsMessageKind,
+): Promise<SmsSendResult[]> {
   const results: SmsSendResult[] = [];
   try {
-    for (const text of chunks) {
+    for (const [index, message] of messages.entries()) {
       const result = await sendSmsProviderMessage({
         account: params.account,
         to: params.to,
-        text,
+        ...message,
         onPlatformSendDispatch: params.onPlatformSendDispatch,
       });
       results.push(result);
-      await params.onDeliveryResult?.(createSmsDeliveryProgressResult(result, "text"));
+      await params.onDeliveryResult?.(
+        createSmsDeliveryProgressResult(result, index === 0 ? kind : "text"),
+      );
     }
   } catch (error) {
-    throwSmsPartialDeliveryError(error, results, "text");
+    throwSmsPartialDeliveryError(error, results, kind);
   }
   return results;
 }
@@ -239,6 +256,7 @@ export async function prepareSmsMediaAttempt(params: {
   let hostedMedia: Pick<PreparedSmsMediaAttempt, "hostedMediaUrl" | "cleanupHostedMedia">;
   try {
     const { prepareHostedSmsMedia } = await import("./media.js");
+    assertSmsCredentialOwnerAvailable(params.account);
     const prepared = await prepareHostedSmsMedia({
       account: params.account,
       mediaUrl: params.mediaUrl,
@@ -269,36 +287,18 @@ export async function prepareSmsMediaAttempt(params: {
   };
 }
 
-export async function sendPreparedSmsMediaAttempt(params: {
-  account: ResolvedSmsAccount;
-  to: string;
-  attempt: PreparedSmsMediaAttempt;
-  onPlatformSendDispatch?: () => Promise<void>;
-  onDeliveryResult?: SmsDeliveryProgress;
-}): Promise<SmsSendResult[]> {
-  const results: SmsSendResult[] = [];
-  try {
-    const mediaResult = await sendSmsProviderMessage({
-      account: params.account,
-      to: params.to,
-      ...(params.attempt.caption ? { text: params.attempt.caption } : {}),
-      mediaUrls: [params.attempt.hostedMediaUrl],
-      onPlatformSendDispatch: params.onPlatformSendDispatch,
-    });
-    results.push(mediaResult);
-    await params.onDeliveryResult?.(createSmsDeliveryProgressResult(mediaResult, "media"));
-    for (const text of params.attempt.remainingChunks) {
-      const result = await sendSmsProviderMessage({
-        account: params.account,
-        to: params.to,
-        text,
-        onPlatformSendDispatch: params.onPlatformSendDispatch,
-      });
-      results.push(result);
-      await params.onDeliveryResult?.(createSmsDeliveryProgressResult(result, "text"));
-    }
-  } catch (error) {
-    throwSmsPartialDeliveryError(error, results, "media");
-  }
-  return results;
+export async function sendPreparedSmsMediaAttempt(
+  params: SmsSendContext & { attempt: PreparedSmsMediaAttempt },
+): Promise<SmsSendResult[]> {
+  return await sendSmsMessages(
+    params,
+    [
+      {
+        ...(params.attempt.caption ? { text: params.attempt.caption } : {}),
+        mediaUrls: [params.attempt.hostedMediaUrl],
+      },
+      ...params.attempt.remainingChunks.map((text) => ({ text })),
+    ],
+    "media",
+  );
 }

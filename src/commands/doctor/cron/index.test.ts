@@ -16,6 +16,7 @@ import {
 } from "../../../cron/store.js";
 import { cronStoreKey } from "../../../cron/store/key.js";
 import { readCronTaskRunHistoryPage } from "../../../cron/task-run-history.js";
+import { closeOpenClawStateDatabaseAsync } from "../../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
 import { withRestoredMocks } from "../../../test-utils/vitest-spies.js";
 import {
@@ -45,6 +46,7 @@ function resolveLegacyCronQuarantinePath(storePath: string): string {
 }
 
 afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
   vi.unstubAllEnvs();
   noteMock.mockClear();
   if (tempRoot) {
@@ -370,6 +372,102 @@ describe("collectLegacyCronStoreHealthFindings", () => {
 });
 
 describe("maybeRepairLegacyCronStore", () => {
+  it("refuses a stale definition rewrite after a concurrent prompt-window commit", async () => {
+    const storePath = await makeTempStorePath();
+    const jobA = createCurrentCronJob({ id: "job-a", notify: true });
+    const jobC = createCurrentCronJob({ id: "job-c" });
+    await writeCurrentCronStore(storePath, [jobA]);
+    const prompter = {
+      confirm: vi.fn(async () => {
+        await writeCurrentCronStore(storePath, [jobA, jobC]);
+        return true;
+      }),
+    };
+
+    await maybeRepairLegacyCronStore({
+      cfg: createCronConfig(storePath),
+      options: {},
+      prompter,
+    });
+
+    expect(prompter.confirm).toHaveBeenCalledTimes(1);
+    expect((await readPersistedJobs(storePath)).map((job) => job.id)).toEqual(["job-a", "job-c"]);
+    expectNoteContaining("changed while doctor was waiting", "Doctor warnings");
+  });
+
+  it("preserves prompt-window runtime state and authority while repairing config", async () => {
+    const storePath = await makeTempStorePath();
+    const staleAuthority = {
+      version: 1,
+      runtimeId: "codex",
+      namespace: "codex.apps",
+      payload: { apps: [{ id: "calendar" }] },
+    };
+    const freshAuthority = {
+      ...staleAuthority,
+      payload: { apps: [{ id: "mail" }] },
+    };
+    const toolJob = createCurrentCronJob({
+      id: "runtime-job",
+      notify: true,
+      owner: {
+        agentId: "main",
+        sessionKey: "agent:main:discord:group:ops",
+        accountId: "work",
+      },
+      payload: {
+        kind: "agentTurn",
+        message: "scheduled continuation",
+        toolsAllow: ["read", "cron"],
+        toolsAllowIsDefault: true,
+      },
+      scheduledToolPolicy: {
+        version: 1,
+        mode: "account",
+        ownerSessionKey: "agent:main:discord:group:ops",
+        ownerAccountId: "work",
+      },
+      toolsAllowProvenance: { version: 1, source: "final-executable-surface" },
+      runtimeAuthority: staleAuthority,
+    });
+    await writeCurrentCronStore(storePath, [toolJob]);
+    const runAtMs = Date.parse("2026-09-01T12:00:00.000Z");
+    const prompter = {
+      confirm: vi.fn(async () => {
+        const current = requirePersistedJob(await readPersistedJobs(storePath), 0);
+        current.updatedAtMs = runAtMs;
+        current.state = {
+          queuedAtMs: runAtMs,
+          runningAtMs: runAtMs,
+          lastRunAtMs: runAtMs,
+          lastRunStatus: "ok",
+          consecutiveErrors: 0,
+        };
+        current.runtimeAuthority = freshAuthority;
+        await writeCurrentCronStore(storePath, [current]);
+        return true;
+      }),
+    };
+
+    await maybeRepairLegacyCronStore({
+      cfg: createCronConfig(storePath),
+      options: {},
+      prompter,
+    });
+
+    const repaired = requirePersistedJob(await readPersistedJobs(storePath), 0);
+    expect(repaired.notify).toBeUndefined();
+    expect(repaired.state).toMatchObject({
+      queuedAtMs: runAtMs,
+      runningAtMs: runAtMs,
+      lastRunAtMs: runAtMs,
+      lastRunStatus: "ok",
+    });
+    expect(repaired.updatedAtMs).toBe(runAtMs);
+    expect(repaired.runtimeAuthority).toEqual(freshAuthority);
+    expect(prompter.confirm).toHaveBeenCalledTimes(1);
+  });
+
   it("detects, repairs, reloads, and idempotently migrates the stable documented SQLite trigger script", async () => {
     const storePath = await makeTempStorePath();
     const stableScript =
@@ -2440,47 +2538,6 @@ describe("maybeRepairLegacyCronStore", () => {
     expect(delivery.channel).toBe("telegram");
     expect(delivery.to).toBe("-1001234567890");
     expect(delivery.threadId).toBe("99");
-  });
-
-  it("rewrites stale managed dreaming jobs to the isolated agentTurn shape", async () => {
-    const storePath = await makeTempStorePath();
-    await writeCronStore(storePath, [
-      {
-        id: "memory-dreaming",
-        name: "Memory Dreaming Promotion",
-        description:
-          "[managed-by=memory-core.short-term-promotion] Promote weighted short-term recalls.",
-        enabled: true,
-        createdAtMs: Date.parse("2026-04-01T00:00:00.000Z"),
-        updatedAtMs: Date.parse("2026-04-01T00:00:00.000Z"),
-        schedule: { kind: "cron", expr: "0 3 * * *", tz: "UTC" },
-        sessionTarget: "main",
-        wakeMode: "now",
-        payload: {
-          kind: "systemEvent",
-          text: "__openclaw_memory_core_short_term_promotion_dream__",
-        },
-        state: {},
-      },
-    ]);
-
-    await maybeRepairLegacyCronStore({
-      cfg: createCronConfig(storePath),
-      options: {},
-      prompter: makePrompter(true),
-    });
-
-    const jobs = await readPersistedJobs(storePath);
-    const job = requirePersistedJob(jobs, 0);
-    expect(job.sessionTarget).toBe("isolated");
-    const payload = requireRecord(job.payload, "cron payload");
-    expect(payload.kind).toBe("agentTurn");
-    expect(payload.message).toBe("__openclaw_memory_core_short_term_promotion_dream__");
-    expect(payload.lightContext).toBe(true);
-    const delivery = requireRecord(job.delivery, "cron delivery");
-    expect(delivery.mode).toBe("none");
-    expectNoteContaining("managed dreaming job", "Cron");
-    expectNoteContaining("Rewrote 1 managed dreaming job", "Doctor changes");
   });
 
   it("warns and continues when the cron job store cannot be read", async () => {

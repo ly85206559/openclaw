@@ -1,7 +1,6 @@
 import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionStableReplyMode } from "../../auto-reply/reply/session-stable-reply-mode.js";
-import { isSyntheticSourceReplyTurn } from "../../auto-reply/reply/source-reply-delivery-mode.js";
 import {
   formatThinkingLevels,
   normalizeThinkLevel,
@@ -10,9 +9,9 @@ import {
 import { formatCliCommand } from "../../cli/command-format.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { resolveAgentExplicitRecipientSession } from "../../infra/outbound/agent-delivery.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
-import { normalizePluginsConfig } from "../../plugins/config-state.js";
 import { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import {
   classifySessionKeyShape,
@@ -25,9 +24,16 @@ import {
   AGENT_HARNESS_MODEL_RUN_FORBIDDEN_MESSAGE,
   resolveAgentHarnessSessionContextError,
 } from "../../sessions/agent-harness-session-key.js";
+import {
+  assertAgentDatabaseAdmitted,
+  evaluateAgentDatabaseAdmissions,
+  hasAgentDatabaseAdmissions,
+  recordAgentDatabaseAdmissions,
+} from "../../state/agent-database-admission.js";
 import { resolveUserPath } from "../../utils.js";
 import { isDeliverableMessageChannel, resolveMessageChannel } from "../../utils/message-channel.js";
 import { resolveAgentRuntimeConfig } from "../agent-runtime-config.js";
+import { resolveAgentRunCwd } from "../agent-scope-config.js";
 import {
   listAgentIds,
   resolveAgentDir,
@@ -35,39 +41,27 @@ import {
   resolveAgentWorkspaceDir,
 } from "../agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
+import {
+  resolveAcpPromptBody,
+  prependInternalEventContext,
+  resolveInternalEventTranscriptBody,
+} from "../internal-events.js";
 import { AGENT_LANE_SUBAGENT } from "../lanes.js";
 import type { ModelManifestNormalizationContext } from "../model-ref-shared.js";
 import { buildConfiguredModelCatalog, resolveConfiguredModelRef } from "../model-selection.js";
 import type { PreparedModelRuntimePluginGeneration } from "../prepared-model-runtime.types.js";
+import { isSyntheticSourceReplyTurn } from "../reply-completion.js";
 import { normalizeSpawnedRunMetadata } from "../spawned-context.js";
 import { resolveEffectiveAgentRuntime } from "../thinking-runtime.js";
 import { resolveAgentTimeoutMs } from "../timeout.js";
 import { ensureAgentWorkspace } from "../workspace.js";
 import { acquireWorktreeRunLease, resolveWorktreeIdForPath } from "../worktrees/run-lease.js";
-import {
-  resolveAcpPromptBody,
-  prependInternalEventContext,
-  resolveInternalEventTranscriptBody,
-} from "./attempt-execution.shared.js";
 import { resolveExplicitAgentCommandSessionKey } from "./explicit-session-key.js";
 import { loadAcpManagerRuntime } from "./runtime-loaders.js";
 import { resolveSession } from "./session.js";
 import type { AgentCommandOpts } from "./types.js";
 
 const OVERRIDE_VALUE_MAX_LENGTH = 256;
-
-function containsControlCharacters(value: string): boolean {
-  for (const char of value) {
-    const code = char.codePointAt(0);
-    if (code === undefined) {
-      continue;
-    }
-    if (code <= 0x1f || (code >= 0x7f && code <= 0x9f)) {
-      return true;
-    }
-  }
-  return false;
-}
 
 export function normalizeExplicitOverrideInput(raw: string, kind: "provider" | "model"): string {
   const trimmed = raw.trim();
@@ -78,7 +72,7 @@ export function normalizeExplicitOverrideInput(raw: string, kind: "provider" | "
   if (trimmed.length > OVERRIDE_VALUE_MAX_LENGTH) {
     throw new Error(`${label} override exceeds ${String(OVERRIDE_VALUE_MAX_LENGTH)} characters.`);
   }
-  if (containsControlCharacters(trimmed)) {
+  if (/\p{Cc}/u.test(trimmed)) {
     throw new Error(`${label} override contains invalid control characters.`);
   }
   return trimmed;
@@ -177,6 +171,14 @@ export async function prepareAgentCommandExecution(
       );
     }
   }
+  if (agentIdOverride || explicitSessionKey) {
+    if (!hasAgentDatabaseAdmissions()) {
+      recordAgentDatabaseAdmissions(await evaluateAgentDatabaseAdmissions(cfg));
+    }
+    assertAgentDatabaseAdmitted(
+      agentIdOverride ?? resolveSessionAgentId({ sessionKey: explicitSessionKey, config: cfg }),
+    );
+  }
   const agentCfg = cfg.agents?.defaults;
 
   const verboseOverride = normalizeVerboseLevel(opts.verbose);
@@ -239,6 +241,7 @@ export async function prepareAgentCommandExecution(
     sessionId,
     sessionKey,
     sessionEntry: sessionEntryRaw,
+    sessionAgentId,
     storePath,
     isNewSession,
     previousSessionId,
@@ -251,15 +254,12 @@ export async function prepareAgentCommandExecution(
   if (harnessSessionError) {
     throw new Error(harnessSessionError);
   }
-  const isOneShotModelRun = opts.modelRun === true || opts.promptMode === "none";
-  if (isOneShotModelRun && sessionKey && sessionEntryRaw?.modelSelectionLocked === true) {
+  if (isRawModelRun && sessionKey && sessionEntryRaw?.modelSelectionLocked === true) {
     throw new Error(AGENT_HARNESS_MODEL_RUN_FORBIDDEN_MESSAGE);
   }
   const sessionStore: Record<string, InternalSessionEntry> =
     sessionKey && sessionEntryRaw ? { [sessionKey]: sessionEntryRaw } : {};
-  const sessionAgentId =
-    agentIdOverride ??
-    resolveSessionAgentId({ sessionKey: sessionKey ?? explicitSessionKey, config: cfg });
+  assertAgentDatabaseAdmitted(sessionAgentId);
   const outboundSession = buildOutboundSessionContext({
     cfg,
     agentId: sessionAgentId,
@@ -268,17 +268,28 @@ export async function prepareAgentCommandExecution(
   const workspaceDirRaw =
     normalizedSpawned.workspaceDir ?? resolveAgentWorkspaceDir(cfg, sessionAgentId);
   const workspaceDir = resolveUserPath(workspaceDirRaw);
+  const { getAcpSessionManager } = await loadAcpManagerRuntime();
+  const acpManager = getAcpSessionManager();
+  const acpResolution = sessionKey
+    ? acpManager.resolveSession({ cfg, sessionKey, agentId: sessionAgentId })
+    : null;
+  // Configured run cwd is a Gateway-local path; ACP-placed sessions ("ready" or
+  // "stale") execute on their own node with a node-owned execCwd, so the config
+  // fallback applies only to ordinary sessions and never bridges into a node.
+  const isAcpPlacedSession = acpResolution !== null && acpResolution.kind !== "none";
   const cwd =
-    normalizeOptionalString(opts.cwd) ?? normalizeOptionalString(sessionEntryRaw?.spawnedCwd);
+    normalizeOptionalString(opts.cwd) ??
+    normalizeOptionalString(sessionEntryRaw?.spawnedCwd) ??
+    (isAcpPlacedSession ? undefined : resolveAgentRunCwd(cfg, sessionAgentId));
   const agentDir = resolveAgentDir(cfg, sessionAgentId);
-  const pluginsEnabled = normalizePluginsConfig(cfg.plugins).enabled;
+  const pluginsEnabled = cfg.plugins?.enabled !== false;
   const preparedMetadataSnapshot = runtimeContext?.pluginGeneration.pluginMetadataSnapshot;
   const manifestMetadataSnapshot = pluginsEnabled
     ? (preparedMetadataSnapshot ??
       resolvePluginMetadataSnapshot({ config: cfg, env: process.env, workspaceDir }))
     : undefined;
   const modelManifestContext = {
-    manifestPlugins: manifestMetadataSnapshot?.plugins ?? [],
+    manifestPlugins: manifestMetadataSnapshot ?? [],
   } satisfies ModelManifestNormalizationContext;
   const configuredModel = resolveConfiguredModelRef({
     cfg,
@@ -361,15 +372,12 @@ export async function prepareAgentCommandExecution(
       provisioning: workspaceProvisioning,
     });
     const runId = opts.runId?.trim() || sessionId;
-    const { getAcpSessionManager } = await loadAcpManagerRuntime();
-    const acpManager = getAcpSessionManager();
-    const acpResolution = sessionKey ? acpManager.resolveSession({ cfg, sessionKey }) : null;
     let promptMessage = message;
     if (!isRawModelRun && (message.includes("$") || message.trimStart().startsWith("/"))) {
       const {
         expandExplicitSkillReferences,
         hasSkillReferenceCandidate,
-        listSkillCommandsForWorkspace,
+        prepareSkillCommandsForWorkspace,
         resolveEffectiveAgentSkillFilter,
       } = await import("../../skills/discovery/chat-commands.runtime.js");
       const hasExplicitSkillCandidate =
@@ -385,9 +393,17 @@ export async function prepareAgentCommandExecution(
           ...(preparedMetadataSnapshot ? { pluginMetadataSnapshot: preparedMetadataSnapshot } : {}),
           ...(skillFilter ? { skillFilter } : {}),
         };
-        const skillCommands = listSkillCommandsForWorkspace(commandParams);
+        const lifecycleGeneration = opts.lifecycleGeneration;
+        const assertCurrent =
+          lifecycleGeneration !== undefined
+            ? () => assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration)
+            : undefined;
+        const skillCommands = await prepareSkillCommandsForWorkspace(commandParams, assertCurrent);
         const allSkillCommands = skillFilter
-          ? listSkillCommandsForWorkspace({ ...commandParams, includeAllowlistHidden: true })
+          ? await prepareSkillCommandsForWorkspace(
+              { ...commandParams, includeAllowlistHidden: true },
+              assertCurrent,
+            )
           : skillCommands;
         const expansion = expandExplicitSkillReferences({
           text: message,
@@ -402,10 +418,11 @@ export async function prepareAgentCommandExecution(
     }
     const body =
       !isRawModelRun && acpResolution?.kind === "ready"
-        ? resolveAcpPromptBody(promptMessage, opts.internalEvents)
-        : prependInternalEventContext(promptMessage, opts.internalEvents);
+        ? resolveAcpPromptBody(promptMessage, opts.internalEvents, opts.inputProvenance)
+        : prependInternalEventContext(promptMessage, opts.internalEvents, opts.inputProvenance);
     const transcriptBody =
-      opts.transcriptMessage ?? resolveInternalEventTranscriptBody(message, opts.internalEvents);
+      opts.transcriptMessage ??
+      resolveInternalEventTranscriptBody(message, opts.internalEvents, opts.inputProvenance);
 
     const prepared = {
       opts: commandOpts,

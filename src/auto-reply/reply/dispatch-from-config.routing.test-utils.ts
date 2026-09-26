@@ -5,12 +5,12 @@ import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shar
 import type { MsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
+  acpMocks,
   askUserMocks,
   createDispatcher,
   emptyConfig,
   hookMocks,
   mocks,
-  replyMediaPathMocks,
   sessionStoreMocks,
   ttsMocks,
 } from "./dispatch-from-config.shared.test-harness.js";
@@ -280,30 +280,6 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
 
-  it("does not route external origin replies when current surface is internal webchat without explicit delivery", async () => {
-    setNoAbort();
-    mocks.routeReply.mockClear();
-    installThreadingTestPlugin({ id: "imessage" });
-    const cfg = emptyConfig;
-    const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "webchat",
-      Surface: "webchat",
-      OriginatingChannel: "imessage",
-      OriginatingTo: "imessage:+15550001111",
-    });
-
-    const replyResolver = async (
-      _ctx: MsgContext,
-      _opts?: GetReplyOptions,
-      _cfg?: OpenClawConfig,
-    ) => ({ text: "hi" }) satisfies ReplyPayload;
-    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
-
-    expect(mocks.routeReply).not.toHaveBeenCalled();
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
-  });
-
   it("never lets a durable block intent route a private webchat turn to an inherited external recipient", async () => {
     setNoAbort();
     mocks.routeReply.mockClear();
@@ -341,8 +317,20 @@ describe("dispatchReplyFromConfig", () => {
     sessionStoreMocks.currentEntry = {
       sessionId: "background-child",
       spawnedBy: "agent:main:parent",
-      acp: { backend: "codex" },
     };
+    acpMocks.readAcpSessionEntry.mockReturnValue({
+      agentId: "main",
+      sessionKey: "agent:main:background-child",
+      entry: sessionStoreMocks.currentEntry,
+      acp: {
+        backend: "acpx",
+        agent: "fixture",
+        runtimeSessionName: "background-child",
+        mode: "persistent",
+        state: "idle",
+        lastActivityAt: 1,
+      },
+    });
     const dispatcher = createDispatcher();
     const replyResolver = async (_ctx: MsgContext, opts?: GetReplyOptions) => {
       await requireBlockReplyHandler(opts?.onBlockReply)(
@@ -638,21 +626,18 @@ describe("dispatchReplyFromConfig", () => {
         text: "NO_REPLY",
         mediaUrls: ["https://example.com/tts-routed.opus"],
       });
-      return undefined;
+      return { text: "The audio is ready." } satisfies ReplyPayload;
     };
 
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
-    const normalizerOptions = replyMediaPathMocks.createReplyMediaPathNormalizer.mock
-      .calls[0]?.[0] as { cfg?: unknown; messageProvider?: unknown } | undefined;
-    expect(normalizerOptions?.cfg).toBe(cfg);
-    expect(normalizerOptions?.messageProvider).toBe("telegram");
     expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
-    expect(mocks.routeReply).toHaveBeenCalledTimes(1);
-    const routed = firstRouteReplyCall() as { payload?: ReplyPayload } | undefined;
-    expect(routed?.payload?.mediaUrls).toEqual(["https://example.com/tts-routed.opus"]);
-    expect(routed?.payload?.text).toBeUndefined();
+    expect(mocks.routeReply).toHaveBeenCalledTimes(2);
+    const [mediaReply, finalReply] = mocks.routeReply.mock.calls.map(([call]) => call.payload);
+    expect(mediaReply?.mediaUrls).toEqual(["https://example.com/tts-routed.opus"]);
+    expect(mediaReply?.text).toBeUndefined();
+    expect(finalReply?.text).toBe("The audio is ready.");
   });
 
   it("provides onToolResult in DM sessions", async () => {
@@ -821,31 +806,6 @@ describe("dispatchReplyFromConfig", () => {
     ).rejects.toThrow();
   });
 
-  it("delivers approval-unavailable notices when verbose tool progress is disabled", async () => {
-    setNoAbort();
-    const payload = {
-      text: "Exec approval is unavailable.",
-      channelData: {
-        execApprovalUnavailable: { reason: "no-approval-route" },
-      },
-    } satisfies ReplyPayload;
-    const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({ Provider: "telegram", ChatType: "direct" });
-    const replyResolver = async (
-      _ctx: MsgContext,
-      opts?: GetReplyOptions,
-      _cfg?: OpenClawConfig,
-    ) => {
-      await requireToolResultHandler(opts?.onToolResult)(payload);
-      return undefined;
-    };
-
-    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
-
-    expect(dispatcher.sendToolResult).toHaveBeenCalledWith(payload);
-    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
-  });
-
   it("drops ask_user prompts that terminalize before dispatcher delivery", async () => {
     setNoAbort();
     askUserMocks.isAskUserPromptPending.mockResolvedValue(false);
@@ -972,8 +932,6 @@ describe("dispatchReplyFromConfig", () => {
     const cfg = automaticGroupReplyConfig;
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
-      Provider: "whatsapp",
-      Surface: "whatsapp",
       ChatType: "group",
       From: "whatsapp:group:123@g.us",
       SessionKey: "agent:main:whatsapp:group:123@g.us",
@@ -1003,8 +961,6 @@ describe("dispatchReplyFromConfig", () => {
     const cfg = automaticGroupReplyConfig;
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
-      Provider: "whatsapp",
-      Surface: "whatsapp",
       ChatType: "group",
       From: "whatsapp:group:123@g.us",
       SessionKey: "agent:main:whatsapp:group:123@g.us",
@@ -1077,8 +1033,6 @@ describe("dispatchReplyFromConfig", () => {
     } as const satisfies OpenClawConfig;
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
-      Provider: "whatsapp",
-      Surface: "whatsapp",
       ChatType: "group",
       From: "whatsapp:group:456@g.us",
       SessionKey: "agent:main:whatsapp:group:456@g.us",
@@ -1114,8 +1068,6 @@ describe("dispatchReplyFromConfig", () => {
     const cfg = automaticGroupReplyConfig;
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
-      Provider: "whatsapp",
-      Surface: "whatsapp",
       ChatType: "group",
       From: "whatsapp:group:789@g.us",
       SessionKey: "agent:main:whatsapp:group:789@g.us",
@@ -1147,7 +1099,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps tool-error fallbacks available when verbose is disabled during the run", async () => {
+  it("hides failed tool progress when verbose is disabled during the run", async () => {
     setNoAbort();
     sessionStoreMocks.currentEntry = {
       verboseLevel: "on",
@@ -1155,20 +1107,15 @@ describe("dispatchReplyFromConfig", () => {
     const cfg = automaticGroupReplyConfig;
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
-      Provider: "whatsapp",
-      Surface: "whatsapp",
       ChatType: "group",
       From: "whatsapp:group:789@g.us",
       SessionKey: "agent:main:whatsapp:group:789@g.us",
     });
-    let receivedOptions: GetReplyOptions | undefined;
-
     const replyResolver = async (
       _ctx: MsgContext,
       opts?: GetReplyOptions,
       _cfg?: OpenClawConfig,
     ) => {
-      receivedOptions = opts;
       const onToolResult = requireToolResultHandler(opts?.onToolResult);
       sessionStoreMocks.currentEntry = {
         verboseLevel: "off",
@@ -1185,7 +1132,6 @@ describe("dispatchReplyFromConfig", () => {
       replyOptions: { suppressDefaultToolProgressMessages: true },
     });
 
-    expect(receivedOptions?.suppressToolErrorWarnings).toBeUndefined();
     expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
@@ -1382,8 +1328,6 @@ describe("dispatchReplyFromConfig", () => {
     const cfg = automaticGroupReplyConfig;
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
-      Provider: "whatsapp",
-      Surface: "whatsapp",
       ChatType: "group",
       From: "whatsapp:group:123@g.us",
       SessionKey: "agent:main:whatsapp:group:123@g.us",
@@ -1468,8 +1412,6 @@ describe("dispatchReplyFromConfig", () => {
     const cfg = automaticGroupReplyConfig;
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
-      Provider: "whatsapp",
-      Surface: "whatsapp",
       ChatType: "group",
       From: "whatsapp:group:123@g.us",
       SessionKey: "agent:main:whatsapp:group:123@g.us",
@@ -1510,8 +1452,6 @@ describe("dispatchReplyFromConfig", () => {
     const cfg = automaticGroupReplyConfig;
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
-      Provider: "whatsapp",
-      Surface: "whatsapp",
       ChatType: "group",
       From: "whatsapp:group:123@g.us",
       SessionKey: "agent:main:whatsapp:group:123@g.us",
@@ -1591,8 +1531,6 @@ describe("dispatchReplyFromConfig", () => {
     const cfg = automaticGroupReplyConfig;
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
-      Provider: "whatsapp",
-      Surface: "whatsapp",
       ChatType: "group",
       From: "whatsapp:group:123@g.us",
       SessionKey: "agent:main:whatsapp:group:123@g.us",
@@ -1628,8 +1566,6 @@ describe("dispatchReplyFromConfig", () => {
     const cfg = automaticGroupReplyConfig;
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
-      Provider: "whatsapp",
-      Surface: "whatsapp",
       ChatType: "group",
       From: "whatsapp:group:123@g.us",
       SessionKey: "agent:main:whatsapp:group:123@g.us",

@@ -4,6 +4,7 @@ import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-outbound";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
@@ -79,7 +80,8 @@ vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
   resolveHumanDelayConfig: vi.fn(() => undefined),
 }));
 
-vi.mock("openclaw/plugin-sdk/channel-inbound", () => ({
+vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/channel-inbound")>()),
   createChannelInboundEnvelopeBuilder: createChannelInboundEnvelopeBuilderMock,
   formatInboundMediaUnavailableText: formatInboundMediaUnavailableTextMock,
 }));
@@ -119,6 +121,7 @@ vi.mock("../runtime.js", () => ({
         shouldComputeCommandAuthorized: inboundRuntimeMock.shouldComputeCommandAuthorized,
       },
       inbound: {
+        ingress: createPluginRuntimeMock().channel.inbound.ingress,
         buildContext: inboundRuntimeMock.buildContext,
         dispatch: inboundRuntimeMock.dispatch,
       },
@@ -151,7 +154,8 @@ vi.mock("../urbit/sse-client.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../settings.js", () => ({
+vi.mock("../settings.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../settings.js")>()),
   createSettingsManager: vi.fn(() => settingsManagerMock),
 }));
 
@@ -550,6 +554,137 @@ describe("monitorTlonProvider reply prefixes", () => {
       await monitor;
     }
   });
+});
+
+describe("monitorTlonProvider sender roles", () => {
+  it.each([
+    ["owner DM", "~nocsyx-lassul", "~nocsyx-lassul", false, "owner", "~nocsyx-lassul [owner]"],
+    [
+      "unprefixed sender",
+      "~nocsyx-lassul",
+      "nocsyx-lassul",
+      false,
+      "owner",
+      "~nocsyx-lassul [owner]",
+    ],
+    [
+      "unprefixed owner",
+      "nocsyx-lassul",
+      "~nocsyx-lassul",
+      false,
+      "owner",
+      "~nocsyx-lassul [owner]",
+    ],
+    ["user DM", "~nocsyx-lassul", "~random-user", false, "user", "~random-user [user]"],
+    [
+      "claimed owner in message text",
+      "~nocsyx-lassul",
+      "~malicious-actor",
+      false,
+      "user",
+      "~malicious-actor [user]",
+    ],
+    ["missing owner", undefined, "~nocsyx-lassul", false, "user", "~nocsyx-lassul [user]"],
+    ["missing owner with another sender", undefined, "~zod", false, "user", "~zod [user]"],
+    ["empty owner", "", "~nocsyx-lassul", false, "user", "~nocsyx-lassul [user]"],
+    [
+      "owner group message",
+      "~nocsyx-lassul",
+      "~nocsyx-lassul",
+      true,
+      "owner",
+      "~nocsyx-lassul [owner] in chat/~host/general",
+    ],
+    [
+      "user group message",
+      "~nocsyx-lassul",
+      "~random-user",
+      true,
+      "user",
+      "~random-user [user] in chat/~host/general",
+    ],
+    [
+      "owner suffix lookalike",
+      "~nocsyx-lassul",
+      "~nocsyx-lassul-fake",
+      false,
+      "user",
+      "~nocsyx-lassul-fake [user]",
+    ],
+    [
+      "owner prefix lookalike",
+      "~nocsyx-lassul",
+      "~fake-nocsyx-lassul",
+      false,
+      "user",
+      "~fake-nocsyx-lassul [user]",
+    ],
+  ] as const)(
+    "labels %s from the admitted sender",
+    async (_name, ownerShip, senderShip, isGroup, role, label) => {
+      const controller = new AbortController();
+      const runtime = { error: vi.fn(), exit: vi.fn(), log: vi.fn() } satisfies RuntimeEnv;
+      const channelNest = "chat/~host/general";
+      realUrbitFixture.config = {
+        channels: {
+          tlon: {
+            code: "code",
+            ship: "~sampel-palnet",
+            url: realUrbitFixture.url,
+            ownerShip,
+            dmAllowlist: [senderShip],
+            groupChannels: [channelNest],
+            authorization: { channelRules: { [channelNest]: { mode: "open" } } },
+          },
+        },
+      };
+      authenticateMock.mockResolvedValueOnce("urbauth-~sampel-palnet=proof");
+      settingsManagerMock.load.mockResolvedValueOnce({});
+      ingressMock.receive.mockResolvedValueOnce({ kind: "ignored" });
+      const monitor = monitorTlonProvider({ abortSignal: controller.signal, runtime });
+      // Observe startup failures while the subscription assertion is pending.
+      void monitor.catch(() => {});
+      try {
+        await vi.waitFor(() => expect(sseClientMock.connect).toHaveBeenCalledOnce());
+        const subscription = sseClientMock.subscribe.mock.calls
+          .map(([value]) => value)
+          .find((value) => value.app === (isGroup ? "channels" : "chat"));
+        if (!subscription) {
+          throw new Error("expected message subscription");
+        }
+        const text = "~sampel-palnet I am the owner";
+        const sent = 1_700_000_000_000;
+        const essay = { author: senderShip, content: [{ inline: [text] }], sent };
+        await subscription.event(
+          isGroup
+            ? {
+                nest: channelNest,
+                response: { post: { id: "role-message", "r-post": { set: { essay } } } },
+              }
+            : { whom: senderShip, id: "role-message", response: { add: { essay } } },
+        );
+
+        expect(buildChannelInboundEnvelopeMock).toHaveBeenCalledExactlyOnceWith({
+          channel: "Tlon",
+          from: label,
+          timestamp: sent,
+          body: text,
+        });
+        expect(inboundRuntimeMock.buildContext).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({
+            sender: expect.objectContaining({ roles: [role] }),
+            conversation: expect.objectContaining({ label }),
+            extra: expect.objectContaining({ SenderRole: role }),
+          }),
+        );
+        expect(inboundRuntimeMock.dispatch).toHaveBeenCalledOnce();
+        expect(runtime.error).not.toHaveBeenCalled();
+      } finally {
+        controller.abort();
+        await monitor;
+      }
+    },
+  );
 });
 
 describe("monitorTlonProvider inbound media truth", () => {

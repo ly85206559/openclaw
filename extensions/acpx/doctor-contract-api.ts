@@ -220,4 +220,24 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       return { changes, warnings };
     },
   },
+  {
+    id: "acpx-session-owner-resources",
+    label: "ACP session owners",
+    doctorOnly: true,
+    phase: "after-session-repair",
+    async collectBackupResources(input) {
+      return (await import("./src/session-owner-migration.js")).acpxSessionOwnerMigration
+        .collectBackupResources!(input);
+    },
+    async detectLegacyState(input) {
+      return (
+        await import("./src/session-owner-migration.js")
+      ).acpxSessionOwnerMigration.detectLegacyState(input);
+    },
+    async migrateLegacyState(input) {
+      return (
+        await import("./src/session-owner-migration.js")
+      ).acpxSessionOwnerMigration.migrateLegacyState(input);
+    },
+  },
 ];

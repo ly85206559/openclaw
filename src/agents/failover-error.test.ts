@@ -3,7 +3,9 @@
  * Exercises raw error coercion, remediation hints, timeout/auth/billing/rate-limit cases.
  */
 import { describe, expect, it, vi } from "vitest";
-import { createAgentRunStaleLifecycleError } from "../infra/agent-lifecycle-error.js";
+import { attachErrorDiagnostic, formatErrorMessageForDisplay } from "../infra/error-diagnostics.js";
+import { getFailoverErrorCode } from "./failover/error.js";
+import { AgentHarnessPreflightError } from "./harness/errors.js";
 
 // Classification here is message/status table behavior. Provider-attributed
 // structured signals (e.g. moonshot + 429) otherwise cross the plugin-consult
@@ -26,7 +28,6 @@ import {
   FailoverError,
   findCliTimeoutError,
   hasProviderRequestSizeCeiling,
-  isNonProviderRuntimeCoordinationError,
   isSignalTimeoutReason,
   isTimeoutError,
   resolveFailoverReasonFromError,
@@ -57,6 +58,27 @@ const OPENAI_SERVER_ERROR_PAYLOAD =
   'Codex error: {"type":"error","error":{"type":"server_error","code":"server_error","message":"An error occurred while processing your request."},"sequence_number":2}';
 
 describe("failover-error", () => {
+  it.each([
+    {
+      message: "handoff refused",
+      cause: { status: 401, code: "INVALID_API_KEY", message: "API key has been revoked" },
+    },
+    {
+      message: "handoff refused: 529 OVERLOADED",
+      cause: { status: 529, code: "OVERLOADED", message: "overloaded" },
+    },
+    { message: "503 service unavailable; reconnect before continuing", cause: { status: 503 } },
+  ])(
+    "does not promote a direct preflight into a provider failure: $message",
+    ({ message, cause }) => {
+      const error = new AgentHarnessPreflightError(message, { cause });
+      expect(resolveFailoverReasonFromError(error)).toBeNull();
+      expect(coerceToFailoverError(error)).toBeNull();
+      expect(describeFailoverError(error)).toEqual({ message });
+      expect(resolveModelFallbackError(error)).toEqual({ kind: "coordination", error });
+      expect(error.cause).toBe(cause);
+    },
+  );
   it("finds structured CLI timeout context through aggregate wrappers", () => {
     const timeout = new FailoverError("CLI exceeded timeout", {
       reason: "timeout",
@@ -203,15 +225,12 @@ describe("failover-error", () => {
         },
       }),
     ).toBe("format");
-    // Transient server errors (500/502/503/504) should trigger failover as timeout.
-    expect(resolveFailoverReasonFromError({ status: 500 })).toBe("timeout");
-    expect(resolveFailoverReasonFromError({ status: 502 })).toBe("timeout");
-    expect(resolveFailoverReasonFromError({ status: 503 })).toBe("timeout");
-    expect(resolveFailoverReasonFromError({ status: 504 })).toBe("timeout");
-    expect(resolveFailoverReasonFromError({ status: 521 })).toBeNull();
-    expect(resolveFailoverReasonFromError({ status: 522 })).toBeNull();
-    expect(resolveFailoverReasonFromError({ status: 523 })).toBeNull();
-    expect(resolveFailoverReasonFromError({ status: 524 })).toBeNull();
+    for (const status of [504, 522, 524]) {
+      expect(resolveFailoverReasonFromError({ status })).toBe("timeout");
+    }
+    for (const status of [500, 502, 503, 520, 521, 523]) {
+      expect(resolveFailoverReasonFromError({ status })).toBe("server_error");
+    }
     expect(resolveFailoverReasonFromError({ status: 529 })).toBe("overloaded");
   });
 
@@ -354,7 +373,7 @@ describe("failover-error", () => {
         status: 503,
         message: "Internal database error",
       }),
-    ).toBe("timeout");
+    ).toBe("server_error");
     expect(
       resolveFailoverReasonFromError({
         status: 503,
@@ -488,67 +507,22 @@ describe("failover-error", () => {
     ).toBe("format");
   });
 
-  it("treats HTTP 422 as format error", () => {
-    expect(
-      resolveFailoverReasonFromError({
-        status: 422,
-        message: "check open ai req parameter error",
-      }),
-    ).toBe("format");
+  it.each([
+    ["check open ai req parameter error", "format"],
+    ["insufficient credits", "billing"],
+  ])("classifies HTTP 422 message %s as %s", (message, reason) => {
+    expect(resolveFailoverReasonFromError({ status: 422, message })).toBe(reason);
   });
 
-  it("treats 422 with billing message as billing instead of format", () => {
+  it.each([
+    ["402", "Monthly spend limit reached. Please visit your billing settings.", "rate_limit"],
+    ["HTTP 402", "rate limit exceeded", "rate_limit"],
+    ["HTTP 402", "Your usage limit has been reached. Please upgrade your plan.", "billing"],
+  ])("keeps %s wrappers aligned with status-split payloads: %s", (prefix, message, reason) => {
     expect(
-      resolveFailoverReasonFromError({
-        status: 422,
-        message: "insufficient credits",
-      }),
-    ).toBe("billing");
-  });
-
-  it("keeps raw 402 wrappers aligned with status-split temporary spend limits", () => {
-    const message = "Monthly spend limit reached. Please visit your billing settings.";
-    expect(
-      resolveFailoverReasonFromError({
-        message: `402 Payment Required: ${message}`,
-      }),
-    ).toBe("rate_limit");
-    expect(
-      resolveFailoverReasonFromError({
-        status: 402,
-        message,
-      }),
-    ).toBe("rate_limit");
-  });
-
-  it("keeps explicit 402 rate-limit wrappers aligned with status-split payloads", () => {
-    const message = "rate limit exceeded";
-    expect(
-      resolveFailoverReasonFromError({
-        message: `HTTP 402 Payment Required: ${message}`,
-      }),
-    ).toBe("rate_limit");
-    expect(
-      resolveFailoverReasonFromError({
-        status: 402,
-        message,
-      }),
-    ).toBe("rate_limit");
-  });
-
-  it("keeps plan-upgrade 402 wrappers aligned with status-split billing payloads", () => {
-    const message = "Your usage limit has been reached. Please upgrade your plan.";
-    expect(
-      resolveFailoverReasonFromError({
-        message: `HTTP 402 Payment Required: ${message}`,
-      }),
-    ).toBe("billing");
-    expect(
-      resolveFailoverReasonFromError({
-        status: 402,
-        message,
-      }),
-    ).toBe("billing");
+      resolveFailoverReasonFromError({ message: `${prefix} Payment Required: ${message}` }),
+    ).toBe(reason);
+    expect(resolveFailoverReasonFromError({ status: 402, message })).toBe(reason);
   });
 
   it("infers timeout from common node error codes", () => {
@@ -621,7 +595,10 @@ describe("failover-error", () => {
   });
 
   it("classifies a structured prompt error independently of its wording", () => {
-    const promptError = Object.assign(new Error("quota exhausted"), { status: 429 as const });
+    const promptError = attachErrorDiagnostic(
+      Object.assign(new Error("quota exhausted"), { status: 429 as const }),
+      "stderr: authentication failed during an earlier request",
+    );
     const failoverError = coerceToFailoverError(promptError, {
       provider: "openai",
       model: "gpt-5.4",
@@ -630,6 +607,10 @@ describe("failover-error", () => {
     expect(failoverError?.reason).toBe("rate_limit");
     expect(failoverError?.status).toBe(429);
     expect(failoverError?.message).toBe("quota exhausted");
+    expect(failoverError?.rawError).toBe("quota exhausted");
+    expect(formatErrorMessageForDisplay(failoverError)).toContain(
+      "authentication failed during an earlier request",
+    );
   });
 
   it("lets wrapped causes override parent context-overflow classifications", () => {
@@ -655,27 +636,71 @@ describe("failover-error", () => {
     expect(err?.authMode).toBe("oauth");
   });
 
-  it("enriches an existing FailoverError with the active auth mode", () => {
-    const original = new FailoverError("credit balance too low", {
-      reason: "billing",
+  it("preserves typed failure facts and diagnostics when adding the active auth mode", () => {
+    const cause = Object.assign(new Error("socket closed"), { code: "ECONNRESET" });
+    const facts = {
+      reason: "timeout",
       provider: "anthropic",
-      model: "claude-opus-4-6",
+      model: "sonnet-4.6",
       profileId: "anthropic:default",
-      status: 402,
-    });
+      status: 408,
+      rawError: "request timed out",
+      authProfileFailure: { allInCooldown: false },
+      sessionId: "diagnostic-session",
+      lane: "answer",
+      cause,
+      suspend: false,
+      cliTimeout: {
+        mode: "no-output",
+        timeoutSeconds: 30,
+        observedActivity: true,
+        activeToolCount: 1,
+        backgroundTaskCount: 0,
+      },
+      timeout: { timeoutPhase: "provider" },
+      attempts: [{ provider: "anthropic", model: "sonnet-4.6", reason: "timeout" }],
+      soonestCooldownExpiry: null,
+    } satisfies ConstructorParameters<typeof FailoverError>[1];
+    const original = new FailoverError("request timed out", facts);
+    attachErrorDiagnostic(original, "stderr: Rate limit exceeded during an earlier request");
 
     const err = coerceToFailoverError(original, { authMode: "token" });
 
     expect(err).not.toBe(original);
     expect(err).toMatchObject({
-      reason: "billing",
-      provider: "anthropic",
-      model: "claude-opus-4-6",
-      profileId: "anthropic:default",
+      ...facts,
       authMode: "token",
-      status: 402,
     });
+    expect(err?.cause).toBe(cause);
+    expect(err?.message).toBe("request timed out");
+    expect(getFailoverErrorCode(err)).toBeUndefined();
+    expect(findCliTimeoutError(err)).toBe(err);
+    expect(err?.requestSizeCeiling).toBe(false);
+    expect(formatErrorMessageForDisplay(err)).toContain(
+      "Rate limit exceeded during an earlier request",
+    );
+    expect(original.authMode).toBeUndefined();
   });
+
+  it.each([undefined, "provider"] as const)(
+    "adds a recorded timeout with phase=%s without replacing attribution",
+    (phase) => {
+      const original = new FailoverError("provider failed", {
+        reason: "timeout",
+        authMode: "oauth",
+      });
+      const timeout = phase ? { timeoutPhase: phase } : {};
+      const error = coerceToFailoverError(original, { timeout, authMode: "token" });
+
+      expect(error).toMatchObject({ timeout, authMode: "oauth" });
+      expect(error?.timeout).toBe(timeout);
+      expect(original.timeout).toBeUndefined();
+      expect(coerceToFailoverError(error, { timeout: { timeoutPhase: "preflight" } })).toBe(error);
+      expect(
+        coerceToFailoverError({ status: 500, message: "upstream failed" }, { timeout })?.timeout,
+      ).toBe(timeout);
+    },
+  );
 
   it("preserves raw provider error text for diagnostic logs", () => {
     const err = new FailoverError("LLM request failed: provider rejected the request schema.", {
@@ -772,10 +797,9 @@ describe("failover-error", () => {
     expect(err?.provider).toBe("anthropic");
   });
 
-  it("preserves a selected-profile error code in the auth failover lane", () => {
+  it("keeps local profile absence in auth failover without inventing a provider response", () => {
     const err = coerceToFailoverError(
       Object.assign(new Error("selected profile missing"), {
-        status: 401,
         code: "selected_auth_profile_unavailable",
       }),
       { provider: "openai", model: "gpt-5.6-sol" },
@@ -783,9 +807,11 @@ describe("failover-error", () => {
 
     expect(err).toMatchObject({
       reason: "auth",
-      status: 401,
       code: "selected_auth_profile_unavailable",
+      message: "selected profile missing",
     });
+    expect(err?.status).toBeUndefined();
+    expect(buildFailoverRemediationHint(err)).toBeUndefined();
   });
 
   it("permission_error with organization denial stays auth_permanent", () => {
@@ -824,7 +850,7 @@ describe("failover-error", () => {
       sessionId: "session:browser-abcd",
       lane: "answer",
       status: 429,
-      code: "selected_auth_profile_unavailable",
+      code: "rate_limit_exceeded",
     });
     expect(err.sessionId).toBe("session:browser-abcd");
     expect(err.lane).toBe("answer");
@@ -837,7 +863,7 @@ describe("failover-error", () => {
     expect(description.lane).toBe("answer");
     expect(description.reason).toBe("rate_limit");
     expect(description.status).toBe(429);
-    expect(description.code).toBe("selected_auth_profile_unavailable");
+    expect(description.code).toBe("rate_limit_exceeded");
   });
 
   it("coerceToFailoverError carries sessionId/lane from context (#42713)", () => {
@@ -851,74 +877,6 @@ describe("failover-error", () => {
     expect(err?.sessionId).toBe("session:browser-1234");
     expect(err?.lane).toBe("draft");
     expect(err?.provider).toBe("openai");
-  });
-
-  describe("isNonProviderRuntimeCoordinationError", () => {
-    it("returns true for stale gateway lifecycle ownership loss", () => {
-      const staleLifecycle = createAgentRunStaleLifecycleError();
-      expect(isNonProviderRuntimeCoordinationError(staleLifecycle)).toBe(true);
-      expect(
-        isNonProviderRuntimeCoordinationError(new Error("wrapper", { cause: staleLifecycle })),
-      ).toBe(true);
-    });
-
-    it.each([
-      ["availability", "WorkerRunnerUnavailableError", "The device runner is offline"],
-      ["capacity", "WorkerRunnerCapacityError", "device worker capacity remained full"],
-      [
-        "workspace reconciliation",
-        "WorkerWorkspaceReconciliationError",
-        "cloud worker workspace result could not be reconciled",
-      ],
-    ])("returns true for direct and nested runner %s failures", (_label, name, message) => {
-      const coordination = new Error(message);
-      coordination.name = name;
-      for (const error of [
-        coordination,
-        new Error("worker turn failed", { cause: coordination }),
-      ]) {
-        expect(isNonProviderRuntimeCoordinationError(error)).toBe(true);
-        expect(resolveModelFallbackError(error)).toEqual({ kind: "coordination", error });
-      }
-    });
-
-    it("returns true for Codex missing tool-result local execution failures", () => {
-      const missingToolResultMessage =
-        "OpenClaw recorded a native Codex tool.call without a matching tool.result before the turn completed.";
-      expect(isNonProviderRuntimeCoordinationError({ reason: "missing_tool_result" })).toBe(true);
-      expect(
-        isNonProviderRuntimeCoordinationError({
-          message: "codex app-server turn failed",
-          cause: { result: { reason: "missing_tool_result" } },
-        }),
-      ).toBe(true);
-      expect(resolveFailoverReasonFromError(new Error(missingToolResultMessage))).toBeNull();
-    });
-
-    it("returns false for plain timeouts and provider errors", () => {
-      const timeoutErr = Object.assign(new Error("operation timed out"), { name: "TimeoutError" });
-      expect(isNonProviderRuntimeCoordinationError(timeoutErr)).toBe(false);
-      expect(
-        isNonProviderRuntimeCoordinationError({
-          status: 503,
-          message: "upstream overloaded",
-          cause: { result: { reason: "missing_tool_result" } },
-        }),
-      ).toBe(false);
-      expect(
-        isNonProviderRuntimeCoordinationError({
-          status: 503,
-          message: "upstream overloaded",
-          cause: createAgentRunStaleLifecycleError(),
-        }),
-      ).toBe(false);
-      expect(isNonProviderRuntimeCoordinationError(null)).toBe(false);
-      expect(isNonProviderRuntimeCoordinationError(undefined)).toBe(false);
-    });
-
-    it("does not suppress provider fallback for unrelated free text mentioning the marker", () => {
-      expect(isNonProviderRuntimeCoordinationError("reason=missing_tool_result")).toBe(false);
-    });
   });
 });
 

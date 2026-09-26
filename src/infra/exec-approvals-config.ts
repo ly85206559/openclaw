@@ -47,11 +47,22 @@ const persistedExecAllowlistEntrySchema = z
       lastResolvedPath: z.string().optional(),
     }),
   ])
-  .transform(
-    (value): ExecAllowlistEntry => (typeof value === "string" ? { pattern: value } : value),
+  .transform((value): ExecAllowlistEntry =>
+    typeof value === "string" ? { pattern: value } : value,
   );
 const persistedExecApprovalsAgentSchema = persistedExecApprovalPolicySchema.extend({
   allowlist: z.array(persistedExecAllowlistEntrySchema).optional(),
+  mcpTools: z
+    .array(
+      z.looseObject({
+        server: z.string().refine((value) => value.trim().length > 0),
+        tool: z.string().refine((value) => value.trim().length > 0),
+        source: z.literal("allow-always"),
+        addedAt: z.number().finite().nonnegative(),
+        lastUsedAt: z.number().finite().nonnegative().optional(),
+      }),
+    )
+    .optional(),
 });
 const persistedExecApprovalsAgentsSchema = z
   .unknown()
@@ -102,8 +113,8 @@ export function resolveExecApprovalsSocketPath(): string {
   return path.join(resolveExecApprovalsStateDir().path, EXEC_APPROVALS_SOCKET);
 }
 
-export function resolveExecApprovalsDisplayPath(): string {
-  const stateDir = resolveExecApprovalsStateDir().displayPath;
+export function resolveExecApprovalsDisplayPath(env: NodeJS.ProcessEnv = process.env): string {
+  const stateDir = resolveExecApprovalsStateDir(env).displayPath;
   const locator = path.join("state", "openclaw.sqlite#exec_approvals_config");
   return stateDir === DEFAULT_EXEC_APPROVALS_STATE_DIR
     ? `${stateDir}/${locator}`
@@ -142,6 +153,10 @@ const diagnosticFields = new Set([
   "askFallback",
   "autoAllowSkills",
   "allowlist",
+  "mcpTools",
+  "server",
+  "tool",
+  "addedAt",
   "pattern",
   "id",
   "source",
@@ -174,7 +189,7 @@ function formatPersistedExecApprovalsIssue(issue: z.core.$ZodIssue, parsed: unkn
       location += ` entry #${ordinal}`;
     } else if (
       index === 3 &&
-      issuePath[2] === "allowlist" &&
+      (issuePath[2] === "allowlist" || issuePath[2] === "mcpTools") &&
       typeof segment === "number" &&
       Number.isSafeInteger(segment) &&
       segment >= 0
@@ -289,11 +304,25 @@ function mergeLegacyAgent(
   }
 
   return {
+    ...legacy,
+    ...current,
     security: current.security ?? legacy.security,
     ask: current.ask ?? legacy.ask,
     askFallback: current.askFallback ?? legacy.askFallback,
     autoAllowSkills: current.autoAllowSkills ?? legacy.autoAllowSkills,
     allowlist: allowlist.length > 0 ? allowlist : undefined,
+    mcpTools:
+      current.mcpTools || legacy.mcpTools
+        ? [
+            ...(current.mcpTools ?? []),
+            ...(legacy.mcpTools ?? []).filter(
+              (grant) =>
+                !current.mcpTools?.some(
+                  (entry) => entry.server === grant.server && entry.tool === grant.tool,
+                ),
+            ),
+          ]
+        : undefined,
   };
 }
 
@@ -326,7 +355,7 @@ function coerceAllowlistEntries(allowlist: unknown): ExecAllowlistEntry[] | unde
   return changed ? (result.length > 0 ? result : undefined) : (allowlist as ExecAllowlistEntry[]);
 }
 
-function ensureAllowlistIds(
+function normalizeAllowlistMetadata(
   allowlist: ExecAllowlistEntry[] | undefined,
 ): ExecAllowlistEntry[] | undefined {
   if (!Array.isArray(allowlist) || allowlist.length === 0) {
@@ -334,29 +363,16 @@ function ensureAllowlistIds(
   }
   let changed = false;
   const next = allowlist.map((entry) => {
-    if (entry.id) {
-      return entry;
+    let normalized = entry;
+    if (!normalized.id) {
+      normalized = { ...normalized, id: crypto.randomUUID() };
     }
-    changed = true;
-    return { ...entry, id: crypto.randomUUID() };
-  });
-  return changed ? next : allowlist;
-}
-
-function stripAllowlistCommandText(
-  allowlist: ExecAllowlistEntry[] | undefined,
-): ExecAllowlistEntry[] | undefined {
-  if (!Array.isArray(allowlist) || allowlist.length === 0) {
-    return allowlist;
-  }
-  let changed = false;
-  const next = allowlist.map((entry) => {
-    if (typeof entry.commandText !== "string") {
-      return entry;
+    if (typeof normalized.commandText === "string") {
+      const { commandText: _commandText, ...rest } = normalized;
+      normalized = rest;
     }
-    changed = true;
-    const { commandText: _commandText, ...rest } = entry;
-    return rest;
+    changed ||= normalized !== entry;
+    return normalized;
   });
   return changed ? next : allowlist;
 }
@@ -392,8 +408,7 @@ export function normalizeExecApprovalsInternal(file: ExecApprovalsFile): ExecApp
   }
   for (const [key, agent] of Object.entries(agents)) {
     const coerced = coerceAllowlistEntries(agent.allowlist);
-    const withIds = ensureAllowlistIds(coerced);
-    const allowlist = stripAllowlistCommandText(withIds);
+    const allowlist = normalizeAllowlistMetadata(coerced);
     const sanitizedPolicy = sanitizeExecApprovalPolicy(agent);
     const agentChanged =
       allowlist !== agent.allowlist ||

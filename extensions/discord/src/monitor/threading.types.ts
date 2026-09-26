@@ -47,7 +47,7 @@ export type DiscordThreadStarterRestAuthor = {
   discriminator?: string | null;
 };
 
-export type DiscordThreadStarterRestMember = {
+type DiscordThreadStarterRestMember = {
   nick?: string | null;
   displayName?: string | null;
   roles?: string[];
@@ -55,6 +55,7 @@ export type DiscordThreadStarterRestMember = {
 
 export type DiscordThreadStarterRestMessage = {
   content?: string | null;
+  components?: unknown;
   attachments?: APIAttachment[] | null;
   embeds?: DiscordThreadStarterRestEmbed[] | null;
   message_snapshots?: Array<{ message?: DiscordThreadStarterRestSnapshotMessage | null }> | null;

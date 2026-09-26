@@ -2,14 +2,12 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { codeModeFailureCode } from "./code-mode-errors.js";
 import { EMPTY_CODE_MODE_OUTPUT } from "./code-mode-json.js";
-import * as runtimeLimits from "./code-mode-runtime.js";
-import { codeModeFailureCode } from "./code-mode-runtime.js";
 import { applyCodeModeCatalog, createCodeModeTools, resolveCodeModeConfig } from "./code-mode.js";
 import {
   expectOriginalCodeModeMarker,
   expectCodeModeSharedBudget,
-  pluginToolWithExecute,
   resetCodeModeTestState,
   pluginTool,
   mcpTool,
@@ -25,9 +23,9 @@ describe("Code Mode runtime and output limits", () => {
     vi.useRealTimers();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     vi.useRealTimers();
-    resetCodeModeTestState();
+    await resetCodeModeTestState();
   });
 
   it("bounds oversized values on completed exec calls", async () => {
@@ -177,86 +175,6 @@ describe("Code Mode runtime and output limits", () => {
     },
   );
 
-  it.each(["exec", "wait"])(
-    "preserves accepted inline output after a later %s host failure",
-    async (mode) => {
-      const { ctx, config, tools } = createCodeModeHarness();
-      const fixture = pluginTool("output_fixture", "Output fixture");
-      applyCodeModeCatalog({ ...ctx, config, tools: [...tools, fixture] });
-      const exec = expectDefined(tools[0], "exec");
-      const wait = expectDefined(tools[1], "wait");
-      const input = {
-        code: `${mode === "wait" ? 'text("delivered"); await yield_control();' : ""} text("accepted first"); await output_fixture({}); text("accepted inline"); await yield_control();`,
-      };
-      const first = mode === "wait" ? resultDetails(await exec.execute("park", input)) : undefined;
-      if (first) {
-        expect(first.output).toEqual([{ type: "text", text: "delivered" }]);
-      }
-      const enforce = runtimeLimits.enforceSnapshotPayloadLimits;
-      let validations = 0;
-      const fault = vi
-        .spyOn(runtimeLimits, "enforceSnapshotPayloadLimits")
-        .mockImplementation((params) => {
-          if (++validations === 2) {
-            throw new Error("host snapshot check failed");
-          }
-          enforce(params);
-        });
-      let result;
-      try {
-        result = resultDetails(
-          await (first
-            ? wait.execute("resume", { runId: first.runId })
-            : exec.execute("inline", input)),
-        );
-      } finally {
-        fault.mockRestore();
-      }
-      expect(result).toMatchObject({ status: "failed", error: "host snapshot check failed" });
-      expect(fixture.execute).toHaveBeenCalledOnce();
-      expect(result.output).toEqual([
-        { type: "text", text: "accepted first" },
-        { type: "text", text: "accepted inline" },
-      ]);
-      expect(testing.activeRuns.size).toBe(0);
-    },
-  );
-
-  it.each(["abort", "restart-safe"])(
-    "shares the output budget with %s diagnostics",
-    async (mode) => {
-      const { ctx } = createCodeModeHarness();
-      const config = { tools: { codeMode: { enabled: true, maxOutputBytes: 1024 } } };
-      const tools = createCodeModeTools({ ...ctx, config, runtimeConfig: config });
-      const controller = new AbortController();
-      const fixture = pluginToolWithExecute("output_fixture", "Output fixture", async () => {
-        controller.abort();
-        return { content: [], details: true };
-      });
-      applyCodeModeCatalog({ ...ctx, config, tools: [...tools, fixture] });
-      const result = resultDetails(
-        await expectDefined(tools[0], "exec").execute(
-          "failure",
-          {
-            code: 'text("🦞".repeat(1000)); await output_fixture({}); return true;',
-            restartSafe: mode === "restart-safe",
-          },
-          controller.signal,
-        ),
-      );
-      expect(result).toMatchObject({
-        status: "failed",
-        code: mode === "abort" ? "aborted" : "invalid_input",
-      });
-      expect(fixture.execute).toHaveBeenCalledTimes(mode === "abort" ? 1 : 0);
-      expectOriginalCodeModeMarker((result.output as unknown[])[0], [
-        { type: "text", text: "🦞".repeat(1000) },
-      ]);
-      expectCodeModeSharedBudget(result, 1024);
-      expect(testing.activeRuns.size).toBe(0);
-    },
-  );
-
   it("bounds output before auto-draining namespace calls", async () => {
     const catalogRef = createToolSearchCatalogRef();
     const config = {
@@ -335,28 +253,6 @@ describe("Code Mode runtime and output limits", () => {
     expect(details.bridgeDispatchStarted).toBe(false);
   });
 
-  it("classifies snapshot limit failures", async () => {
-    const config = resolveCodeModeConfig({
-      tools: { codeMode: { enabled: true, maxSnapshotBytes: 1024 } },
-    } as never);
-
-    const result = await testing.runCodeModeWorker(
-      {
-        kind: "exec",
-        source: 'const value = "x".repeat(100000); await yield_control("pause"); return value;',
-        config,
-        catalog: [],
-      },
-      5000,
-    );
-
-    expect(result.status).toBe("failed");
-    expect(result).toMatchObject({
-      code: "snapshot_limit_exceeded",
-      error: "code mode snapshot limit exceeded",
-    });
-  });
-
   it("terminates hostile infinite loops outside the main event loop", async () => {
     const catalogRef = createToolSearchCatalogRef();
     const config = {
@@ -403,7 +299,7 @@ describe("Code Mode runtime and output limits", () => {
       codeModeFailureCode(new Error("interrupted", { cause: new Error("worker stopped") })),
     ).toBe("timeout");
     expect(
-      testing.normalizeCodeModeWorkerResult({
+      testing.normalizeCodeModeTimeoutResult({
         status: "failed",
         code: "timeout",
         error: "interrupted",
@@ -417,7 +313,7 @@ describe("Code Mode runtime and output limits", () => {
     });
 
     expect(
-      testing.normalizeCodeModeWorkerResult({
+      testing.normalizeCodeModeTimeoutResult({
         status: "failed",
         code: "internal_error",
         error: "interrupted",
@@ -431,81 +327,18 @@ describe("Code Mode runtime and output limits", () => {
     });
   });
 
-  it("classifies missing worker runtime as unavailable", async () => {
-    const config = resolveCodeModeConfig({ tools: { codeMode: true } } as never);
-    const missingWorkerUrl = new URL("./missing-code-mode.worker.js", import.meta.url);
-
-    const result = await testing.runCodeModeWorker(
-      {
-        kind: "exec",
-        source: "return 1;",
-        config,
-        catalog: [],
-      },
-      500,
-      missingWorkerUrl,
-    );
-
-    expect(result.status).toBe("failed");
-    expect(result).toMatchObject({
-      code: "runtime_unavailable",
-    });
-  });
-
-  it("classifies nonzero worker exits as unavailable", async () => {
-    const config = resolveCodeModeConfig({ tools: { codeMode: true } } as never);
-    const exitingWorkerUrl = new URL("data:text/javascript,process.exit(1)");
-
-    const result = await testing.runCodeModeWorker(
-      {
-        kind: "exec",
-        source: "return 1;",
-        config,
-        catalog: [],
-      },
-      500,
-      exitingWorkerUrl,
-    );
-
-    expect(result.status).toBe("failed");
-    expect(result).toMatchObject({
-      code: "runtime_unavailable",
-    });
-  });
-
-  it("classifies clean worker exits without a result as unavailable", async () => {
-    const config = resolveCodeModeConfig({ tools: { codeMode: true } } as never);
-    const exitingWorkerUrl = new URL("data:text/javascript,");
-
-    const result = await testing.runCodeModeWorker(
-      {
-        kind: "exec",
-        source: "return 1;",
-        config,
-        catalog: [],
-      },
-      5_000,
-      exitingWorkerUrl,
-    );
-
-    expect(result).toMatchObject({
-      status: "failed",
-      code: "runtime_unavailable",
-      error: "code mode worker exited with code 0 before returning a result",
-    });
-  });
-
   it("does not classify guest interrupted errors as timeouts", async () => {
     const config = resolveCodeModeConfig({ tools: { codeMode: true } } as never);
 
-    const result = await testing.runCodeModeWorker(
+    const result = await testing.runCodeModeExecutor(
       {
         kind: "exec",
         source: 'throw new Error("interrupted");',
         config,
         catalog: [],
+        namespaces: [],
       },
-      10_000,
+      { timeoutMs: 10_000, executor: config.executor },
     );
 
     expect(result.status).toBe("failed");

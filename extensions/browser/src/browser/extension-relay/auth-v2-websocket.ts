@@ -1,23 +1,24 @@
+import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
-import type { RawData, WebSocket } from "ws";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
+import type { RawData, WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import type { BrowserRelayProofFields } from "./auth-v2-crypto.js";
 import {
   BROWSER_RELAY_CHALLENGE_TTL_MS,
   parseRelayAuthHello,
   parseRelayAuthResponse,
-  parseStrictJsonObject,
   type BrowserRelayAuthV2Authority,
 } from "./auth-v2.js";
 import {
   boundedRawDataByteLength,
   MAX_WEBSOCKET_AUTH_MESSAGE_BYTES,
 } from "./preauth-websocket-guard.js";
+import { parseStrictJsonObject } from "./strict-json.js";
 const log = createSubsystemLogger("browser").child("extension-relay");
 
 export function authenticateExtensionWebSocket(params: {
   ws: WebSocket;
   authority: BrowserRelayAuthV2Authority;
+  source: string;
   resource: string;
   binding?: Pick<BrowserRelayProofFields, "role" | "flow">;
   prepareAuthenticated: () => Promise<() => void>;
@@ -36,6 +37,11 @@ export function authenticateExtensionWebSocket(params: {
     preAuthGuardActive = false;
     params.removePreAuthGuard?.();
   };
+  const closePreAuthSocket = (code: number, reason: string) => {
+    ws.close(code, reason);
+    const terminateTimer = setTimeout(() => ws.terminate(), 100);
+    terminateTimer.unref?.();
+  };
   const timer = setTimeout(() => {
     stage = "failed";
     ws.off("message", onMessage);
@@ -49,12 +55,16 @@ export function authenticateExtensionWebSocket(params: {
     authority.releaseConnection(ws);
   };
   if (
-    !authority.registerPendingConnection(ws, () => {
-      ws.close(4003, "browser relay key rotated");
-    })
+    !authority.registerPendingConnection(
+      ws,
+      () => {
+        ws.close(4003, "browser relay key rotated");
+      },
+      params.source,
+    )
   ) {
     clearTimeout(timer);
-    ws.close(4013, "browser relay auth capacity reached");
+    closePreAuthSocket(4013, "browser relay auth capacity reached");
     return;
   }
   ws.once("close", release);
@@ -65,9 +75,7 @@ export function authenticateExtensionWebSocket(params: {
     stage = "failed";
     clearTimeout(timer);
     ws.off("message", onMessage);
-    ws.close(code, reason);
-    const terminateTimer = setTimeout(() => ws.terminate(), 100);
-    terminateTimer.unref?.();
+    closePreAuthSocket(code, reason);
   };
   const onMessage = (data: RawData, isBinary: boolean) => {
     if (isBinary) {

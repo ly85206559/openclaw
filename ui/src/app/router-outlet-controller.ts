@@ -50,17 +50,6 @@ function selectRouterOutletState<TRouteId extends string, TModule, TData>(
   };
 }
 
-function equalRouterOutletState(
-  previous: RouterOutletStateSlice,
-  next: RouterOutletStateSlice,
-): boolean {
-  return (
-    previous.status === next.status &&
-    previous.active === next.active &&
-    previous.pending === next.pending
-  );
-}
-
 function idleSnapshot<TRouteId extends string, TModule, TData>(): RouterOutletSnapshot<
   TRouteId,
   TModule,
@@ -170,10 +159,10 @@ export class RouterOutletController<
       return;
     }
     this.applySelection(selectRouterOutletState(router.getState()), notify);
-    this.unsubscribe = router.subscribeSelector(
-      selectRouterOutletState,
-      (selection) => this.applySelection(selection),
-      equalRouterOutletState,
+    // An earlier subscriber can navigate during this notification. Read the
+    // current route so its superseded not-found snapshot cannot trigger recovery.
+    this.unsubscribe = router.subscribe(() =>
+      this.applySelection(selectRouterOutletState(router.getState())),
     );
   }
 
@@ -191,12 +180,20 @@ export class RouterOutletController<
     notify = true,
   ): void {
     this.selection = selection;
-    if (selection.status === "idle") {
+    if (selection.status === "idle" || selection.status === "notFound") {
       this.settled = undefined;
     } else {
       const rendered = selectRenderedRouteMatch(selection.active, selection.pending);
       if (rendered?.status === "success") {
         this.settled = rendered;
+      } else if (
+        rendered?.status === "error" ||
+        rendered?.status === "notFound" ||
+        rendered?.status === "redirected"
+      ) {
+        // Terminal destinations replace the previous page. A later retry must
+        // not recreate its disposed draft from a historical successful match.
+        this.settled = undefined;
       }
     }
     const pending = selection.pending;

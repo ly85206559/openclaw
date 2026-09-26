@@ -1,8 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { buildSessionCreationStamp } from "../../../config/sessions/session-entry-provenance.js";
+import {
+  buildSessionCreationStamp,
+  inheritSessionGitContributorProfileIds,
+} from "../../../config/sessions/session-entry-provenance.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { waitForSessionParticipantRecording } from "../../../sessions/session-participant-recording.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.js";
 import { resolveUserPath } from "../../../utils.js";
 import {
@@ -12,9 +16,9 @@ import {
   normalizeInheritedToolDenylist,
 } from "../../inherited-tool-deny.js";
 import type { PreparedSessionPermissionPolicy } from "../../tool-fs-policy.types.js";
-import { getSubagentSpawnDeps } from "./subagent-spawn-deps.js";
 import { splitModelRef } from "./subagent-spawn-plan.js";
 import {
+  loadSessionEntry,
   resolveGatewaySessionStoreTarget,
   upsertSessionEntryCore,
 } from "./subagent-spawn.runtime.js";
@@ -37,23 +41,17 @@ function buildDirectChildSessionPatch(patch: Record<string, unknown>): Partial<S
   if (patch.incognito === true) {
     entry.incognito = true;
   }
-  if (typeof patch.spawnedBy === "string" && patch.spawnedBy.trim()) {
-    entry.spawnedBy = patch.spawnedBy.trim();
-  }
-  if (
-    typeof patch.completionOwnerSessionKey === "string" &&
-    patch.completionOwnerSessionKey.trim()
-  ) {
-    entry.completionOwnerSessionKey = patch.completionOwnerSessionKey.trim();
-  }
-  if (typeof patch.parentSessionKey === "string" && patch.parentSessionKey.trim()) {
-    entry.parentSessionKey = patch.parentSessionKey.trim();
-  }
-  if (typeof patch.spawnedWorkspaceDir === "string" && patch.spawnedWorkspaceDir.trim()) {
-    entry.spawnedWorkspaceDir = patch.spawnedWorkspaceDir.trim();
-  }
-  if (typeof patch.spawnedCwd === "string" && patch.spawnedCwd.trim()) {
-    entry.spawnedCwd = patch.spawnedCwd.trim();
+  for (const key of [
+    "spawnedBy",
+    "completionOwnerSessionKey",
+    "parentSessionKey",
+    "spawnedWorkspaceDir",
+    "spawnedCwd",
+  ] as const) {
+    const value = normalizeOptionalString(patch[key]);
+    if (value) {
+      entry[key] = value;
+    }
   }
   const inheritedToolDeny = normalizeInheritedToolDenylist(patch.inheritedToolDeny);
   if (inheritedToolDeny.length > 0) {
@@ -107,10 +105,6 @@ function buildDirectChildSessionPatch(patch: Record<string, unknown>): Partial<S
   return entry;
 }
 
-export function loadSubagentConfig() {
-  return getSubagentSpawnDeps().getRuntimeConfig();
-}
-
 export async function createInitialSubagentSession(params: {
   cfg: OpenClawConfig;
   targetAgentId: string;
@@ -118,6 +112,7 @@ export async function createInitialSubagentSession(params: {
   label?: string;
   incognito: boolean;
   requesterInternalKey: string;
+  assertActive?: () => void;
   creationPolicy: Pick<Parameters<typeof buildSessionCreationStamp>[0], "actor" | "sandbox">;
   completionOwnerSessionKey: string;
   spawnedWorkspaceDir?: string;
@@ -149,13 +144,27 @@ export async function createInitialSubagentSession(params: {
     ...(params.outputSchema ? { swarmOutputSchema: params.outputSchema } : {}),
     ...(params.incognito ? { incognito: true } : {}),
   };
-  // Spawn owns a fresh child lifecycle. Cleanup freezes both fields before
-  // launch so it cannot delete a reset successor that reuses the session id.
-  const childSessionIdentity = {
-    sessionId: randomUUID(),
-    lifecycleRevision: randomUUID(),
-  };
   try {
+    const parentTarget = resolveGatewaySessionStoreTarget({
+      cfg: params.cfg,
+      key: params.requesterInternalKey,
+    });
+    await waitForSessionParticipantRecording({
+      agentId: parentTarget.agentId,
+      sessionKey: parentTarget.canonicalKey,
+      storePath: parentTarget.storePath,
+    });
+    params.assertActive?.();
+    const parentEntry = loadSessionEntry({
+      storePath: parentTarget.storePath,
+      sessionKey: parentTarget.canonicalKey,
+    });
+    // Spawn owns a fresh child lifecycle. Cleanup freezes both fields before
+    // launch so it cannot delete a reset successor that reuses the session id.
+    const childSessionIdentity = {
+      sessionId: randomUUID(),
+      lifecycleRevision: randomUUID(),
+    };
     const target = params.incognito
       ? {
           agentId: params.targetAgentId,
@@ -185,45 +194,49 @@ export async function createInitialSubagentSession(params: {
             }
           : {}),
         ...childSessionIdentity,
+        ...(parentEntry?.skillLibrarySelections
+          ? {
+              skillLibrarySelections: parentEntry.skillLibrarySelections.map((selection) => ({
+                ...selection,
+              })),
+            }
+          : {}),
         ...buildSessionCreationStamp({
           via: "spawn",
           ...params.creationPolicy,
+          ...(!params.incognito
+            ? {
+                inheritedGitContributorProfileIds:
+                  inheritSessionGitContributorProfileIds(parentEntry),
+              }
+            : {}),
         }),
+      },
+      {
+        assertCommitAllowed: () => {
+          params.assertActive?.();
+          if (parentEntry?.skillLibrarySelections) {
+            const latest = loadSessionEntry({
+              storePath: parentTarget.storePath,
+              sessionKey: parentTarget.canonicalKey,
+            });
+            if (
+              latest?.sessionId !== parentEntry.sessionId ||
+              latest.lifecycleRevision !== parentEntry.lifecycleRevision ||
+              JSON.stringify(latest.skillLibrarySelections) !==
+                JSON.stringify(parentEntry.skillLibrarySelections)
+            ) {
+              throw new Error(
+                "Parent skill selection changed before spawn; retry from the current turn.",
+              );
+            }
+          }
+        },
       },
     );
     return { status: "ok", entry: entry ?? undefined };
   } catch (err) {
     const message = err instanceof Error ? err.message : typeof err === "string" ? err : "error";
     return { status: "error", error: `child session patch failed: ${message}` };
-  }
-}
-
-export async function persistInitialChildSessionRuntimeModel(params: {
-  cfg: OpenClawConfig;
-  childSessionKey: string;
-  resolvedModel?: string;
-}): Promise<string | undefined> {
-  const { provider, model } = splitModelRef(params.resolvedModel);
-  if (!model) {
-    return undefined;
-  }
-  try {
-    const target = resolveGatewaySessionStoreTarget({
-      cfg: params.cfg,
-      key: params.childSessionKey,
-    });
-    await upsertSessionEntryCore(
-      {
-        storePath: target.storePath,
-        sessionKey: target.canonicalKey,
-      },
-      {
-        model,
-        ...(provider ? { modelProvider: provider } : {}),
-      },
-    );
-    return undefined;
-  } catch (err) {
-    return err instanceof Error ? err.message : typeof err === "string" ? err : "error";
   }
 }

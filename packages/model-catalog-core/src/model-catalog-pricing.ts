@@ -11,13 +11,14 @@ import { normalizeModelCatalogProviderId } from "./model-catalog-refs.js";
 import type { ModelCatalogCost, ModelCatalogTieredCost } from "./model-catalog-types.js";
 
 export const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models";
+export const MODELS_DEV_CATALOG_URL = "https://models.opencode.ai/api.json";
 export const LITELLM_PRICING_URL =
   "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
 export const MODEL_PRICING_SOURCES = [
   {
     id: "openCode",
     label: "OpenCode",
-    url: "https://models.opencode.ai/api.json",
+    url: MODELS_DEV_CATALOG_URL,
     authoritative: true,
   },
   {
@@ -25,6 +26,32 @@ export const MODEL_PRICING_SOURCES = [
     label: "Venice",
     url: "https://api.venice.ai/api/v1/models",
     authoritative: true,
+  },
+  {
+    id: "chutes",
+    label: "Chutes",
+    url: "https://llm.chutes.ai/v1/models",
+    authoritative: true,
+  },
+  {
+    id: "cerebras",
+    label: "Cerebras",
+    url: "https://api.cerebras.ai/public/v1/models",
+    authoritative: true,
+  },
+  {
+    id: "deepinfra",
+    label: "DeepInfra",
+    url: "https://api.deepinfra.com/models/list",
+    authoritative: true,
+  },
+  // Non-authoritative order is price precedence. models.dev lists each provider's own
+  // billing; OpenRouter's feed describes OpenRouter's billing and prices only its own keys.
+  {
+    id: "modelsDev",
+    label: "models.dev",
+    url: MODELS_DEV_CATALOG_URL,
+    authoritative: false,
   },
   { id: "openRouter", label: "OpenRouter", url: OPENROUTER_MODELS_URL, authoritative: false },
   { id: "liteLLM", label: "LiteLLM", url: LITELLM_PRICING_URL, authoritative: false },
@@ -72,6 +99,49 @@ export function normalizeModelPricingProvider(value: unknown): ModelPricingProvi
     }
   }
   return Object.keys(policy).length > 0 ? policy : undefined;
+}
+
+/** Keep unavailable prices distinct from malformed native catalogs and declared rates. */
+export function normalizeModelPricingCatalog(
+  rows: unknown,
+  normalizePricing: (value: unknown) => CompleteModelCost | undefined,
+  {
+    readModelId = (model) => model.id,
+    readPricing = (model) => model.pricing,
+    isSupportedPricing = () => true,
+  }: {
+    readModelId?: (model: Record<string, unknown>) => unknown;
+    readPricing?: (model: Record<string, unknown>) => unknown;
+    isSupportedPricing?: (pricing: unknown) => boolean;
+  } = {},
+): Map<string, CompleteModelCost> | undefined {
+  if (!Array.isArray(rows)) {
+    return undefined;
+  }
+  const prices = new Map<string, CompleteModelCost>();
+  const ids = new Set<string>();
+  for (const value of rows) {
+    const model = asOptionalRecord(value);
+    const id = model && normalizeOptionalString(readModelId(model));
+    if (!model || !id || ids.has(id)) {
+      return undefined;
+    }
+    ids.add(id);
+    const rawPricing = readPricing(model);
+    if (rawPricing === undefined) {
+      continue;
+    }
+    const pricing = normalizePricing(rawPricing);
+    if (!pricing) {
+      return undefined;
+    }
+    // Validate declared rates even when their qualifications cannot be represented.
+    if (isSupportedPricing(rawPricing)) {
+      prices.set(id, pricing);
+    }
+  }
+  // An empty price feed cannot establish that every previously known price disappeared.
+  return prices.size > 0 ? prices : undefined;
 }
 
 function readPricingCost(

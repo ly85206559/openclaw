@@ -7,12 +7,12 @@ import {
   type HelloOk,
   MIN_NODE_PROTOCOL_VERSION,
 } from "../../packages/gateway-protocol/src/index.js";
+import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import {
   connectReq,
   ConnectErrorDetailCodes,
   createSignedDevice,
   expectHelloOkServerVersion,
-  getGatewayTestPort,
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
   MIN_PROBE_PROTOCOL_VERSION,
@@ -38,8 +38,9 @@ export function registerDefaultAuthTokenSuite(): void {
     let port: number;
 
     beforeAll(async () => {
-      port = await getGatewayTestPort();
-      server = await startTestGatewayServer(port);
+      const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+      port = portClaim.port;
+      server = await startTestGatewayServer(portClaim);
     });
 
     afterAll(async () => {
@@ -174,6 +175,10 @@ export function registerDefaultAuthTokenSuite(): void {
       expect(payload?.features?.capabilities).toContain(
         GATEWAY_SERVER_CAPS.SYSTEM_AGENT_WIZARD_CANCEL,
       );
+      expect(payload?.features?.capabilities).toContain(
+        GATEWAY_SERVER_CAPS.SESSION_SETTINGS_CONTRACT,
+      );
+      expect(payload?.features?.capabilities).toContain(GATEWAY_SERVER_CAPS.SESSION_SETTINGS_CAS);
       expect(payload?.features?.capabilities).toContain(
         GATEWAY_SERVER_CAPS.SYSTEM_AGENT_SETUP_MODEL_REF,
       );
@@ -354,6 +359,7 @@ export function registerDefaultAuthTokenSuite(): void {
         expect(Object.keys(auth ?? {}).toSorted()).toEqual([
           "deviceToken",
           "issuedAtMs",
+          "method",
           "recoveryMigrationAllowed",
           "recoveryScope",
           "role",
@@ -382,6 +388,7 @@ export function registerDefaultAuthTokenSuite(): void {
         expect(Object.keys(auth ?? {}).toSorted()).toEqual([
           "deviceToken",
           "issuedAtMs",
+          "method",
           "recoveryMigrationAllowed",
           "recoveryScope",
           "role",

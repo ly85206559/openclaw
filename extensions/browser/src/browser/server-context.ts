@@ -16,10 +16,7 @@ import {
   toBrowserErrorResponse,
 } from "./errors.js";
 import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
-import {
-  refreshResolvedBrowserConfigFromDisk,
-  resolveBrowserProfileWithHotReload,
-} from "./resolved-config-refresh.js";
+import { refreshResolvedBrowserConfigFromDisk } from "./resolved-config-refresh.js";
 import { createProfileAvailability } from "./server-context.availability.js";
 import {
   getProfileLifecycle,
@@ -45,15 +42,6 @@ export type {
   ProfileContext,
   ProfileStatus,
 } from "./server-context.types.js";
-
-/** Lists configured and runtime-known Browser profile names without duplicates. */
-function listKnownProfileNames(state: BrowserServerState): string[] {
-  const names = new Set(Object.keys(state.resolved.profiles));
-  for (const name of state.profiles.keys()) {
-    names.add(name);
-  }
-  return [...names];
-}
 
 type ProfileOperationRunner = <T>(
   signal: AbortSignal | undefined,
@@ -128,7 +116,6 @@ function createProfileContext(
     profile,
     runtime: profileState,
     getCdpControlPolicy: () => resolveCdpControlPolicy(profile, state().resolved.ssrfPolicy),
-    ensureBrowserAvailable: rawAvailability.ensureBrowserAvailable,
     listTabs: rawTabOps.listTabs,
     openTab: rawTabOps.openTab,
   });
@@ -161,12 +148,18 @@ function createProfileContext(
     profile,
     ensureBrowserAvailable,
     ensureTabAvailable: async (targetId, options) => {
-      await ensureBrowserAvailable({ signal: options?.signal });
-      return await withLease(
-        options?.signal,
-        async (signal) =>
-          await rawSelection.ensureTabAvailable(targetId, { ...options, signal }, true),
-      );
+      if (targetId === undefined) {
+        await ensureBrowserAvailable({ signal: options?.signal });
+      }
+      return await withLease(options?.signal, async (signal) => {
+        // Explicit targets can come from history; lookup must not launch or restart a browser.
+        if (targetId !== undefined && !(await rawAvailability.isReachable(undefined, { signal }))) {
+          throw new BrowserProfileUnavailableError(
+            `Browser profile "${profile.name}" is not running. Start the browser or open a new tab, then select a current target.`,
+          );
+        }
+        return await rawSelection.ensureTabAvailable(targetId, { ...options, signal });
+      });
     },
     isHttpReachable: async (timeoutMs, callerSignal) =>
       await withLease(
@@ -227,17 +220,14 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
     if (!isBrowserRuntimeRunning(current)) {
       throw new BrowserProfileUnavailableError("Browser runtime is stopping.");
     }
+    refreshResolvedBrowserConfigFromDisk({ current, refreshConfigFromDisk });
     return current;
   };
 
   const forProfile = (profileName?: string): ProfileContext => {
     const current = state();
     const name = profileName ?? current.resolved.defaultProfile;
-    const profile = resolveBrowserProfileWithHotReload({
-      current,
-      refreshConfigFromDisk,
-      name,
-    });
+    const profile = resolveProfile(current.resolved, name);
 
     if (!profile) {
       const available = Object.keys(current.resolved.profiles).join(", ");
@@ -251,13 +241,10 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
 
   const listProfiles = async (): Promise<ProfileStatus[]> => {
     const current = state();
-    refreshResolvedBrowserConfigFromDisk({
-      current,
-      refreshConfigFromDisk,
-    });
     const result: ProfileStatus[] = [];
 
-    for (const name of listKnownProfileNames(current)) {
+    const names = new Set([...Object.keys(current.resolved.profiles), ...current.profiles.keys()]);
+    for (const name of names) {
       let profileState = current.profiles.get(name);
       const profile = resolveProfile(current.resolved, name) ?? profileState?.profile;
       if (!profile) {
@@ -313,6 +300,7 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
                           activeProfile.cdpUrl,
                           probeTimeoutMs,
                           resolveCdpReachabilityPolicy(activeProfile, current.resolved.ssrfPolicy),
+                          signal,
                         );
                   if (activeRunning) {
                     const tabs = await profileCtx.listTabs({ signal }).catch(() => []);
@@ -370,35 +358,24 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
     return result;
   };
 
-  // Create default profile context for backward compatibility
-  const getDefaultContext = () => forProfile();
-
-  const mapTabError = (err: unknown) => {
-    const browserMapped = toBrowserErrorResponse(err);
-    if (browserMapped) {
-      return browserMapped;
-    }
-    return null;
-  };
-
   return {
     state,
     forProfile,
     listProfiles,
     // Legacy methods delegate to default profile
-    ensureBrowserAvailable: (options) => getDefaultContext().ensureBrowserAvailable(options),
-    ensureTabAvailable: (targetId, options) =>
-      getDefaultContext().ensureTabAvailable(targetId, options),
-    isHttpReachable: (timeoutMs) => getDefaultContext().isHttpReachable(timeoutMs),
-    isTransportAvailable: (timeoutMs) => getDefaultContext().isTransportAvailable(timeoutMs),
-    isReachable: (timeoutMs, options) => getDefaultContext().isReachable(timeoutMs, options),
-    listTabs: () => getDefaultContext().listTabs(),
-    openTab: (url, optsLocal) => getDefaultContext().openTab(url, optsLocal),
-    labelTab: (targetId, label) => getDefaultContext().labelTab(targetId, label),
-    focusTab: (targetId, options) => getDefaultContext().focusTab(targetId, options),
-    closeTab: (targetId, options) => getDefaultContext().closeTab(targetId, options),
-    stopRunningBrowser: () => getDefaultContext().stopRunningBrowser(),
-    resetProfile: () => getDefaultContext().resetProfile(),
-    mapTabError,
+    ensureBrowserAvailable: (options) => forProfile().ensureBrowserAvailable(options),
+    ensureTabAvailable: (targetId, options) => forProfile().ensureTabAvailable(targetId, options),
+    isHttpReachable: (timeoutMs, signal) => forProfile().isHttpReachable(timeoutMs, signal),
+    isTransportAvailable: (timeoutMs, signal, pageProbe) =>
+      forProfile().isTransportAvailable(timeoutMs, signal, pageProbe),
+    isReachable: (timeoutMs, options) => forProfile().isReachable(timeoutMs, options),
+    listTabs: (options) => forProfile().listTabs(options),
+    openTab: (url, optsLocal) => forProfile().openTab(url, optsLocal),
+    labelTab: (targetId, label) => forProfile().labelTab(targetId, label),
+    focusTab: (targetId, options) => forProfile().focusTab(targetId, options),
+    closeTab: (targetId, options) => forProfile().closeTab(targetId, options),
+    stopRunningBrowser: () => forProfile().stopRunningBrowser(),
+    resetProfile: () => forProfile().resetProfile(),
+    mapTabError: toBrowserErrorResponse,
   };
 }

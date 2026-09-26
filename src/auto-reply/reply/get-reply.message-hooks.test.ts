@@ -1,7 +1,8 @@
 // Tests get-reply message hooks before and after agent execution.
 import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target-paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { isPathInside } from "../../infra/path-guards.js";
@@ -14,6 +15,7 @@ import {
   buildGetReplyGroupCtx,
   createGetReplyContinueDirectivesResult,
   createGetReplySessionState,
+  createLockedReplyPreprocessingState,
   registerGetReplyBaselineBypass,
   registerGetReplyRuntimeOverrides,
 } from "./get-reply.test-fixtures.js";
@@ -35,7 +37,8 @@ const mocks = vi.hoisted(() => ({
   resolveReplySessionPreprocessingState: vi.fn(),
 }));
 
-vi.mock("../../globals.js", () => ({
+vi.mock("../../globals.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../globals.js")>()),
   logVerbose: vi.fn(),
 }));
 vi.mock("../../hooks/internal-hooks.js", () => ({
@@ -108,6 +111,18 @@ function buildConfiguredAudioCfg() {
         },
       },
     },
+  });
+}
+
+function buildTextCtx(body: string, overrides: Partial<MsgContext> = {}): MsgContext {
+  return buildCtx({
+    Body: body,
+    BodyForAgent: body,
+    RawBody: body,
+    CommandBody: body,
+    BodyForCommands: body,
+    media: undefined,
+    ...overrides,
   });
 }
 
@@ -204,13 +219,7 @@ async function runLocalPathSelfServeCase(params: {
   const ctx = buildCtx(params.ctx);
   const enableLocalPathSelfServe = vi.fn();
   mocks.applyMediaUnderstanding.mockResolvedValueOnce({
-    outputs: [],
-    decisions: [],
     extractedFileImages: [],
-    appliedImage: false,
-    appliedAudio: false,
-    appliedVideo: false,
-    appliedFile: true,
     enableLocalPathSelfServe,
   });
   mocks.initSessionState.mockResolvedValueOnce(
@@ -325,68 +334,78 @@ describe("getReplyFromConfig message hooks", () => {
     );
   });
 
-  it("runs configured audio transcription for a model-locked harness voice note", async () => {
-    const sessionKey = "agent:main:harness:claude-cli:locked-audio";
-    const sessionEntry = {
-      sessionId: "locked-session",
-      updatedAt: 1,
-      agentHarnessId: "claude-cli",
-      modelSelectionLocked: true,
-    };
-    mocks.resolveReplySessionPreprocessingState.mockReturnValueOnce({
-      sessionEntry,
-      sessionKey,
-      storePath: "/tmp/sessions.json",
-    });
-    mocks.initSessionState.mockResolvedValueOnce(
-      createGetReplySessionState({
-        sessionCtx: {
-          BodyForAgent: "<media:audio>",
-          SessionKey: sessionKey,
-        },
-        sessionEntry,
+  it.each([
+    {
+      label: "configured audio",
+      harness: "claude-cli",
+      mime: "audio/ogg",
+      configuredAudio: true,
+      mode: "audio-and-files",
+    },
+    {
+      label: "unconfigured audio",
+      harness: "claude-cli",
+      mime: "audio/ogg",
+      configuredAudio: false,
+      mode: "files-only",
+    },
+    {
+      label: "pasted text",
+      harness: "codex",
+      mime: "text/plain",
+      configuredAudio: false,
+      mode: "files-only",
+    },
+  ])(
+    "preprocesses model-locked $label before dispatch",
+    async ({ harness, mime, configuredAudio, mode }) => {
+      const sessionKey = `agent:main:harness:${harness}:locked-media`;
+      const preprocessingState = createLockedReplyPreprocessingState({
         sessionKey,
-      }),
-    );
-
-    await getReplyFromConfig(
-      buildCtx({ SessionKey: sessionKey }),
-      undefined,
-      buildConfiguredAudioCfg(),
-    );
-
-    expect(mocks.resolveReplySessionPreprocessingState).toHaveBeenCalledOnce();
-    expect(mocks.initSessionState).toHaveBeenCalledOnce();
-    expect(mocks.applyMediaUnderstanding).toHaveBeenCalledOnce();
-    expect(mocks.applyMediaUnderstanding.mock.calls[0]?.[0]).toEqual(
-      expect.objectContaining({ processingMode: "audio-only" }),
-    );
-    expect(mocks.resolveReplyDirectives.mock.calls[0]?.[0]).toEqual(
-      expect.objectContaining({
-        sessionEntry: expect.objectContaining({
-          agentHarnessId: "claude-cli",
-          modelSelectionLocked: true,
-        }),
-        ctx: expect.objectContaining({
-          BodyForAgent: "[Audio]\nTranscript:\nvoice transcript",
+        sessionId: "locked-session",
+        agentHarnessId: harness,
+      });
+      const preparedText =
+        mime === "text/plain"
+          ? "Pasted diagnostic: synthetic connection refused"
+          : "voice transcript";
+      mocks.resolveReplySessionPreprocessingState.mockReturnValueOnce(preprocessingState);
+      mocks.applyMediaUnderstanding.mockImplementationOnce(async (...args: unknown[]) => {
+        const { ctx } = args[0] as { ctx: MsgContext };
+        ctx.agentText = preparedText;
+        ctx.BodyForAgent = preparedText;
+      });
+      await getReplyFromConfig(
+        buildCtx({
           SessionKey: sessionKey,
+          media: [
+            {
+              path: mime === "text/plain" ? "/tmp/pasted-text-123.txt" : "/tmp/voice.ogg",
+              contentType: mime,
+            },
+          ],
         }),
-      }),
-    );
-  });
+        undefined,
+        configuredAudio ? buildConfiguredAudioCfg() : withFastReplyConfig({}),
+      );
+      expect(mocks.applyMediaUnderstanding).toHaveBeenCalledWith(
+        expect.objectContaining({ processingMode: mode }),
+      );
+      expect(mocks.resolveReplyDirectives.mock.calls[0]?.[0]).toEqual(
+        expect.objectContaining({ ctx: expect.objectContaining({ agentText: preparedText }) }),
+      );
+    },
+  );
 
   it("does not infer locked-harness audio from its filename when MIME metadata is missing", async () => {
     const sessionKey = "agent:main:harness:claude-cli:locked-audio-filename";
-    mocks.resolveReplySessionPreprocessingState.mockReturnValueOnce({
-      sessionEntry: {
+    mocks.resolveReplySessionPreprocessingState.mockReturnValueOnce(
+      createLockedReplyPreprocessingState({
+        sessionKey,
         sessionId: "locked-filename-session",
-        updatedAt: 1,
         agentHarnessId: "claude-cli",
-        modelSelectionLocked: true,
-      },
-      sessionKey,
-      storePath: "/tmp/sessions.json",
-    });
+      }),
+    );
 
     await getReplyFromConfig(
       buildCtx({
@@ -402,7 +421,9 @@ describe("getReplyFromConfig message hooks", () => {
       buildConfiguredAudioCfg(),
     );
 
-    expect(mocks.applyMediaUnderstanding).not.toHaveBeenCalled();
+    expect(mocks.applyMediaUnderstanding).toHaveBeenCalledWith(
+      expect.objectContaining({ processingMode: "files-only" }),
+    );
   });
 
   it("runs normal media understanding for an unlocked voice note", async () => {
@@ -562,64 +583,38 @@ describe("getReplyFromConfig message hooks", () => {
     expect(owner).toHaveBeenCalledOnce();
   });
 
-  it("keeps unconfigured audio with a model-locked harness", async () => {
-    const sessionKey = "agent:main:harness:claude-cli:locked-unconfigured-audio";
-    const sessionEntry = {
-      sessionId: "locked-unconfigured-session",
-      updatedAt: 1,
-      agentHarnessId: "claude-cli",
-      modelSelectionLocked: true,
-    };
-    mocks.resolveReplySessionPreprocessingState.mockReturnValueOnce({
-      sessionEntry,
-      sessionKey,
-      storePath: "/tmp/sessions.json",
-    });
-
-    await getReplyFromConfig(
-      buildCtx({ SessionKey: sessionKey }),
-      undefined,
-      withFastReplyConfig({}),
-    );
-
-    expect(mocks.applyMediaUnderstanding).not.toHaveBeenCalled();
-  });
-
   it("skips utility link understanding for a model-locked harness session", async () => {
     const sessionKey = "agent:main:harness:codex:supervision:locked-link";
     const body = "read https://example.test/page";
-    const sessionEntry = {
-      sessionId: "locked-link-session",
-      updatedAt: 1,
-      agentHarnessId: "codex",
-      modelSelectionLocked: true,
-    };
-    mocks.resolveReplySessionPreprocessingState.mockReturnValueOnce({
-      sessionEntry,
+    const preprocessingState = createLockedReplyPreprocessingState({
       sessionKey,
-      storePath: "/tmp/sessions.json",
+      sessionId: "locked-link-session",
+      agentHarnessId: "codex",
+    });
+    const preprocessing = createDeferred<typeof preprocessingState>();
+    const started = createDeferred();
+    mocks.resolveReplySessionPreprocessingState.mockImplementationOnce(() => {
+      started.resolve();
+      return preprocessing.promise;
     });
     mocks.initSessionState.mockResolvedValueOnce(
       createGetReplySessionState({
         sessionCtx: { BodyForAgent: body, SessionKey: sessionKey },
-        sessionEntry,
+        sessionEntry: preprocessingState.sessionEntry,
         sessionKey,
       }),
     );
 
-    await getReplyFromConfig(
-      buildCtx({
-        Body: body,
-        BodyForAgent: body,
-        RawBody: body,
-        CommandBody: body,
-        BodyForCommands: body,
-        SessionKey: sessionKey,
-        media: undefined,
-      }),
+    const reply = getReplyFromConfig(
+      buildTextCtx(body, { SessionKey: sessionKey }),
       undefined,
       withFastReplyConfig({}),
     );
+    await started.promise;
+    expect(mocks.applyLinkUnderstanding).not.toHaveBeenCalled();
+    expect(mocks.initSessionState).not.toHaveBeenCalled();
+    preprocessing.resolve(preprocessingState);
+    await reply;
 
     expect(mocks.resolveReplySessionPreprocessingState).toHaveBeenCalledOnce();
     expect(mocks.applyLinkUnderstanding).not.toHaveBeenCalled();
@@ -628,22 +623,13 @@ describe("getReplyFromConfig message hooks", () => {
 
   it("fails closed before link understanding when the reserved session is missing", async () => {
     const sessionKey = "agent:main:harness:codex:supervision:missing-link";
-    const body = "read https://example.test/page";
     mocks.resolveReplySessionPreprocessingState.mockImplementationOnce(() => {
       throw new Error(AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE);
     });
 
     await expect(
       getReplyFromConfig(
-        buildCtx({
-          Body: body,
-          BodyForAgent: body,
-          RawBody: body,
-          CommandBody: body,
-          BodyForCommands: body,
-          SessionKey: sessionKey,
-          media: undefined,
-        }),
+        buildTextCtx("read https://example.test/page", { SessionKey: sessionKey }),
         undefined,
         withFastReplyConfig({}),
       ),
@@ -692,13 +678,7 @@ describe("getReplyFromConfig message hooks", () => {
       params.ctx.CommandBody = enrichedBody;
       params.ctx.RawBody = enrichedBody;
       return {
-        outputs: params.ctx.MediaUnderstanding,
-        decisions: [],
         extractedFileImages: [extractedPdfPage],
-        appliedImage: true,
-        appliedAudio: false,
-        appliedVideo: false,
-        appliedFile: true,
       };
     });
     mocks.resolveReplyDirectives.mockResolvedValueOnce(
@@ -957,16 +937,7 @@ describe("getReplyFromConfig message hooks", () => {
 
   it("skips media and link understanding on plain text without attachments or urls", async () => {
     await getReplyFromConfig(
-      buildCtx({
-        Body: "hello there",
-        BodyForAgent: "hello there",
-        RawBody: "hello there",
-        CommandBody: "hello there",
-        BodyForCommands: "hello there",
-        media: undefined,
-        Sticker: undefined,
-        StickerMediaIncluded: undefined,
-      }),
+      buildTextCtx("hello there", { Sticker: undefined, StickerMediaIncluded: undefined }),
       undefined,
       withFastReplyConfig({}),
     );
@@ -1045,42 +1016,69 @@ describe("getReplyFromConfig message hooks", () => {
     expect(preprocessed[1]).toBe("preprocessed");
     expect(preprocessed[2]).toBe("agent:main:telegram:-100123");
     expect(preprocessed[3]).toBeTypeOf("object");
-    expect(
-      verboseMessages().some((message) =>
-        message.includes("media understanding failed, proceeding with raw content"),
-      ),
-    ).toBe(true);
+    expect(verboseMessages()).toContainEqual(
+      expect.stringContaining("media understanding failed, proceeding with raw content"),
+    );
   });
 
-  it("continues dispatching URL messages when link understanding fails before reply routing", async () => {
+  it.each([
+    { phase: "link", resolves: false },
+    { phase: "link", resolves: true },
+    { phase: "binding", resolves: true },
+  ])(
+    "stops canceled replies during $phase work (resolves: $resolves)",
+    async ({ phase, resolves }) => {
+      const controller = new AbortController();
+      const reason = resolves ? new Error("reply canceled") : undefined;
+      if (phase === "binding") {
+        mocks.resolveReplySessionPreprocessingState.mockImplementationOnce(async () => {
+          controller.abort(reason);
+          return { sessionKey: "agent:main:telegram:-100123", storePath: "/tmp/sessions.json" };
+        });
+      }
+      mocks.applyLinkUnderstanding.mockImplementationOnce(async (...args: unknown[]) => {
+        const { signal } = args[0] as { signal?: AbortSignal };
+        controller.abort(reason);
+        if (!resolves) {
+          signal?.throwIfAborted();
+        }
+      });
+
+      await expect
+        .soft(
+          getReplyFromConfig(
+            buildTextCtx("read https://example.test/page"),
+            { abortSignal: controller.signal },
+            withFastReplyConfig({}),
+          ),
+        )
+        .rejects.toMatchObject({ name: "AbortError", ...(reason ? { cause: reason } : {}) });
+
+      expect(mocks.applyLinkUnderstanding).toHaveBeenCalledTimes(phase === "binding" ? 0 : 1);
+      expect.soft(mocks.initSessionState).not.toHaveBeenCalled();
+      expect.soft(mocks.resolveReplyDirectives).not.toHaveBeenCalled();
+      expect.soft(mocks.createInternalHookEvent).not.toHaveBeenCalled();
+      expect.soft(mocks.triggerInternalHook).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([false, true])("keeps URL input after link failure (literal: %s)", async (suppressed) => {
+    const ctx = buildTextCtx("read https://example.test/page", {
+      CommandInterpretationSuppressed: suppressed,
+    });
     mocks.applyLinkUnderstanding.mockRejectedValueOnce(
       new Error("Cannot find module '/tmp/openclaw/dist/link-understanding/apply.runtime-old.js'"),
     );
 
-    const reply = await getReplyFromConfig(
-      buildCtx({
-        Body: "read https://example.test/page",
-        BodyForAgent: "read https://example.test/page",
-        RawBody: "read https://example.test/page",
-        CommandBody: "read https://example.test/page",
-        BodyForCommands: "read https://example.test/page",
-        media: undefined,
-        Sticker: undefined,
-        StickerMediaIncluded: undefined,
-      }),
-      undefined,
-      withFastReplyConfig({}),
-    );
+    const reply = await getReplyFromConfig(ctx, undefined, withFastReplyConfig({}));
 
     expect(reply).toEqual({ text: "ok" });
     expect(mocks.applyMediaUnderstanding).not.toHaveBeenCalled();
     expect(mocks.applyLinkUnderstanding).toHaveBeenCalledTimes(1);
     expect(mocks.initSessionState).toHaveBeenCalledTimes(1);
     expect(mocks.resolveReplyDirectives).toHaveBeenCalledTimes(1);
-    expect(
-      verboseMessages().some((message) =>
-        message.includes("link understanding failed, proceeding with raw content"),
-      ),
-    ).toBe(true);
+    expect(verboseMessages()).toContainEqual(
+      expect.stringContaining("link understanding failed, proceeding with raw content"),
+    );
   });
 });

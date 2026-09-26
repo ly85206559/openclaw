@@ -1,5 +1,6 @@
 // Control UI tool icon set, split from icons.ts to keep both under the max-lines cap.
 import { html, svg, type SVGTemplateResult, type TemplateResult } from "lit";
+import { neutralMark } from "./neutral-mark.ts";
 
 // Shared Lucide icon shell. Inline presentation attributes keep icons visible
 // inside shadow roots that global stylesheet icon rules cannot reach; CSS
@@ -22,6 +23,10 @@ export function strokeIcon(body: SVGTemplateResult): TemplateResult {
 }
 
 export const toolIcons = {
+  bookOpenText: strokeIcon(svg`<path d="M12 5v16M16 13h2M16 9h2" />
+    <path d="M20.001 19A2 2 0 0022 17V5a2 2 0 00-1.999-2L16 3.002A5 5 0 0012 5a5 5 0 00-4-2H4a2 2 0 00-2 2v12a2 2 0 001.999 2H8a5 5 0 014 2 5 5 0 014-2z" />
+    <path d="M6 13h2M6 9h2" />`),
+  mark: neutralMark,
   shieldCheck: strokeIcon(
     svg`<path d="M20 13c0 5-3.5 7.5-8 9-4.5-1.5-8-4-8-9V5l8-3 8 3zM9 12l2 2 4-4" />`,
   ),
@@ -49,6 +54,7 @@ export const toolIcons = {
   ),
   home: strokeIcon(svg` <path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
     <polyline points="9 22 9 12 15 12 15 22" />`),
+  cloud: strokeIcon(svg`<path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z" />`),
   penLine: strokeIcon(
     svg`<path d="M12 20h9M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" />`,
   ),
@@ -162,13 +168,10 @@ export const toolIcons = {
   spark: strokeIcon(svg` <path
     d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"
   />`),
+  // Theme tokens brighten the gradient in dark mode; var() needs style attributes.
   lobster: html`
     <svg viewBox="0 0 120 120" fill="none">
       <defs>
-        <!-- Gradient stops read theme tokens (base.css --lobster-icon-*): the
-             shipped hex pair sank into dark backgrounds, so dark mode brightens
-             both stops while light mode keeps the original artwork. var() is
-             only valid in style="", not presentation attributes. -->
         <linearGradient id="lob-g" x1="0%" y1="0%" x2="100%" y2="100%">
           <stop offset="0%" style="stop-color: var(--lobster-icon-body, #ff4d4d)" />
           <stop offset="100%" style="stop-color: var(--lobster-icon-shade, #991b1b)" />

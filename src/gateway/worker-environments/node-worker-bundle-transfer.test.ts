@@ -14,10 +14,8 @@ import {
 } from "../../shared/worker-bundle-archive.js";
 import { hashWorkerBundleManifest } from "../../shared/worker-bundle-hash.js";
 import type { NodeWorkerSupervisorNodeProof } from "../node-registry-private.js";
-import {
-  createNodeWorkerBundleTransferHttpCallback,
-  handleNodeWorkerBundleTransferHttpRequest,
-} from "./node-worker-bundle-transfer-http.js";
+import { createArtifactTransferHttpCallback } from "./artifact-transfer-http.js";
+import { handleNodeWorkerBundleTransferHttpRequest } from "./node-worker-bundle-transfer-http.js";
 import { createNodeWorkerBundleTransferService } from "./node-worker-bundle-transfer-service.js";
 
 describe("node worker bundle transfer", () => {
@@ -43,15 +41,16 @@ describe("node worker bundle transfer", () => {
     const source = path.join(root, "source");
     const tarballPath = path.join(root, "bundle.tgz");
     await fs.mkdir(source, { recursive: true });
-    await fs.writeFile(path.join(source, "worker.mjs"), "export {};\n", { mode: 0o700 });
+    const artifacts = ["github-exec-launcher.mjs", "worker.mjs", "workspace-rsync-receiver.mjs"];
+    for (const artifact of artifacts) {
+      await fs.writeFile(path.join(source, artifact), "export {};\n", { mode: 0o700 });
+    }
     const manifest = await readWorkerBundleDirectoryManifest({
       root: source,
       limits: DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS,
     });
     const bundleHash = hashWorkerBundleManifest(manifest);
-    await tar.create({ cwd: source, file: tarballPath, gzip: true, noDirRecurse: true }, [
-      "worker.mjs",
-    ]);
+    await tar.create({ cwd: source, file: tarballPath, gzip: true, noDirRecurse: true }, artifacts);
     const tarball = await fs.readFile(tarballPath);
     const service = createNodeWorkerBundleTransferService({
       generateToken: () => "A".repeat(43),
@@ -81,7 +80,7 @@ describe("node worker bundle transfer", () => {
       },
       isAuthorized: () => true,
     });
-    const callback = createNodeWorkerBundleTransferHttpCallback(service);
+    const callback = createArtifactTransferHttpCallback(service);
     server = http.createServer((req, res) => {
       void handleNodeWorkerBundleTransferHttpRequest({
         req,
@@ -105,6 +104,6 @@ describe("node worker bundle transfer", () => {
         gatewayUrl: `ws://127.0.0.1:${address.port}`,
       }),
     ).resolves.toEqual(prepared.input.build);
-    expect(service.authorize({ token: prepared.token, bundleHash })).toBeUndefined();
+    expect(service.authorize({ token: prepared.token, artifactKey: bundleHash })).toBeUndefined();
   });
 });

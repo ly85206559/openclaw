@@ -1,23 +1,67 @@
-import type { WorkerDispatchPlacement } from "./placement-dispatch-failure.js";
+import type {
+  WorkerSessionPlacementIdentity,
+  WorkerSessionPlacementRecord,
+} from "./placement-record.js";
 import type {
   WorkerPlacementAuthorization,
+  WorkerPlacementCancellationTarget,
   WorkerPlacementReclaimRequest,
 } from "./service-contract.js";
+import type { WorkerSessionWorkspace } from "./session-workspace.js";
+import type {
+  WorkerWorkspaceConflictReport,
+  WorkspaceResultConflictLookup,
+} from "./workspace-conflicts.js";
+
+export type PreparedWorkerWorkspaceRecovery = {
+  readonly workspace: WorkerSessionWorkspace;
+  assertCurrent: () => void;
+  resolveConflict: () => Promise<WorkspaceResultConflictLookup>;
+  reportConflict: (report: WorkerWorkspaceConflictReport) => Promise<void>;
+  reportFailure: (error: string) => Promise<void>;
+};
+
+export type WithPreparedWorkerWorkspaceRecovery = <T>(
+  identity: WorkerSessionPlacementIdentity,
+  assertCurrent: () => void,
+  run: (recovery: PreparedWorkerWorkspaceRecovery) => Promise<T>,
+) => Promise<T>;
 
 type WorkerReclaimStartPlacement = Extract<
-  WorkerDispatchPlacement,
+  WorkerSessionPlacementRecord,
   { state: "draining" | "reclaimed" }
 >;
 export type WorkerReclaimPlacement = Extract<
-  WorkerDispatchPlacement,
+  WorkerSessionPlacementRecord,
   { state: "local" | "reclaimed" }
 >;
+
+export function matchesWorkerPlacementTarget(
+  current: WorkerPlacementCancellationTarget | undefined,
+  expected: WorkerPlacementCancellationTarget | undefined,
+): boolean {
+  return (
+    current?.state === expected?.state &&
+    current?.generation === expected?.generation &&
+    current?.environmentId === expected?.environmentId &&
+    current?.activeOwnerEpoch === expected?.activeOwnerEpoch
+  );
+}
+
+export type WorkerPlacementPendingOperations = {
+  isCurrent: () => boolean;
+  hasPendingDispatch: () => boolean;
+  currentPlacement: () => WorkerPlacementCancellationTarget | undefined;
+  completedPlacement: () => WorkerPlacementCancellationTarget | undefined;
+  settled: Promise<unknown>;
+};
 
 export type WorkerPlacementReclaimBarriers = {
   runReclaimPreparation: (
     params: WorkerPlacementReclaimRequest & {
       authorize?: WorkerPlacementAuthorization;
       beforeDrain?: WorkerPlacementAuthorization;
+      pendingOperations?: WorkerPlacementPendingOperations;
       run: (authorize?: WorkerPlacementAuthorization) => Promise<WorkerReclaimPlacement>;
     },
   ) => Promise<WorkerReclaimPlacement>;
@@ -27,7 +71,7 @@ export type WorkerPlacementReclaimBarriers = {
       beforeDrain?: WorkerPlacementAuthorization;
       begin: () => WorkerReclaimStartPlacement;
       reclaim: (
-        localPath: string,
+        workspace: WorkerSessionWorkspace,
         placement: WorkerReclaimStartPlacement,
         authorize?: WorkerPlacementAuthorization,
       ) => Promise<WorkerReclaimPlacement>;

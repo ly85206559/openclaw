@@ -2,15 +2,13 @@
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import { gunzipSync, gzipSync } from "node:zlib";
-import type { PluginBlobStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type {
+  OpenBlobStoreOptions,
+  PluginBlobStore,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
 import type { WikiFreshnessLevel } from "./claim-health.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import type { WikiPageKind, WikiPageSummary, WikiRelationship } from "./markdown.js";
-
-export const LEGACY_MEMORY_WIKI_COMPILED_CACHE_PATHS = [
-  ".openclaw-wiki/cache/agent-digest.json",
-  ".openclaw-wiki/cache/claims.jsonl",
-] as const;
 
 const COMPILED_CACHE_NAMESPACE = "compiled-cache";
 const COMPILED_CACHE_MAX_ENTRIES = 256;
@@ -208,6 +206,11 @@ type ActiveVault = {
   snapshot?: MemoryWikiCompiledCacheSnapshot;
 };
 
+type DurableVaultIdentity = {
+  vaultGeneration: string | null;
+  compiledCachePublicationId: string | null;
+};
+
 type MemoryWikiCompiledCacheStore = {
   read(config: ResolvedMemoryWikiConfig): Promise<MemoryWikiCompiledCacheSnapshot | null>;
   write(
@@ -218,10 +221,7 @@ type MemoryWikiCompiledCacheStore = {
   ): Promise<ActiveVault>;
   reconcile(
     config: ResolvedMemoryWikiConfig,
-    loadDurableIdentity: () => Promise<{
-      vaultGeneration: string | null;
-      compiledCachePublicationId: string | null;
-    }>,
+    loadDurableIdentity: () => Promise<DurableVaultIdentity>,
   ): Promise<void>;
   delete(config: ResolvedMemoryWikiConfig): Promise<void>;
   deletePublication(config: ResolvedMemoryWikiConfig, publicationId: string): Promise<void>;
@@ -331,6 +331,14 @@ function resolveActiveVault(config: ResolvedMemoryWikiConfig): ActiveVault | nul
   return active;
 }
 
+export function isMemoryWikiCompiledCacheOwnerActive(
+  config: ResolvedMemoryWikiConfig,
+  vaultGeneration: string,
+): boolean {
+  const active = resolveActiveVault(config);
+  return active?.reconciled === true && active.vaultGeneration === vaultGeneration;
+}
+
 function parseSnapshot(
   bytes: Uint8Array,
   generation: string,
@@ -378,13 +386,7 @@ export function createMemoryWikiCompiledCachePublicationId(): string {
 }
 
 export function createMemoryWikiCompiledCacheStore(
-  openBlobStore: <TMetadata>(options: {
-    namespace: string;
-    maxEntries: number;
-    maxBytesPerEntry: number;
-    maxBytesPerNamespace: number;
-    overflowPolicy: "evict-oldest";
-  }) => PluginBlobStore<TMetadata>,
+  openBlobStore: <TMetadata>(options: OpenBlobStoreOptions) => PluginBlobStore<TMetadata>,
   options: { onReadError?: (error: unknown) => void } = {},
 ): MemoryWikiCompiledCacheStore {
   const store = openBlobStore<CompiledCacheMetadata>({
@@ -394,10 +396,6 @@ export function createMemoryWikiCompiledCacheStore(
     maxBytesPerNamespace: COMPILED_CACHE_MAX_BYTES,
     overflowPolicy: "evict-oldest",
   });
-  async function deleteKey(key: string): Promise<void> {
-    await store.delete(key);
-  }
-
   return {
     async read(config) {
       const ownerId = resolveMemoryWikiCompiledCacheOwnerId(config);
@@ -508,13 +506,15 @@ export function createMemoryWikiCompiledCacheStore(
       const ownerId = resolveMemoryWikiCompiledCacheOwnerId(config);
       for (const entry of await store.entries()) {
         if (isMetadata(entry.metadata) && entry.metadata.ownerId === ownerId) {
-          await deleteKey(entry.key);
+          await store.delete(entry.key);
         }
       }
     },
 
     async deletePublication(config, publicationId) {
-      await deleteKey(publicationKey(resolveMemoryWikiCompiledCacheOwnerId(config), publicationId));
+      await store.delete(
+        publicationKey(resolveMemoryWikiCompiledCacheOwnerId(config), publicationId),
+      );
     },
 
     async deleteOwnersExcept(ownerIds) {
@@ -524,7 +524,7 @@ export function createMemoryWikiCompiledCacheStore(
         if (isMetadata(metadata) && ownerIds.has(metadata.ownerId)) {
           continue;
         }
-        await deleteKey(entry.key);
+        await store.delete(entry.key);
         deleted += 1;
       }
       return deleted;
@@ -596,10 +596,7 @@ export async function invalidateMemoryWikiCompiledCache(
 
 export async function reconcileMemoryWikiCompiledCacheOwner(
   config: ResolvedMemoryWikiConfig,
-  loadDurableIdentity: () => Promise<{
-    vaultGeneration: string | null;
-    compiledCachePublicationId: string | null;
-  }>,
+  loadDurableIdentity: () => Promise<DurableVaultIdentity>,
 ): Promise<void> {
   await requireConfiguredStore().reconcile(config, loadDurableIdentity);
 }
@@ -612,10 +609,7 @@ export async function writeMemoryWikiCompiledCache(
   parentPublicationId: string | null,
   validatePublication: () => Promise<void>,
   commitPublication: () => Promise<void>,
-  loadDurableIdentity: () => Promise<{
-    vaultGeneration: string | null;
-    compiledCachePublicationId: string | null;
-  }>,
+  loadDurableIdentity: () => Promise<DurableVaultIdentity>,
 ): Promise<void> {
   const store = requireConfiguredStore();
   const activeVault = await store.write(config, snapshot, generation, publicationId);

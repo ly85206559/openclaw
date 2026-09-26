@@ -10,8 +10,9 @@
  */
 
 import { expectDefined } from "@openclaw/normalization-core";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveTwitchToken } from "./token.js";
 import { TwitchClientManager } from "./twitch-client.js";
 import type {
@@ -28,7 +29,7 @@ const mockConnect = vi.fn(() => {
   }
 });
 const mockJoin = vi.fn().mockResolvedValue(undefined);
-const mockSay = vi.fn().mockResolvedValue({ messageId: "test-msg-123" });
+const mockSay = vi.fn().mockResolvedValue(undefined);
 const mockQuit = vi.fn();
 const mockUnbind = vi.fn();
 
@@ -172,11 +173,6 @@ describe("TwitchClientManager", () => {
     manager = new TwitchClientManager(mockLogger, statusSink);
   });
 
-  afterEach(() => {
-    // Clean up manager to avoid side effects
-    manager.clearForTest();
-  });
-
   describe("getClient", () => {
     it("publishes ready and recovering from authentication and disconnect events", async () => {
       await manager.getClient(testAccount);
@@ -207,18 +203,6 @@ describe("TwitchClientManager", () => {
       // New implementation: connect is called, channels are passed to constructor
       expect(mockConnect).toHaveBeenCalledTimes(1);
       expect(mockLogger.info).toHaveBeenCalledWith("Connected to Twitch as testbot");
-    });
-
-    it("should use account username as default channel when channel not specified", async () => {
-      const accountWithoutChannel: TwitchAccountConfig = {
-        ...testAccount,
-        channel: "",
-      } as unknown as TwitchAccountConfig;
-
-      await manager.getClient(accountWithoutChannel);
-
-      // New implementation: channel (testbot) is passed to constructor, not via join()
-      expect(mockConnect).toHaveBeenCalledTimes(1);
     });
 
     it("should reuse existing client for same account", async () => {
@@ -407,22 +391,23 @@ describe("TwitchClientManager", () => {
 
       await manager.getClient(accountWithPrefix);
 
+      expect(mockAuthProvider.constructor).toHaveBeenCalledOnce();
       expect(mockAuthProvider.constructor).toHaveBeenCalledWith("test-client-id", "actualtoken123");
     });
 
     it("should use token directly when no oauth: prefix", async () => {
       // Override the mock to return a token without oauth: prefix
       resolveTwitchTokenMock.mockReturnValue({
-        token: "oauth:mock-token-from-tests",
+        token: "raw-token-from-tests",
         source: "config" as const,
       });
 
       await manager.getClient(testAccount);
 
-      // Implementation strips oauth: prefix from all tokens
+      expect(mockAuthProvider.constructor).toHaveBeenCalledOnce();
       expect(mockAuthProvider.constructor).toHaveBeenCalledWith(
         "test-client-id",
-        "mock-token-from-tests",
+        "raw-token-from-tests",
       );
     });
 
@@ -501,15 +486,52 @@ describe("TwitchClientManager", () => {
       expect(mockLogger.error).toHaveBeenCalledWith("Missing Twitch client ID for account testbot");
     });
 
-    it("should throw error when token is missing", async () => {
-      // Override the mock to return empty token
-      resolveTwitchTokenMock.mockReturnValue({
-        token: "",
-        source: "none" as const,
-      });
+    it.each([
+      {
+        name: "simplified default account",
+        cfg: { channels: { twitch: { ...testAccount, accessToken: "" } } },
+        accountId: undefined,
+        expected:
+          "Missing Twitch token for account default (set channels.twitch.accessToken or OPENCLAW_TWITCH_ACCESS_TOKEN for default)",
+      },
+      {
+        name: "multi-account default",
+        cfg: {
+          channels: {
+            twitch: { accounts: { default: { ...testAccount, accessToken: "" } } },
+          },
+        },
+        accountId: "default",
+        expected:
+          "Missing Twitch token for account default (set channels.twitch.accounts.default.accessToken or OPENCLAW_TWITCH_ACCESS_TOKEN for default)",
+      },
+      {
+        name: "named account",
+        cfg: {
+          channels: {
+            twitch: { accounts: { "stream-team": { ...testAccount, accessToken: "" } } },
+          },
+        },
+        accountId: "stream-team",
+        expected:
+          "Missing Twitch token for account stream-team (set channels.twitch.accounts.stream-team.accessToken or OPENCLAW_TWITCH_ACCESS_TOKEN for default)",
+      },
+    ] satisfies Array<{
+      name: string;
+      cfg: OpenClawConfig;
+      accountId: string | undefined;
+      expected: string;
+    }>)(
+      "throws actionable missing-token guidance for $name",
+      async ({ cfg, accountId, expected }) => {
+        resolveTwitchTokenMock.mockReturnValue({
+          token: "",
+          source: "none" as const,
+        });
 
-      await expect(manager.getClient(testAccount)).rejects.toThrow("Missing Twitch token");
-    });
+        await expect(manager.getClient(testAccount, cfg, accountId)).rejects.toThrow(expected);
+      },
+    );
 
     it("should set up message handlers on client connection", async () => {
       await manager.getClient(testAccount);
@@ -687,19 +709,21 @@ describe("TwitchClientManager", () => {
 
     it("should send message successfully", async () => {
       const result = await manager.sendMessage(testAccount, "testchannel", "Hello, world!");
-      const { messageId, ...resultRest } = result;
 
-      expect(resultRest).toEqual({ ok: true });
-      expect(messageId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
+      expect(result).toEqual({
+        ok: true,
+        messageId: expect.stringMatching(
+          /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+        ),
+      });
       expect(mockSay).toHaveBeenCalledWith("testchannel", "Hello, world!");
     });
 
     it("should keep surrogate pairs intact when pre-chunking long messages", async () => {
       const prefix = "a".repeat(499);
 
-      const result = await manager.sendMessage(testAccount, "testchannel", `${prefix}😀b`);
+      await manager.sendMessage(testAccount, "testchannel", `${prefix}😀b`);
 
-      expect(result.ok).toBe(true);
       expect(mockSay.mock.calls).toEqual([
         ["testchannel", prefix],
         ["testchannel", "😀b"],
@@ -710,38 +734,33 @@ describe("TwitchClientManager", () => {
       const result1 = await manager.sendMessage(testAccount, "testchannel", "First message");
       const result2 = await manager.sendMessage(testAccount, "testchannel", "Second message");
 
-      expect(result1.messageId).not.toBe(result2.messageId);
+      expect(result1.ok).toBe(true);
+      expect(result2.ok).toBe(true);
+      expect(result1).not.toEqual(result2);
     });
 
-    it("should handle sending to account's default channel", async () => {
-      const result = await manager.sendMessage(
-        testAccount,
-        testAccount.channel || testAccount.username,
-        "Test message",
-      );
-
-      // Should use the account's channel or username
-      expect(result.ok).toBe(true);
-      expect(mockSay).toHaveBeenCalled();
-    });
-
-    it("should return error on send failure", async () => {
+    it("should log and return a formatted send failure", async () => {
       mockSay.mockRejectedValueOnce(new Error("Rate limited"));
 
-      const result = await manager.sendMessage(testAccount, "testchannel", "Test message");
-
-      expect(result.ok).toBe(false);
-      expect(result.error).toBe("Rate limited");
+      await expect(
+        manager.sendMessage(testAccount, "testchannel", "Test message"),
+      ).resolves.toEqual({
+        ok: false,
+        error: "Rate limited",
+      });
       expect(mockLogger.error).toHaveBeenCalledWith("Failed to send message: Rate limited");
     });
 
     it("should handle unknown error types", async () => {
       mockSay.mockRejectedValueOnce("String error");
 
-      const result = await manager.sendMessage(testAccount, "testchannel", "Test message");
-
-      expect(result.ok).toBe(false);
-      expect(result.error).toBe("String error");
+      await expect(
+        manager.sendMessage(testAccount, "testchannel", "Test message"),
+      ).resolves.toEqual({
+        ok: false,
+        error: "String error",
+      });
+      expect(mockLogger.error).toHaveBeenCalledWith("Failed to send message: String error");
     });
 
     it("should create client if not already connected", async () => {
@@ -751,9 +770,8 @@ describe("TwitchClientManager", () => {
       // Reset connect call count for this specific test
       const connectCallCountBefore = mockConnect.mock.calls.length;
 
-      const result = await manager.sendMessage(testAccount, "testchannel", "Test message");
+      await manager.sendMessage(testAccount, "testchannel", "Test message");
 
-      expect(result.ok).toBe(true);
       expect(mockConnect.mock.calls.length).toBeGreaterThan(connectCallCountBefore);
     });
   });
@@ -919,20 +937,6 @@ describe("TwitchClientManager", () => {
       expect(messages2).toHaveLength(1);
       expect(messages1[0]?.message).toBe("msg1");
       expect(messages2[0]?.message).toBe("msg2");
-    });
-
-    it("should handle rapid client creation requests", async () => {
-      const promises = [
-        manager.getClient(testAccount),
-        manager.getClient(testAccount),
-        manager.getClient(testAccount),
-      ];
-
-      await Promise.all(promises);
-
-      // Note: The implementation doesn't handle concurrent getClient calls,
-      // so multiple connections may be created. This is expected behavior.
-      expect(mockConnect).toHaveBeenCalled();
     });
   });
 });

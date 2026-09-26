@@ -10,10 +10,11 @@ export interface FullReleaseCandidateRequest {
     prepublishPluginRegistry: 1;
     sharedImage: 1;
   };
+  packagePublished: boolean;
   releaseProfile: string;
   releaseSoak: boolean;
   repository: string;
-  schema: "openclaw.full-release-candidate-request/v1";
+  schema: "openclaw.full-release-candidate-request/v2";
   sharedImagePolicy: string;
   targetSha: string;
   toolingSha: string;
@@ -98,4 +99,7 @@ export function canonicalFullReleaseCandidateRequestJson(value: unknown): string
 export function candidateRequestSha256(value: unknown): string;
 export function fullReleaseCandidateArtifactName(requestSha256: string): string;
 export function validateFullReleaseCandidateRequest(value: unknown): FullReleaseCandidateRequest;
+export function validateRecordedFullReleaseCandidateRequest(
+  value: unknown,
+): FullReleaseCandidateRequest;
 export function validateFullReleaseCandidateBinding(value: unknown): FullReleaseCandidateBinding;

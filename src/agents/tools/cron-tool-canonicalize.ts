@@ -9,7 +9,7 @@ import { isRecord } from "../../utils.js";
 import { isStringOption } from "../../utils/string-readers.js";
 
 const CRON_SCHEDULE_KINDS = ["at", "every", "cron", "on-exit", "stream"] as const;
-const CRON_PAYLOAD_KINDS = ["systemEvent", "agentTurn", "script"] as const;
+const CRON_PAYLOAD_KINDS = ["systemEvent", "agentTurn", "script", "command"] as const;
 const CRON_FLAT_PAYLOAD_KEYS = [
   "message",
   "text",
@@ -73,7 +73,7 @@ function isCronScheduleKind(value: unknown): value is (typeof CRON_SCHEDULE_KIND
 }
 
 function isCronPayloadKind(value: unknown): value is (typeof CRON_PAYLOAD_KINDS)[number] {
-  return value === "systemEvent" || value === "agentTurn" || value === "script";
+  return isStringOption(value, CRON_PAYLOAD_KINDS);
 }
 
 function isStringArrayOrNull(value: unknown): boolean {
@@ -125,6 +125,9 @@ function setScheduleAtMs(schedule: Record<string, unknown>, value: unknown): voi
   const atMs = typeof value === "number" ? value : Number(value);
   // Invalid/out-of-range timestamps stay raw so cron gateway validation reports the user error.
   schedule.at = Number.isFinite(atMs) ? (timestampMsToIsoString(Math.floor(atMs)) ?? value) : value;
+  if (!isCronScheduleKind(schedule.kind)) {
+    schedule.kind = "at";
+  }
 }
 
 function canonicalizeCronToolSchedule(value: Record<string, unknown>): void {
@@ -134,9 +137,6 @@ function canonicalizeCronToolSchedule(value: Record<string, unknown>): void {
   if (schedule.atMs !== undefined) {
     setScheduleAtMs(schedule, schedule.atMs);
     delete schedule.atMs;
-    if (!isCronScheduleKind(schedule.kind)) {
-      schedule.kind = "at";
-    }
   }
   if (schedule.everyMs === undefined && schedule.every !== undefined) {
     schedule.everyMs = schedule.every;
@@ -169,9 +169,6 @@ function canonicalizeCronToolSchedule(value: Record<string, unknown>): void {
   if (value.atMs !== undefined) {
     setScheduleAtMs(schedule, value.atMs);
     delete value.atMs;
-    if (!isCronScheduleKind(schedule.kind)) {
-      schedule.kind = "at";
-    }
     hasSchedule = true;
   }
 
@@ -251,12 +248,13 @@ function canonicalizeCronToolPayload(value: Record<string, unknown>): void {
     if (isNonEmptyString(payload.script)) {
       payload.kind = "script";
     } else {
+      // Timeout alone inherits the stored kind; text+timeout is an agent prompt shorthand.
       const hasAgentTurnSignal =
         isNonEmptyString(payload.message) ||
         isNonEmptyString(payload.model) ||
         payload.model === null ||
         isNonEmptyString(payload.thinking) ||
-        typeof payload.timeoutSeconds === "number" ||
+        (typeof payload.timeoutSeconds === "number" && isNonEmptyString(payload.text)) ||
         typeof payload.lightContext === "boolean" ||
         typeof payload.allowUnsafeExternalContent === "boolean" ||
         (payload.fallbacks !== undefined && isStringArrayOrNull(payload.fallbacks));

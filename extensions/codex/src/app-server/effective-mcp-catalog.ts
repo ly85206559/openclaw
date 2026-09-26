@@ -157,7 +157,7 @@ export async function loadCodexEffectiveMcpCatalog(
   params: AgentHarnessMcpCatalogParams,
   options: { bindingStore: CodexAppServerBindingStore },
 ): Promise<McpToolCatalog | undefined> {
-  const binding = await options.bindingStore.read(
+  const binding = options.bindingStore.read(
     sessionBindingIdentity({
       agentId: params.agentId,
       sessionId: params.sessionId,
@@ -168,7 +168,7 @@ export async function loadCodexEffectiveMcpCatalog(
   if (!binding?.clientId) {
     return undefined;
   }
-  const retained = retainSharedCodexAppServerClientByInstanceId(binding.clientId);
+  const retained = await retainSharedCodexAppServerClientByInstanceId(binding.clientId);
   if (!retained) {
     return undefined;
   }
@@ -180,6 +180,6 @@ export async function loadCodexEffectiveMcpCatalog(
       toolOverrides: params.toolOverrides,
     });
   } finally {
-    retained.release();
+    await retained.release();
   }
 }

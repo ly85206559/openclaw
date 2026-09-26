@@ -1,6 +1,7 @@
 // Xai tests cover tts plugin behavior.
 import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
+import { createStreamingResponse } from "../test-support/streaming-error-response.js";
 import { XAI_BASE_URL } from "./model-definitions.js";
 import { isValidXaiTtsVoice, XAI_TTS_FALLBACK_VOICES } from "./speech-provider-metadata.js";
 import { listXaiTtsVoices, xaiTTS, xaiTTSStream } from "./tts.js";
@@ -66,34 +67,9 @@ const { FakeWebSocket } = vi.hoisted(() => {
   return { FakeWebSocket: MockWebSocket };
 });
 
-vi.mock("ws", () => ({
-  default: FakeWebSocket,
+vi.mock("./ws-runtime.js", () => ({
+  WebSocket: FakeWebSocket,
 }));
-
-function createStreamingAudioResponse(params: {
-  chunkCount: number;
-  chunkSize: number;
-  byte: number;
-}): { response: Response; getReadCount: () => number } {
-  let reads = 0;
-  const stream = new ReadableStream<Uint8Array>({
-    pull(controller) {
-      if (reads >= params.chunkCount) {
-        controller.close();
-        return;
-      }
-      reads += 1;
-      controller.enqueue(new Uint8Array(params.chunkSize).fill(params.byte));
-    },
-  });
-  return {
-    response: new Response(stream, {
-      status: 200,
-      headers: { "Content-Type": "audio/mpeg" },
-    }),
-    getReadCount: () => reads,
-  };
-}
 
 describe("xai tts", () => {
   const originalFetch = globalThis.fetch;
@@ -132,25 +108,21 @@ describe("xai tts", () => {
   describe("listXaiTtsVoices", () => {
     it("maps the authenticated catalog and sends the expected request", async () => {
       vi.stubEnv("OPENCLAW_VERSION", "2026.7.9");
-      const fetchMock = vi.fn(
-        async (_input: RequestInfo | URL, _init?: RequestInit) =>
-          new Response(
-            JSON.stringify({
-              voices: [
-                {
-                  voice_id: "altair",
-                  name: "Altair",
-                  language: "en",
-                  gender: "male",
-                },
-                { voice_id: "  celeste  ", name: " Celeste " },
-                { voice_id: " " },
-                { name: "missing id" },
-                null,
-              ],
-            }),
-            { status: 200, headers: { "Content-Type": "application/json" } },
-          ),
+      const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        Response.json({
+          voices: [
+            {
+              voice_id: "altair",
+              name: "Altair",
+              language: "en",
+              gender: "male",
+            },
+            { voice_id: "  celeste  ", name: " Celeste " },
+            { voice_id: " " },
+            { name: "missing id" },
+            null,
+          ],
+        }),
       );
       globalThis.fetch = fetchMock as unknown as typeof fetch;
 
@@ -205,13 +177,7 @@ describe("xai tts", () => {
     });
 
     it("rejects malformed catalog payloads", async () => {
-      globalThis.fetch = vi.fn(
-        async () =>
-          new Response(JSON.stringify({ items: [] }), {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          }),
-      ) as unknown as typeof fetch;
+      globalThis.fetch = vi.fn(async () => Response.json({ items: [] })) as unknown as typeof fetch;
 
       await expect(listXaiTtsVoices({ apiKey: "xai-key" })).rejects.toThrow(
         "xAI TTS voices: malformed JSON response",
@@ -219,12 +185,8 @@ describe("xai tts", () => {
     });
 
     it("caps catalog responses before parsing JSON", async () => {
-      globalThis.fetch = vi.fn(
-        async () =>
-          new Response(JSON.stringify({ voices: [], padding: "x".repeat(1024 * 1024) }), {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          }),
+      globalThis.fetch = vi.fn(async () =>
+        Response.json({ voices: [], padding: "x".repeat(1024 * 1024) }),
       ) as unknown as typeof fetch;
 
       await expect(listXaiTtsVoices({ apiKey: "xai-key" })).rejects.toThrow(
@@ -596,10 +558,11 @@ describe("xai tts", () => {
     });
 
     it("caps streamed audio responses instead of buffering oversized TTS output", async () => {
-      const streamed = createStreamingAudioResponse({
+      const streamed = createStreamingResponse({
         chunkCount: 20,
         chunkSize: 1024,
         byte: 121,
+        headers: { "Content-Type": "audio/mpeg" },
       });
       const fetchMock = vi.fn(async () => streamed.response);
       globalThis.fetch = fetchMock as unknown as typeof fetch;

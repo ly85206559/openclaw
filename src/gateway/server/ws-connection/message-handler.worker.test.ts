@@ -3,7 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
-  WORKER_GITHUB_PUBLICATION_PROTOCOL_FEATURE,
   WORKER_LIVE_EVENT_PROTOCOL_FEATURE,
   WORKER_PORTAL_PROTOCOL_FEATURE,
   WORKER_SESSION_TOOLS_PROTOCOL_FEATURE,
@@ -20,11 +19,13 @@ import {
 } from "../../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../../state/openclaw-state-db.js";
+import { placementTurnOwner } from "../../worker-environments/placement-record.js";
 import { createWorkerSessionPlacementStore } from "../../worker-environments/placement-store.js";
-import { signalWorkerTurnClaimClosed } from "../../worker-environments/placement-turn-claim-events.js";
+import { advancePlacementFixtureToActive } from "../../worker-environments/placement-test-fixtures.js";
 import { prepareWorkerAgentRuntimeIdentity } from "../../worker-environments/worker-turn-payload.js";
 import {
   CREDENTIAL,
@@ -59,12 +60,6 @@ const SESSION_TOOL_CASES = [
       sessionKey: "agent:main:dashboard:child",
       message: "status",
     },
-  },
-  {
-    name: "publish",
-    method: "worker.github.publish",
-    toolName: "github_publish",
-    request: { toolCallId: "call-publish", title: "Publish the fix" },
   },
   {
     name: "portal",
@@ -395,9 +390,7 @@ describe("dedicated worker websocket protocol", () => {
     const requiredFeature =
       testCase.toolName === "portal"
         ? WORKER_PORTAL_PROTOCOL_FEATURE
-        : testCase.toolName === "github_publish"
-          ? WORKER_GITHUB_PUBLICATION_PROTOCOL_FEATURE
-          : WORKER_SESSION_TOOLS_PROTOCOL_FEATURE;
+        : WORKER_SESSION_TOOLS_PROTOCOL_FEATURE;
     const harness = attachHarness({
       identity: {
         ...ATTACHED_IDENTITY,
@@ -695,13 +688,13 @@ describe("dedicated worker websocket protocol", () => {
     { scenario: "a worker whose exact placement closed", fence: "placement", accepted: false },
     { scenario: "a worker during a restart signal", fence: "restart", accepted: false },
   ] as const)("handles $scenario while suspension drains", async ({ fence, accepted }) => {
-    const claim = ATTACHED_IDENTITY.turnClaim;
-    if (!claim) {
+    const templateClaim = ATTACHED_IDENTITY.turnClaim;
+    if (!templateClaim) {
       throw new Error("expected attached worker turn claim");
     }
     const preparedRunAdmission = prepareSystemAgentRunAdmission(
       {},
-      claim.runId,
+      templateClaim.runId,
       "main",
       "test.worker-suspension",
     );
@@ -710,11 +703,24 @@ describe("dedicated worker websocket protocol", () => {
     );
     const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
     const placements = createWorkerSessionPlacementStore({ database });
-    let placementActive = true;
-    vi.spyOn(placements, "validateTurnClaim").mockImplementation(
-      (current) => current === claim && placementActive,
-    );
-    const storePath = database.path;
+    const session = {
+      sessionId: templateClaim.sessionId,
+      agentId: "main",
+      sessionKey: "agent:main:worker-suspension",
+    };
+    const active = advancePlacementFixtureToActive(placements, database, session);
+    const claim = await placements.claimTurn({
+      ...session,
+      claimId: templateClaim.claimId,
+      runId: templateClaim.runId,
+      owner: placementTurnOwner(active),
+    });
+    const identity = {
+      ...ATTACHED_IDENTITY,
+      environmentId: active.environmentId,
+      ownerEpoch: active.activeOwnerEpoch,
+      turnClaim: claim,
+    };
     const rootAdmission = tryBeginGatewayRootWorkAdmission();
     if (!rootAdmission) {
       throw new Error("expected parent worker turn root admission");
@@ -724,10 +730,15 @@ describe("dedicated worker websocket protocol", () => {
     try {
       const { runtimeIdentity } = await rootAdmission.run(() =>
         prepareWorkerAgentRuntimeIdentity({
-          agentId: "main",
+          agentId: session.agentId,
           placements,
-          runtimeInstanceId: ATTACHED_IDENTITY.environmentId,
-          sessionKey: "agent:main:worker-suspension",
+          runtimeInstanceId: identity.environmentId,
+          sessionKey: session.sessionKey,
+          sessionTarget: {
+            ...session,
+            storePath: path.join(stateDir, "agents", "main", "sessions", "sessions.json"),
+          },
+          assertSourceCurrent: () => {},
           turn: {
             preparedRunAdmission,
             runId: claim.runId,
@@ -736,21 +747,23 @@ describe("dedicated worker websocket protocol", () => {
         }),
       );
       expect(runtimeIdentity.executionIdentityToken).toBeUndefined();
-      const harness = attachHarness({ identity: ATTACHED_IDENTITY });
+      const harness = attachHarness({ identity });
       await admit(harness);
       suspension = tryBeginGatewaySuspendAdmission(() => {});
       expect(suspension?.drain()).toBe(true);
       if (fence === "run") {
         preparedRunAdmission.close();
       } else if (fence === "placement") {
-        placementActive = false;
-        signalWorkerTurnClaimClosed(storePath, claim);
+        await placements.releaseTurn(claim);
       } else if (fence === "restart") {
         restartSignal = beginGatewayRestartSignalAdmission();
         expect(restartSignal).not.toBeNull();
       }
 
-      harness.sendRequest("worker.transcript.commit", TRANSCRIPT_COMMIT);
+      harness.sendRequest("worker.transcript.commit", {
+        ...TRANSCRIPT_COMMIT,
+        runEpoch: identity.ownerEpoch,
+      });
 
       if (accepted) {
         await waitForWorkerProtocol(() =>
@@ -767,9 +780,12 @@ describe("dedicated worker websocket protocol", () => {
     } finally {
       restartSignal?.rollback();
       suspension?.release();
-      signalWorkerTurnClaimClosed(storePath, claim);
+      if (placements.validateTurnClaim(claim)) {
+        await placements.releaseTurn(claim);
+      }
       preparedRunAdmission.close();
       rootAdmission.release();
+      await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
       await fs.rm(stateDir, { recursive: true, force: true });
     }

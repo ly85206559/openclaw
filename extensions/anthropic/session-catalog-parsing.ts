@@ -4,7 +4,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CLAUDE_LOCAL_SESSION_HOST_ID } from "./session-catalog-adoption.js";
 import { isExactClaudeSessionCursor } from "./session-catalog-cursor.js";
-import { MAX_STRING_LENGTH, parsePullRequestSummary } from "./session-catalog-discovery.js";
+import { MAX_STRING_LENGTH, parsePullRequestSummary } from "./session-catalog-desktop.js";
 import { ClaudeCatalogParamsError } from "./session-catalog-shared.js";
 import type {
   ClaudeSessionCatalogPage,
@@ -93,19 +93,15 @@ export function readListParams(value: unknown): {
   };
 }
 
-export function readTranscriptParams(
-  value: unknown,
-  options: { includeHostId?: boolean } = {},
-): { threadId: string; cursor?: string; limit: number } {
+export function readTranscriptParams(value: unknown): {
+  threadId: string;
+  cursor?: string;
+  limit: number;
+} {
   if (!isRecord(value)) {
     throw new ClaudeCatalogParamsError("Claude session read parameters must be an object");
   }
-  const allowed = new Set([
-    "threadId",
-    "cursor",
-    "limit",
-    ...(options.includeHostId ? ["hostId"] : []),
-  ]);
+  const allowed = new Set(["threadId", "cursor", "limit"]);
   const unknown = Object.keys(value).find((key) => !allowed.has(key));
   if (unknown) {
     throw new ClaudeCatalogParamsError(`unknown Claude session read parameter: ${unknown}`);

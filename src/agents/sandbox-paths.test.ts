@@ -147,6 +147,9 @@ describe("assertSandboxPath", () => {
           /(?:resolves outside|escapes) sandbox root/i,
         );
         await expect(
+          assertSandboxPath({ filePath: "sub/up/../outside/secret.txt", cwd: root, root }),
+        ).rejects.toThrow(/(?:resolves outside|escapes) sandbox root/i);
+        await expect(
           assertSandboxPath({
             filePath: `${root}/sub/up/../outside/new.txt`,
             cwd: root,
@@ -160,6 +163,13 @@ describe("assertSandboxPath", () => {
         await fs.mkdir(path.join(root, "a"));
         await fs.mkdir(path.join(root, "b"));
         await fs.symlink("../b", path.join(root, "a", "up"));
+        await fs.writeFile(path.join(root, "inside.txt"), "inside", "utf8");
+        await fs.symlink(path.join(outside, "secret.txt"), path.join(root, "a", "inside.txt"));
+        const safeRawPath = "a/up/../inside.txt";
+        await expect(fs.readFile(`${root}/${safeRawPath}`, "utf8")).resolves.toBe("inside");
+        await expect(assertSandboxPath({ filePath: safeRawPath, cwd: root, root })).rejects.toThrow(
+          /symlink escapes sandbox root/i,
+        );
         await fs.symlink(path.join(outside, "secret.txt"), path.join(root, "escape"));
         const escapedFinalSymlink = `${root}/a/up/../escape`;
         await expect(fs.readFile(escapedFinalSymlink, "utf8")).resolves.toBe("outside");
@@ -292,9 +302,9 @@ describe("assertSandboxPath", () => {
         const escaped = `${parent}/jump/../workspace/proof.txt`;
         await expect(fs.readFile(escaped, "utf8")).resolves.toBe("outside");
         expect(path.resolve(escaped)).toBe(path.join(root, "proof.txt"));
-        await expect(assertSandboxPath({ filePath: escaped, cwd: root, root })).rejects.toThrow(
-          /(?:resolves outside|escapes) sandbox root/i,
-        );
+        await expect(
+          assertSandboxPath({ filePath: escaped, cwd: root, root }),
+        ).rejects.toMatchObject({ code: "outside-workspace", category: "policy" });
         await expect(
           assertSandboxPath({
             filePath: `${parent}/plain/../workspace/proof.txt`,

@@ -69,7 +69,10 @@ function harness() {
     }),
     quiesceWorkspace: vi.fn(async () => ({ assertActive: async () => {}, resume: async () => {} })),
     reconcileWorkspace: vi.fn(async (request) => {
-      request.journal.commit(MANIFEST_REF);
+      if (request.source.kind !== "local") {
+        throw new Error("expected a local workspace source");
+      }
+      request.source.journal.commit(MANIFEST_REF);
       return {
         manifestRef: MANIFEST_REF,
         changed: false,
@@ -113,7 +116,7 @@ function harness() {
     environments: {
       get: () => environment,
       acquireTurnCredential: async () => credential(),
-      acknowledgeCredentialDelivery: () => true,
+      acknowledgeCredentialDelivery: async () => true,
       startTunnel: async () => tunnel,
       stopTunnel: async () => {},
       destroy: async () => environment,
@@ -575,7 +578,7 @@ describe("cloud turn media boundary", () => {
           if (!claim) {
             throw new Error("missing active claim");
           }
-          placements.releaseTurn(claim);
+          await placements.releaseTurn(claim);
         }
         cancelledAtBoundary = request.signal?.aborted;
         request.signal?.throwIfAborted();

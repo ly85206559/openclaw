@@ -56,20 +56,11 @@ export function assertCronCreatorAuthorityResolutionAvailable(params: {
   }
 }
 
-async function prepareCronJobUpdateForGateway(params: {
-  id: string;
-  patch: Record<string, unknown>;
-  creatorToolAllowlist: readonly CronCreatorToolAllowlistEntry[] | undefined;
-  creatorToolAllowlistCaptureRef?: CronToolsAllowCaptureRef;
-  creatorAuthorityComplete: boolean;
-  resolveCreatorToolAuthority?: (options?: {
-    signal?: AbortSignal;
-  }) => Promise<CronCreatorToolAuthoritySnapshot>;
-  operationSignal?: AbortSignal;
-  creatorAuthorityUnavailableReason?: "queued-local-operator-configured-mcp";
-  gatewayOpts: GatewayCallOptions;
-  callGateway: GatewayToolCaller;
-}): Promise<{
+async function prepareCronJobUpdateForGateway(
+  params: Parameters<typeof updateCronJobFromAgentTool>[0] & {
+    creatorAuthorityComplete: boolean;
+  },
+): Promise<{
   patch: Record<string, unknown>;
   expectedConfigRevision?: string;
   resolvedAuthority?: CronCreatorToolAuthoritySnapshot;
@@ -140,6 +131,7 @@ function isCronJobConfigRevisionConflict(error: unknown): boolean {
 export async function updateCronJobFromAgentTool(params: {
   id: string;
   patch: Record<string, unknown>;
+  adminManagement?: boolean;
   creatorToolAllowlist: readonly CronCreatorToolAllowlistEntry[] | undefined;
   creatorToolAllowlistCaptureRef?: CronToolsAllowCaptureRef;
   resolveCreatorToolAuthority?: (options?: {
@@ -169,9 +161,8 @@ export async function updateCronJobFromAgentTool(params: {
         resolveCreatorToolAuthority === undefined &&
         params.creatorAuthorityUnavailableReason === undefined,
       resolveCreatorToolAuthority,
-      operationSignal: params.operationSignal,
     });
-    if (callerIncludedPayloadPatch) {
+    if (callerIncludedPayloadPatch && !params.adminManagement) {
       // Kind-less caller payloads inherit the stored kind above. Recheck those
       // edits, but not a toolsAllow cap synthesized internally.
       assertNoCronShellExecution(prepared.patch);

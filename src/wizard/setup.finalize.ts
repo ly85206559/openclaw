@@ -4,6 +4,7 @@ import path from "node:path";
 import { restoreTerminalState } from "../../packages/terminal-core/src/restore.js";
 import { resolveDefaultAgentDir } from "../agents/agent-scope-config.js";
 import { describeCodexNativeWebSearch } from "../agents/codex-native-web-search.shared.js";
+import { PreparedModelCatalogConfigReplacedError } from "../agents/prepared-model-catalog.errors.js";
 import { hasAuthProfileForProvider } from "../agents/tools/model-config.helpers.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../agents/workspace.js";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -15,10 +16,6 @@ import {
   buildGatewayInstallPlan,
   gatewayInstallErrorHint,
 } from "../commands/daemon-install-helpers.js";
-import {
-  DEFAULT_GATEWAY_DAEMON_RUNTIME,
-  GATEWAY_DAEMON_RUNTIME_OPTIONS,
-} from "../commands/daemon-runtime.js";
 import { resolveGatewayInstallToken } from "../commands/gateway-install-token.js";
 import { resolveGatewayStartupTiming } from "../commands/gateway-startup-timing.js";
 import { formatHealthCheckFailure } from "../commands/health-format.js";
@@ -60,6 +57,7 @@ import { t } from "./i18n/index.js";
 import type { WizardPrompter } from "./prompts.js";
 import { setupWizardShellCompletion } from "./setup.completion.js";
 import { resolveSetupSecretInputString } from "./setup.secret-input.js";
+import { resolveOnboardingGatewayRuntime } from "./setup.service-runtime.js";
 import type { GatewayWizardSettings, WizardFlow } from "./setup.types.js";
 
 type FinalizeOnboardingOptions = {
@@ -145,22 +143,6 @@ async function closeSessionGatewayForOnboarding(params: {
   await params.sessionGateway.close({ reason: params.reason }).catch((error: unknown) => {
     params.runtime.error(formatErrorMessage(error));
   });
-}
-
-function getLocalizedGatewayDaemonRuntimeOptions() {
-  return GATEWAY_DAEMON_RUNTIME_OPTIONS.map((option) => ({
-    hint: t(
-      option.value === "node"
-        ? "wizard.finalize.daemonRuntimeNodeHint"
-        : "wizard.finalize.daemonRuntimeBunHint",
-    ),
-    label: t(
-      option.value === "node"
-        ? "wizard.finalize.daemonRuntimeNode"
-        : "wizard.finalize.daemonRuntimeBun",
-    ),
-    value: option.value,
-  }));
 }
 
 const loadSearchSetupModule = createLazyRuntimeModule(() => import("../flows/search-setup.js"));
@@ -252,23 +234,6 @@ export async function ensureGatewayServiceForOnboarding(params: {
 }): Promise<{ gateway: GatewayServiceSetupOutcome; containerWithoutUserSystemd: boolean }> {
   const { flow, opts, nextConfig, settings, prompter, runtime } = params;
 
-  const withWizardProgress = async <T>(
-    label: string,
-    optionsLocal: { doneMessage?: string | (() => string | undefined) },
-    work: (progress: { update: (message: string) => void }) => Promise<T>,
-  ): Promise<T> => {
-    const progress = prompter.progress(label);
-    try {
-      return await work(progress);
-    } finally {
-      progress.stop(
-        typeof optionsLocal.doneMessage === "function"
-          ? optionsLocal.doneMessage()
-          : optionsLocal.doneMessage,
-      );
-    }
-  };
-
   if (isGatewayExternallySupervised()) {
     await prompter.note(
       formatExternalSupervisorActionRequired("manage the gateway service"),
@@ -295,7 +260,8 @@ export async function ensureGatewayServiceForOnboarding(params: {
     );
   }
 
-  if (process.platform === "linux" && systemdAvailable) {
+  // Foreground setup must not enable lingering as a side effect of skipping the service.
+  if (process.platform === "linux" && systemdAvailable && opts.installDaemon !== false) {
     const { ensureSystemdUserLingerInteractive } = await import("../commands/systemd-linger.js");
     await ensureSystemdUserLingerInteractive({
       runtime,
@@ -344,20 +310,6 @@ export async function ensureGatewayServiceForOnboarding(params: {
 
   let gateway: GatewayServiceSetupOutcome = { status: "ready", action: "reused" };
   if (installDaemon) {
-    const daemonRuntime =
-      flow === "quickstart"
-        ? DEFAULT_GATEWAY_DAEMON_RUNTIME
-        : await prompter.select({
-            message: t("wizard.finalize.daemonRuntime"),
-            options: getLocalizedGatewayDaemonRuntimeOptions(),
-            initialValue: opts.daemonRuntime ?? DEFAULT_GATEWAY_DAEMON_RUNTIME,
-          });
-    if (flow === "quickstart") {
-      await prompter.note(
-        t("wizard.finalize.quickstartNodeRuntime"),
-        t("wizard.finalize.daemonRuntime"),
-      );
-    }
     const service = resolveGatewayService();
     if (params.loadedAction === "resume") {
       try {
@@ -406,25 +358,24 @@ export async function ensureGatewayServiceForOnboarding(params: {
         }));
       if (action === "restart") {
         let restartDoneMessage = t("wizard.finalize.gatewayServiceRestarted");
-        await withWizardProgress(
-          t("wizard.finalize.gatewayService"),
-          { doneMessage: () => restartDoneMessage },
-          async (progress) => {
-            progress.update(t("wizard.finalize.gatewayServiceRestarting"));
-            const restartResult = await service.restart({
-              env: process.env,
-              stdout: process.stdout,
-            });
-            const restartStatus = describeGatewayServiceRestart("Gateway", restartResult);
-            restartDoneMessage = restartStatus.scheduled
-              ? t("wizard.finalize.gatewayServiceRestartScheduled")
-              : t("wizard.finalize.gatewayServiceRestarted");
-            gateway = {
-              status: "ready",
-              action: restartStatus.scheduled ? "restart-scheduled" : "restarted",
-            };
-          },
-        );
+        const progress = prompter.progress(t("wizard.finalize.gatewayService"));
+        try {
+          progress.update(t("wizard.finalize.gatewayServiceRestarting"));
+          const restartResult = await service.restart({
+            env: process.env,
+            stdout: process.stdout,
+          });
+          const restartStatus = describeGatewayServiceRestart("Gateway", restartResult);
+          restartDoneMessage = restartStatus.scheduled
+            ? t("wizard.finalize.gatewayServiceRestartScheduled")
+            : t("wizard.finalize.gatewayServiceRestarted");
+          gateway = {
+            status: "ready",
+            action: restartStatus.scheduled ? "restart-scheduled" : "restarted",
+          };
+        } finally {
+          progress.stop(restartDoneMessage);
+        }
       } else if (action === "reinstall") {
         // Preserve the old definition so the install owner can replace or restore it.
         shouldInstall = true;
@@ -459,28 +410,33 @@ export async function ensureGatewayServiceForOnboarding(params: {
             t("wizard.finalize.gatewayInstallFixAuth"),
           ].join(" ");
         } else {
-          const existingCommand = await service.readCommand(process.env).catch(() => null);
-          const { programArguments, workingDirectory, environment, environmentValueSources } =
-            await buildGatewayInstallPlan({
-              env: process.env,
-              port: settings.port,
-              runtime: daemonRuntime,
-              existingCommand,
-              warn: (message, title) => {
-                installWarnings.push({ message, title });
-              },
-              config: nextConfig,
-            });
+          const existingCommand = await service.readCommand(process.env);
+          const selection = await resolveOnboardingGatewayRuntime({
+            env: process.env,
+            existingCommand,
+            runtime: opts.daemonRuntime,
+            flow,
+            prompter,
+          });
+          const plan = await buildGatewayInstallPlan({
+            env: selection.env,
+            port: settings.port,
+            runtime: selection.runtime,
+            pinnedRuntimePath: selection.pinnedRuntimePath,
+            existingCommand,
+            warn: (message, title) => {
+              installWarnings.push({ message, title });
+            },
+            config: nextConfig,
+          });
           await flushInstallWarnings();
 
           progress.update(t("wizard.finalize.gatewayServiceInstalling"));
           await service.install({
             env: process.env,
             stdout: process.stdout,
-            programArguments,
-            workingDirectory,
-            environment,
-            environmentValueSources,
+            ...plan,
+            runtimePinUpdate: selection.runtimePinUpdate,
           });
           gateway = { status: "ready", action: "installed" };
         }
@@ -758,18 +714,29 @@ export async function finalizeSetupWizard(
     const modelCatalog = await loadPreparedModelCatalogSnapshot({
       config: nextConfig,
       readOnly: true,
+    }).catch((error: unknown) => {
+      if (!(error instanceof PreparedModelCatalogConfigReplacedError)) {
+        throw error;
+      }
+      // Finalization precedes the deferred Gateway restart, so the active owner
+      // may still represent the previous config. Never reuse its facts for nextConfig.
+      return undefined;
     });
-    const modelCatalogFacts = resolveDefaultModelCatalogFacts(nextConfig, modelCatalog.entries, {
-      routeVariants: modelCatalog.routeVariants,
-    });
-    const modelAuthStatus = resolveDefaultModelAuthStatus(nextConfig, {
-      agentDir,
-      ...(modelCatalogFacts.observedRoutes
-        ? { observedRoutes: modelCatalogFacts.observedRoutes }
-        : {}),
-    });
+    const modelCatalogFacts = modelCatalog
+      ? resolveDefaultModelCatalogFacts(nextConfig, modelCatalog.entries, {
+          routeVariants: modelCatalog.routeVariants,
+        })
+      : undefined;
+    const modelAuthStatus = modelCatalogFacts
+      ? resolveDefaultModelAuthStatus(nextConfig, {
+          agentDir,
+          ...(modelCatalogFacts.observedRoutes
+            ? { observedRoutes: modelCatalogFacts.observedRoutes }
+            : {}),
+        })
+      : undefined;
     const shouldSeedBootstrapHatch =
-      hasBootstrap && options.hadExistingConfig !== true && modelAuthStatus.status === "ready";
+      hasBootstrap && options.hadExistingConfig !== true && modelAuthStatus?.status === "ready";
 
     await prompter.note(
       [
@@ -798,7 +765,7 @@ export async function finalizeSetupWizard(
           t("wizard.finalize.hatchYourAgent"),
         );
       }
-      if (modelAuthStatus.status === "missing") {
+      if (modelAuthStatus?.status === "missing") {
         await prompter.note(
           [
             t("wizard.finalize.noModelAuth", { provider: modelAuthStatus.provider }),

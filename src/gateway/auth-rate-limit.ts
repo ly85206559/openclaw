@@ -14,28 +14,22 @@
  *   local CLI sessions are never locked out. Failed auth still incurs a
  *   bounded, escalating delay.
  * - The module is side-effect-free: callers create an instance via
- *   {@link createAuthRateLimiter} and pass it where needed.
+ *   {@link createGatewayAuthRateLimiter} and pass it where needed.
  */
 
 import {
   resolveIntegerOption,
   resolveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
+import type { GatewayAuthRateLimitConfig } from "../config/types.gateway.js";
+import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import { isLoopbackAddress, resolveClientIp } from "./net.js";
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
-export interface RateLimitConfig {
-  /** Maximum failed attempts before blocking.  @default 10 */
-  maxAttempts?: number;
-  /** Sliding window duration in milliseconds.     @default 60_000 (1 min) */
-  windowMs?: number;
-  /** Lockout duration in milliseconds after the limit is exceeded.  @default 300_000 (5 min) */
-  lockoutMs?: number;
-  /** Exempt loopback (localhost) addresses from rate limiting.  @default true */
-  exemptLoopback?: boolean;
+export interface RateLimitConfig extends GatewayAuthRateLimitConfig {
   /** Background prune interval in milliseconds; set <= 0 to disable auto-prune.  @default 60_000 */
   pruneIntervalMs?: number;
   /** Maximum tracked client identities before old unlocked entries are evicted.  @default 10_000 */
@@ -52,12 +46,8 @@ export const AUTH_RATE_LIMIT_SCOPE_NODE_PAIRING = "node-pairing";
 // Paired-node approval-surface changes use a dedicated limiter so reconnect
 // storms cannot queue unbounded writes behind the shared pairing-state lock.
 export const AUTH_RATE_LIMIT_SCOPE_NODE_REAPPROVAL = "node-reapproval";
-// Per-IP gate for the pre-auth bootstrap-token verify path.
-// `verifyDeviceBootstrapToken` is `withLock`-serialized in
-// `device-bootstrap.ts` and runs fs read + fs write on every attempt;
-// without a scope-specific limiter, attackers presenting a valid
-// device signature can queue the bootstrap-pairing flow behind their
-// requests, blocking legitimate node onboarding during the attack.
+// Bootstrap verification queues SQLite worker operations behind the shared lock.
+// Limit attempts before they can delay legitimate onboarding.
 export const AUTH_RATE_LIMIT_SCOPE_BOOTSTRAP_TOKEN = "bootstrap-token";
 // Public join-code exchange burns SQLite state, so misses are serialized and
 // throttled before they can queue unbounded writes behind the shared DB lock.
@@ -177,23 +167,28 @@ function resolvePruneIntervalMs(value: number | undefined): number {
   return resolveTimerTimeoutMs(value, PRUNE_INTERVAL_MS);
 }
 
-export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter {
-  const maxAttempts = config?.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
-  const windowMs = resolveTimerTimeoutMs(config?.windowMs, DEFAULT_WINDOW_MS, 0);
-  const lockoutMs = resolveTimerTimeoutMs(config?.lockoutMs, DEFAULT_LOCKOUT_MS, 0);
-  const exemptLoopback = config?.exemptLoopback ?? true;
+function resolveAuthRateLimitPolicy(config?: GatewayAuthRateLimitConfig) {
+  return {
+    maxAttempts: config?.maxAttempts ?? DEFAULT_MAX_ATTEMPTS,
+    windowMs: resolveTimerTimeoutMs(config?.windowMs, DEFAULT_WINDOW_MS, 0),
+    lockoutMs: resolveTimerTimeoutMs(config?.lockoutMs, DEFAULT_LOCKOUT_MS, 0),
+    exemptLoopback: config?.exemptLoopback ?? true,
+  };
+}
+
+export function createGatewayAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter & {
+  updateConfig: (config?: GatewayAuthRateLimitConfig) => void;
+} {
+  let policy = resolveAuthRateLimitPolicy(config);
   const pruneIntervalMs = resolvePruneIntervalMs(config?.pruneIntervalMs);
   const maxEntries = resolveIntegerOption(config?.maxEntries, DEFAULT_MAX_ENTRIES, { min: 1 });
 
   const entries = new Map<string, RateLimitEntry>();
-  // Penalty deadlines are per key, not per in-flight request: concurrent failures
-  // for one key all wait out the same deadline, so an attacker cannot buy free
-  // guesses by keeping timers occupied. Settlers are tracked only so dispose()
-  // can release waiters without stalling gateway shutdown.
-  const loopbackPenaltyUntil = new Map<string, number>();
+  // One promise and timer per key preserve earned delays across concurrent
+  // failures and history resets; dispose releases them for Gateway shutdown.
   const loopbackPenaltyWaiters = new Map<
     string,
-    { deadline: number; resolvers: (() => void)[]; timer: ReturnType<typeof setTimeout> }
+    Deferred & { deadline: number; timer: ReturnType<typeof setTimeout> }
   >();
   let overflowLockedUntil: number | undefined;
 
@@ -204,14 +199,6 @@ export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter
     pruneTimer.unref();
   }
 
-  function normalizeScope(scope: string | undefined): string {
-    return (scope ?? AUTH_RATE_LIMIT_SCOPE_DEFAULT).trim() || AUTH_RATE_LIMIT_SCOPE_DEFAULT;
-  }
-
-  function normalizeIp(ip: string | undefined): string {
-    return normalizeRateLimitClientIp(ip);
-  }
-
   function resolveKey(
     rawIp: string | undefined,
     rawScope: string | undefined,
@@ -219,25 +206,30 @@ export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter
     key: string;
     ip: string;
   } {
-    const ip = normalizeIp(rawIp);
-    const scope = normalizeScope(rawScope);
+    const ip = normalizeRateLimitClientIp(rawIp);
+    const scope = rawScope?.trim() || AUTH_RATE_LIMIT_SCOPE_DEFAULT;
     return { key: `${scope}:${ip}`, ip };
   }
 
   function isExempt(ip: string): boolean {
-    return exemptLoopback && isLoopbackAddress(ip);
+    return policy.exemptLoopback && isLoopbackAddress(ip);
   }
 
-  function slideWindow(entry: RateLimitEntry, now: number): void {
-    const cutoff = now - windowMs;
-    // Remove attempts that fell outside the window.
+  function refreshEntry(entry: RateLimitEntry, now: number): void {
+    // Retire served lockout history before recording fresh failures; a later
+    // check must not erase attempts accepted after the old deadline.
+    if (entry.lockedUntil && now >= entry.lockedUntil) {
+      entry.lockedUntil = undefined;
+      entry.attempts = [];
+    }
+    const cutoff = now - policy.windowMs;
     entry.attempts = entry.attempts.filter((ts) => ts > cutoff);
   }
 
   function check(rawIp: string | undefined, rawScope?: string): RateLimitCheckResult {
     const { key, ip } = resolveKey(rawIp, rawScope);
     if (isExempt(ip)) {
-      return { allowed: true, remaining: maxAttempts, retryAfterMs: 0 };
+      return { allowed: true, remaining: policy.maxAttempts, retryAfterMs: 0 };
     }
 
     const now = Date.now();
@@ -248,26 +240,19 @@ export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter
       if (overflowLock) {
         return overflowLock;
       }
-      return { allowed: true, remaining: maxAttempts, retryAfterMs: 0 };
+      return { allowed: true, remaining: policy.maxAttempts, retryAfterMs: 0 };
     }
 
-    // Still locked out?
+    refreshEntry(entry, now);
+    // A tighter live limit applies to retained failures without resetting an
+    // already-earned lockout or waiting for another credential attempt.
+    if (!entry.lockedUntil && entry.attempts.length >= policy.maxAttempts) {
+      entry.lockedUntil = now + policy.lockoutMs;
+    }
     if (entry.lockedUntil && now < entry.lockedUntil) {
-      return {
-        allowed: false,
-        remaining: 0,
-        retryAfterMs: entry.lockedUntil - now,
-      };
+      return { allowed: false, remaining: 0, retryAfterMs: entry.lockedUntil - now };
     }
-
-    // Lockout expired – clear it.
-    if (entry.lockedUntil && now >= entry.lockedUntil) {
-      entry.lockedUntil = undefined;
-      entry.attempts = [];
-    }
-
-    slideWindow(entry, now);
-    const remaining = Math.max(0, maxAttempts - entry.attempts.length);
+    const remaining = Math.max(0, policy.maxAttempts - entry.attempts.length);
     return { allowed: remaining > 0, remaining, retryAfterMs: 0 };
   }
 
@@ -280,39 +265,36 @@ export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter
 
     if (!entry) {
       if (!enforceMaxEntries(now)) {
-        overflowLockedUntil = Math.max(overflowLockedUntil ?? 0, now + lockoutMs);
+        overflowLockedUntil = Math.max(overflowLockedUntil ?? 0, now + policy.lockoutMs);
         return;
       }
       entry = { attempts: [] };
       entries.set(key, entry);
     }
 
-    // If currently locked, do nothing (already blocked). Loopback entries are
-    // never locked, so every failed local attempt continues to count.
-    if (entry.lockedUntil && now < entry.lockedUntil) {
+    // A new loopback exemption resumes penalty counting without extending or
+    // discarding the lockout earned before that policy change.
+    if (!exempt && entry.lockedUntil && now < entry.lockedUntil) {
       return;
     }
 
-    slideWindow(entry, now);
+    refreshEntry(entry, now);
     entry.attempts.push(now);
 
     if (exempt && entry.attempts.length > LOOPBACK_FAILURE_HISTORY_LIMIT) {
       // The delay is already capped at this history length. Discard older
       // timestamps so timer-cap overflow cannot grow loopback state unbounded.
       entry.attempts.splice(0, entry.attempts.length - LOOPBACK_FAILURE_HISTORY_LIMIT);
-    } else if (!exempt && entry.attempts.length >= maxAttempts) {
-      entry.lockedUntil = now + lockoutMs;
+    } else if (!exempt && entry.attempts.length >= policy.maxAttempts) {
+      entry.lockedUntil = now + policy.lockoutMs;
     }
   }
 
-  async function recordFailureAndDelay(
-    rawIp: string | undefined,
-    rawScope?: string,
-  ): Promise<void> {
+  function recordFailureAndDelay(rawIp: string | undefined, rawScope?: string): Promise<void> {
     const { key, ip } = resolveKey(rawIp, rawScope);
     recordFailure(rawIp, rawScope);
     if (!isExempt(ip)) {
-      return;
+      return Promise.resolve();
     }
 
     const failureCount = entries.get(key)?.attempts.length ?? 1;
@@ -320,35 +302,21 @@ export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter
       LOOPBACK_FAILURE_DELAY_BASE_MS * 2 ** Math.min(failureCount - 1, 30),
       LOOPBACK_FAILURE_DELAY_MAX_MS,
     );
-    // Hold the key's deadline at the furthest point any current failure earned, but
-    // never past one full penalty from now, so parallel guesses cannot be answered
-    // sooner than a serial one and cannot be queued into an unbounded wait either.
-    const now = Date.now();
-    const deadline = Math.min(
-      Math.max(loopbackPenaltyUntil.get(key) ?? 0, now + penaltyMs),
-      now + LOOPBACK_FAILURE_DELAY_MAX_MS,
-    );
-    loopbackPenaltyUntil.set(key, deadline);
-    await new Promise<void>((resolve) => {
-      // One timer per key, not per request: every waiter on a key is released by the
-      // same deadline, so concurrent failures cost a bounded number of timers
-      // (at most one per distinct loopback key) instead of one per open attempt.
-      const existing = loopbackPenaltyWaiters.get(key);
-      if (existing) {
-        existing.resolvers.push(resolve);
-        if (deadline > existing.deadline) {
-          existing.deadline = deadline;
-          clearTimeout(existing.timer);
-          existing.timer = scheduleRelease(key, deadline);
-        }
-        return;
-      }
-      loopbackPenaltyWaiters.set(key, {
+    const deadline = Date.now() + penaltyMs;
+    let waiters = loopbackPenaltyWaiters.get(key);
+    if (!waiters) {
+      waiters = {
+        ...createDeferredCore(),
         deadline,
-        resolvers: [resolve],
         timer: scheduleRelease(key, deadline),
-      });
-    });
+      };
+      loopbackPenaltyWaiters.set(key, waiters);
+    } else if (deadline > waiters.deadline) {
+      waiters.deadline = deadline;
+      clearTimeout(waiters.timer);
+      waiters.timer = scheduleRelease(key, deadline);
+    }
+    return waiters.promise;
   }
 
   function scheduleRelease(key: string, deadline: number): ReturnType<typeof setTimeout> {
@@ -364,15 +332,12 @@ export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter
     }
     loopbackPenaltyWaiters.delete(key);
     clearTimeout(waiters.timer);
-    for (const resolve of waiters.resolvers) {
-      resolve();
-    }
+    waiters.resolve();
   }
 
   function reset(rawIp: string | undefined, rawScope?: string): void {
     const { key } = resolveKey(rawIp, rawScope);
     entries.delete(key);
-    loopbackPenaltyUntil.delete(key);
   }
 
   function pruneExpiredEntries(now: number): void {
@@ -381,14 +346,9 @@ export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter
       if (entry.lockedUntil && now < entry.lockedUntil) {
         continue;
       }
-      slideWindow(entry, now);
+      refreshEntry(entry, now);
       if (entry.attempts.length === 0) {
         entries.delete(key);
-      }
-    }
-    for (const [key, until] of loopbackPenaltyUntil) {
-      if (now >= until) {
-        loopbackPenaltyUntil.delete(key);
       }
     }
   }
@@ -448,16 +408,28 @@ export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter
       clearInterval(pruneTimer);
     }
     entries.clear();
-    loopbackPenaltyUntil.clear();
     overflowLockedUntil = undefined;
     for (const key of loopbackPenaltyWaiters.keys()) {
       releaseLoopbackWaiters(key);
     }
   }
 
-  const limiter = { check, recordFailure, recordFailureAndDelay, reset, size, prune, dispose };
+  const limiter = {
+    check,
+    recordFailure,
+    recordFailureAndDelay,
+    reset,
+    size,
+    prune,
+    dispose,
+    updateConfig: (next?: GatewayAuthRateLimitConfig) => {
+      policy = resolveAuthRateLimitPolicy(next);
+    },
+  };
   // Credential-fallback owners use the exact limiter policy to avoid holding
   // exempt loopback penalty delays inside a per-identity serialization queue.
-  authRateLimiterExemptionChecks.set(limiter, (rawIp) => isExempt(normalizeIp(rawIp)));
+  authRateLimiterExemptionChecks.set(limiter, (rawIp) =>
+    isExempt(normalizeRateLimitClientIp(rawIp)),
+  );
   return limiter;
 }
