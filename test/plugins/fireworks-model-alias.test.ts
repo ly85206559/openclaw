@@ -172,7 +172,7 @@ describe("Kilocode manifest provider alias", () => {
     manifestMocks.loadPluginManifestRegistryCore.mockReturnValue(snapshot.manifestRegistry);
   });
 
-  it("owns kilo before runtime load and resolves the canonical catalog model", () => {
+  it("owns kilo before runtime load and resolves the canonical catalog model", async () => {
     expect(resolveOwningPluginIdsForProviderRef({ provider: "kilo" })).toEqual(["kilocode"]);
     const catalogModel = resolveBundledStaticCatalogModel({
       provider: "kilocode",
@@ -201,6 +201,6 @@ describe("Kilocode manifest provider alias", () => {
         runtimeHooks: resolveRuntimeHooks({ skipProviderRuntimeHooks: true }),
         authProfileMode: "api_key",
       });
-    expect(resolve("kilo")).toEqual(resolve("kilocode"));
+    expect(await resolve("kilo")).toEqual(await resolve("kilocode"));
   });
 });
