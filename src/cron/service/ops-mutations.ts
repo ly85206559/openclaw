@@ -15,6 +15,7 @@ import {
 import { describeUnavailableCronAgent } from "../agent-availability.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
 import { withCronMutationCommitHook } from "../mutation-completion.js";
+import { normalizeCronRunJobId } from "../run-history.js";
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
 import { removeCronJobBaseSession } from "../session-reaper.js";
 import { removeStaleCronJobFamilyRows } from "../store.js";
@@ -22,8 +23,10 @@ import {
   isSystemMonitorDeclaration,
   systemOwnedDeclarationKeyNamespace,
 } from "../system-owned-declaration.js";
-import { normalizeCronTaskRunJobId } from "../task-run-history.js";
-import { resolveCronAuthenticatedChannelRequester } from "../tools-allow-provenance.js";
+import {
+  resolveCronAuthenticatedCallerOrigin,
+  resolveCronAuthenticatedChannelRequester,
+} from "../tools-allow-provenance.js";
 import type { CronJob, CronJobCreate, CronJobPatch } from "../types.js";
 import { declarativeFields } from "./jobs-declarative.js";
 import { cloneCronJobForMutation, finalizeUpdatedJob } from "./jobs-mutation.js";
@@ -36,6 +39,7 @@ import {
 import {
   consumeRuntimeAuthorityMutationOptions,
   cronJobMessageActionAuthorityInputsEqual,
+  cronJobMessageToolAuthorityInputsEqual,
   reconcileCronChannelRequesterAuthority,
   reconcileRuntimeAuthority,
 } from "./jobs-tool-policy.js";
@@ -43,7 +47,7 @@ import {
   cronPatchTouchesDeliveryResolution,
   resolveConfiguredChannelsForValidation,
 } from "./jobs-validation.js";
-import { applyJobPatch, applyDeclarativeJobSpec, createJob } from "./jobs.js";
+import { applyDeclarativeJobSpec, applyJobPatch, createJob } from "./jobs.js";
 import {
   getPendingCronSessionCleanup,
   locked,
@@ -53,8 +57,8 @@ import { normalizeOptionalAgentId } from "./normalize.js";
 import { resolveCurrentDefaultAgentId, resolveEffectiveJobAgentId } from "./ops-shared.js";
 import { cronRunReceiptMutationHooks } from "./run-receipts.js";
 import type {
-  CronAddResult,
   CronAddOptions,
+  CronAddResult,
   CronServiceState,
   CronUpdateOptions,
   CronUpdatePrecondition,
@@ -62,15 +66,15 @@ import type {
 } from "./state.js";
 import { emit } from "./state.js";
 import {
+  type CronRollbackSnapshot,
   ensureLoaded,
   ensureLoadedForOperation,
   persist,
-  persistOrRestore,
   persistNativeOrRestore,
+  persistOrRestore,
   pruneCronJobScratchAfterCommit,
   runPostPersistCronNotifications,
   snapshotStoreForRollback,
-  type CronRollbackSnapshot,
   warnIfDisabled,
 } from "./store.js";
 import { armTimer } from "./timer.js";
@@ -145,11 +149,15 @@ async function persistUpdatedJob(params: {
   const scheduleChanged = !cronSchedulingInputsEqual(previousJob, nextJob);
   const messageActionAuthorityChanged =
     (isJobEnabled(previousJob) && !isJobEnabled(nextJob)) ||
+    !cronJobMessageToolAuthorityInputsEqual(previousJob, nextJob);
+  const messageSourceAuthorityChanged =
     !cronJobMessageActionAuthorityInputsEqual(previousJob, nextJob) ||
     (triggerStateChanged &&
       Boolean(
         resolveCronAuthenticatedChannelRequester(previousJob) ||
-        resolveCronAuthenticatedChannelRequester(nextJob),
+        resolveCronAuthenticatedChannelRequester(nextJob) ||
+        resolveCronAuthenticatedCallerOrigin(previousJob) ||
+        resolveCronAuthenticatedCallerOrigin(nextJob),
       ));
   await persistStore(state, snapshot, {
     suppressScheduledJobId: nextJob.id,
@@ -161,6 +169,7 @@ async function persistUpdatedJob(params: {
         ownerChanged,
         triggerStateChanged,
         messageActionAuthorityChanged,
+        messageSourceAuthorityChanged,
         ...(scheduleChanged ? { scheduleChangedJob: nextJob } : {}),
       }),
     ),
@@ -211,7 +220,7 @@ export async function add(
       throw new Error("cron job id must not be blank");
     }
     if (normalizedId) {
-      normalizeCronTaskRunJobId(normalizedId);
+      normalizeCronRunJobId(normalizedId);
       pendingSessionCleanup = getPendingCronSessionCleanup(state, normalizedId);
       if (pendingSessionCleanup) {
         throw RETRY_ADD_AFTER_SESSION_CLEANUP;
@@ -373,8 +382,7 @@ export async function removeStaleJobFamily(
 ): Promise<number> {
   return await locked(state, async () => {
     await ensureLoadedForOperation(state);
-    opts?.commitGuard?.();
-    return removeStaleCronJobFamilyRows(state.deps.storePath, family);
+    return await removeStaleCronJobFamilyRows(state.deps.storePath, family, opts);
   });
 }
 
@@ -449,6 +457,8 @@ async function updateLoadedJob(params: {
     previousJob: job,
     toolsAllowProvenance: opts?.toolsAllowProvenance,
     reauthorize: patch.payload !== undefined && Object.hasOwn(patch.payload, "toolsAllow"),
+    reauthorizeCallerOrigin:
+      patch.payload !== undefined && Object.hasOwn(patch.payload, "toolsAllow"),
   });
   const snapshot = snapshotStoreForRollback(state);
   await persistUpdatedJob({
@@ -571,7 +581,7 @@ export async function remove(
   const cleanup = async () => {
     try {
       const shouldRemove = await locked(state, async () => {
-        await ensureLoaded(state, { skipRecompute: true });
+        await ensureLoaded(state);
         return !state.store?.jobs.some((job) => job.id === id);
       });
       if (shouldRemove) {

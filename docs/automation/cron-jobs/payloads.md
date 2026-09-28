@@ -90,9 +90,17 @@ an invocation already admitted retains its configuration. Disabling or removing 
 withdrawing its `message` capability, or revoking its caller or plugin authority stops
 further affected reads from that occurrence, including pending reads before another
 provider request or result delivery. Re-enabling the job does not restore an
-occurrence's revoked access. Older agent-created jobs
-without recorded creator origin need to be recreated or explicitly reauthorized
-from a fresh authenticated creator turn.
+occurrence's revoked access.
+
+A new account-bound job created by a verified local administrator retains that
+authenticated local source, allowing provider-permitted reads through its saved
+creator account. Editing its `toolsAllow` cap from the same local source explicitly
+reauthorizes an existing job. Description, display-label, and exact no-op edits
+preserve the recorded source. Changes to model-facing names, prompts, tools, schedules,
+or other executable behavior need fresh source authorization and clear the old source
+when none is present. Remote management alone cannot supply local-source authorization,
+and older jobs without a provable origin remain blocked until reauthorized or recreated
+from a fresh authorized source.
 
 Scheduled turns can also `edit`, `delete`, `pin`, and `unpin` Discord messages.
 Agent-created jobs use their recorded creator account and Discord's delegated
@@ -155,6 +163,8 @@ When a runtime reports token usage without a cost, automation estimates use the 
 If a run hits a live model-switch handoff, the scheduler retries with the switched provider/model and persists that selection (and any new auth profile) for the active run. Retries are bounded: after the initial attempt plus 2 switch retries, the scheduler aborts instead of looping.
 
 Before an isolated run starts, OpenClaw checks reachable local endpoints for configured `api: "ollama"` and `api: "openai-completions"` providers whose `baseUrl` is loopback, private-network, or `.local`. This preflight walks the job's configured fallback chain and only marks the run `skipped` once every candidate is unreachable; `--fallbacks ""` keeps that walk strict to just the primary model. A down endpoint records the run as `skipped` with a clear error instead of starting a model call. The result is cached for 5 minutes per endpoint (not per job or model), so many due jobs sharing a dead local Ollama/vLLM/SGLang/LM Studio server cost one probe instead of a request storm. Skipped preflight runs do not increment execution-error backoff; set `failureAlert.includeSkipped` to opt into repeated skip alerts.
+
+Client-side preflight timeouts are not cached. The next scheduled run probes the endpoint again instead of inheriting a timeout from another run.
 
 ### Command payloads
 
@@ -243,6 +253,8 @@ Agent-turn jobs default to the creating conversation when the create request car
 <AccordionGroup>
   <Accordion title="Main session vs current vs isolated vs custom">
     **Main session** jobs enqueue a system event into the owning agent's main session and optionally wake the heartbeat (`--wake now` or `--wake next-heartbeat`). The event is processed with that session's existing context and last delivery context. Internal automation turns do not extend daily or idle reset freshness; only visible user activity updates session freshness. **Current-session** jobs execute in a detached run session, read a bounded tail of the conversation captured when the job was created, and commit the final visible assistant result back to that exact conversation. **Isolated** jobs run a dedicated agent turn with a fresh session. **Custom sessions** (`session:xxx`) persist context across runs, enabling workflows like daily standups that build on previous summaries.
+
+    `current` binds conversation context and result delivery, not the original agent execution or its worktree. The detached run uses the scheduled agent's workspace and captured tool restrictions. A task-specific checkout path in the prompt does not grant access to it. Before using a job to continue repository work, verify that its execution environment can access the required checkout and tools; otherwise keep the work with its existing execution owner. A result committed to the conversation does not itself resume the original agent.
 
     Main-session automation events are self-contained system-event reminders. They do not automatically include the default heartbeat prompt or the heartbeat monitor scratch; say it explicitly in the automation event text if a reminder should consult that context.
 

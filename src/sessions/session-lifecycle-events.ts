@@ -7,6 +7,10 @@ export type SessionLifecycleEvent = {
   parentSessionKey?: string;
   label?: string;
   displayName?: string;
+  /** Runtime events preserve stored rows; entry events preserve worker placement facts. */
+  scope?: "runtime" | "session-entry";
+  /** The committed change affects model, account, or runtime catalog projection. */
+  catalogChanged?: true;
 } & (
   | { reason: string; swarmGroupId?: never; kind?: never; text?: never }
   | { reason: "swarm-note"; swarmGroupId: string; kind: "phase" | "log"; text: string }
@@ -18,6 +22,8 @@ export type SessionIdentityMutationTarget = {
 };
 
 export type SessionIdentityMutation = {
+  /** Physical source captured by the committing database owner. */
+  databaseIdentity: string | symbol;
   /** Resolved operation scope for bare keys; qualified keys retain their own agent. */
   agentId: string;
 } & (

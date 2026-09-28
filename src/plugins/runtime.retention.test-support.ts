@@ -3,6 +3,7 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
+import { setImmediate as scheduleImmediate } from "node:timers";
 import { setImmediate } from "node:timers/promises";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
@@ -24,8 +25,13 @@ async function collect() {
   assert.ok(gc, "The retention child requires --expose-gc");
   const control = new WeakRef({ unowned: true });
   for (let pass = 0; pass < 8; pass += 1) {
-    await setImmediate();
-    gc();
+    // JavaScriptCore's promise-microtask stack can retain completed async values.
+    await new Promise<void>((resolve) => {
+      scheduleImmediate(() => {
+        gc();
+        resolve();
+      });
+    });
   }
   assert.equal(control.deref(), undefined, "Unowned control must collect");
 }
@@ -45,6 +51,17 @@ async function retireSuccessors() {
     previous = next;
   }
   return { oldest, successors };
+}
+
+function inspectRetiredSuccessors(
+  inspect: (result: Awaited<ReturnType<typeof retireSuccessors>>) => Promise<void>,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    void retireSuccessors().then((result) => {
+      // Inspect inside the next task so no producer or outer resolution frame stays live.
+      void setImmediate().then(() => inspect(result).then(resolve, reject), reject);
+    }, reject);
+  });
 }
 
 async function retireCapturedCallback() {
@@ -261,14 +278,15 @@ switch (process.argv[2]) {
     break;
   }
   case "registry": {
-    const { oldest, successors } = await retireSuccessors();
-    await collect();
-    assert.ok(
-      successors.every((reference) => reference.deref() === undefined),
-      "Completed retirement retained a successor registry",
-    );
-    assert.deepEqual(await waitForPluginRegistryRetirement(oldest), emptyResult);
-    assert.deepEqual(await disposePluginRegistryInstances(oldest), emptyResult);
+    await inspectRetiredSuccessors(async ({ oldest, successors }) => {
+      await collect();
+      assert.ok(
+        successors.every((reference) => reference.deref() === undefined),
+        "Completed retirement retained a successor registry",
+      );
+      assert.deepEqual(await waitForPluginRegistryRetirement(oldest), emptyResult);
+      assert.deepEqual(await disposePluginRegistryInstances(oldest), emptyResult);
+    });
     break;
   }
   case "cache": {

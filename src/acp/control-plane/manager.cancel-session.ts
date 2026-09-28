@@ -1,6 +1,5 @@
 /** Cancellation path for active ACP turns and idle runtime handles. */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { captureTaskCancellationControl } from "../../tasks/task-cancellation-context.js";
 import {
   AcpRuntimeError,
   toAcpRuntimeError,
@@ -19,6 +18,7 @@ import { acpSessionActorKey, requireReadySessionMeta } from "./manager.utils.js"
 
 /** Cancels either the active ACP turn or the idle runtime handle for a session. */
 export async function runManagerCancelSession(params: {
+  assertActive?: () => void;
   cfg: OpenClawConfig;
   sessionKey: string;
   agentId: string;
@@ -33,7 +33,7 @@ export async function runManagerCancelSession(params: {
   ensureRuntimeHandle: EnsureManagerRuntimeHandle;
   setSessionState: SetManagerSessionState;
 }): Promise<void> {
-  const cancellationControl = captureTaskCancellationControl();
+  params.assertActive?.();
   const actorKey = acpSessionActorKey(params);
   const expectedRunId = params.expectedRunId?.trim();
   const expectedInstanceId = params.expectedInstanceId?.trim();
@@ -71,7 +71,7 @@ export async function runManagerCancelSession(params: {
           acceptedTurn,
           reason: params.reason,
           revalidate: requireExpectedOwner,
-          assertCancellationAllowed: cancellationControl?.assertCurrent,
+          assertCancellationAllowed: params.assertActive,
         }),
       ),
     );
@@ -79,7 +79,8 @@ export async function runManagerCancelSession(params: {
   }
   requireExpectedTurn(undefined);
 
-  await params.withSessionActor(params, async () => {
+  await params.withSessionActor(params, async (isCurrentActor) => {
+    params.assertActive?.();
     // The actor wait may admit queued work. Recheck exact authority only after
     // that wait, immediately before the idle-handle cancellation boundary.
     requireExpectedTurn(params.activeTurnBySession.get(actorKey));
@@ -91,23 +92,30 @@ export async function runManagerCancelSession(params: {
     });
     const resolvedMeta = requireReadySessionMeta(resolution);
     const { runtime, handle } = await params.ensureRuntimeHandle({
+      assertActive: params.assertActive,
       cfg: params.cfg,
       sessionKey: params.sessionKey,
       agentId: params.agentId,
       meta: resolvedMeta,
+      isCurrentActor,
     });
+    params.assertActive?.();
     try {
       requireExpectedOwner();
       await runtime.cancel({
         handle,
         reason: params.reason,
       });
+      if (!isCurrentActor()) {
+        return;
+      }
       await params.setSessionState({
         cfg: params.cfg,
         sessionKey: params.sessionKey,
         agentId: params.agentId,
         state: "idle",
         clearLastError: true,
+        isCurrentActor,
       });
     } catch (error) {
       const acpError = toAcpRuntimeError({
@@ -115,12 +123,16 @@ export async function runManagerCancelSession(params: {
         fallbackCode: "ACP_TURN_FAILED",
         fallbackMessage: "ACP cancel failed before completion.",
       });
+      if (!isCurrentActor()) {
+        throw acpError;
+      }
       await params.setSessionState({
         cfg: params.cfg,
         sessionKey: params.sessionKey,
         agentId: params.agentId,
         state: "error",
         lastError: acpError.message,
+        isCurrentActor,
       });
       throw acpError;
     }

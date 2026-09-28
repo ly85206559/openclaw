@@ -6,6 +6,7 @@ import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import {
   getSessionMcpRuntimeManagerForTesting,
   peekSessionMcpRuntime,
+  setSessionMcpRuntimeScheduler,
 } from "../../agents/agent-bundle-mcp-manager-api.js";
 import { waitForSessionMaintenance } from "../../agents/session-maintenance/coordinator.js";
 import { createSessionMaintenanceFollowup } from "../../agents/session-maintenance/run.js";
@@ -28,14 +29,16 @@ import {
   onInternalDiagnosticEvent,
   waitForDiagnosticEventsDrained,
 } from "../../infra/diagnostic-events.js";
-import { clearMemoryPluginState, registerMemoryCapability } from "../../plugins/memory-state.js";
+import { clearMemoryPluginState } from "../../plugins/memory-state.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { runMemoryFlushIfNeeded } from "./agent-runner-memory.js";
 import { runReplyAgent } from "./agent-runner.js";
 import {
   createTestFollowupRun,
+  installAgentRunnerMemoryFixture,
   isModelRuntimeContextCarrier,
 } from "./agent-runner.test-fixtures.js";
 import { createTypingController } from "./typing.js";
@@ -71,12 +74,42 @@ it.each(["completed", "interrupted"] as const)(
         }
       });
       const server = createServer((request, response) => {
+        if (request.url === "/mcp" && request.method !== "POST") {
+          response.writeHead(request.method === "DELETE" ? 200 : 405).end();
+          return;
+        }
         let body = "";
         request.setEncoding("utf8");
         request.on("data", (chunk: string) => {
           body += chunk;
         });
         request.on("end", () => {
+          // Memory preparation reads the MCP catalog before inference. Keep a real
+          // server owned by the run without adding tools to its model request.
+          if (request.url === "/mcp") {
+            const message = JSON.parse(body) as {
+              id?: number;
+              method: string;
+              params?: { protocolVersion?: string };
+            };
+            let result;
+            if (message.method === "initialize") {
+              result = {
+                protocolVersion: message.params?.protocolVersion,
+                capabilities: { tools: {} },
+                serverInfo: { name: "memory-lifetime", version: "1" },
+              };
+            } else if (message.method === "tools/list") {
+              result = { tools: [] };
+            }
+            if (!result) {
+              response.writeHead(202).end();
+              return;
+            }
+            response.writeHead(200, { "content-type": "application/json" });
+            response.end(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }));
+            return;
+          }
           const modelRequest = JSON.parse(body) as ModelRequest;
           requests.push(modelRequest);
           const isHuman = text(
@@ -152,6 +185,11 @@ it.each(["completed", "interrupted"] as const)(
         },
         session: { store: scope.storePath },
         tools: { profile: "coding" },
+        mcp: {
+          servers: {
+            fixture: { transport: "streamable-http", url: `http://127.0.0.1:${address.port}/mcp` },
+          },
+        },
         models: {
           providers: {
             "test-provider": {
@@ -186,7 +224,9 @@ it.each(["completed", "interrupted"] as const)(
       };
       let flush: ReturnType<typeof runMemoryFlushIfNeeded> | undefined;
       let admission: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
+      const scheduler = createTestGatewayScheduler();
       try {
+        await setSessionMcpRuntimeScheduler(scheduler);
         await state.writeConfig(cfg);
         setRuntimeConfigSnapshot(cfg);
         await replaceSessionEntry(scope, {
@@ -240,17 +280,15 @@ it.each(["completed", "interrupted"] as const)(
           model: "owner-model",
           auth: {},
         });
-        registerMemoryCapability("memory-core", {
-          flushPlanResolver: () => ({
-            softThresholdTokens: 4_000,
-            reserveTokensFloor: 8_192,
-            forceFlushTranscriptBytes: 2 * 1024 * 1024,
-            prompt: "Checkpoint durable notes. Reply NO_REPLY.",
-            systemPrompt: "Write durable notes only.",
-            relativePath: "memory/checkpoint.md",
-            model: "test-provider/test-model",
-          }),
-        });
+        installAgentRunnerMemoryFixture(() => ({
+          softThresholdTokens: 4_000,
+          reserveTokensFloor: 8_192,
+          forceFlushTranscriptBytes: 2 * 1024 * 1024,
+          prompt: "Checkpoint durable notes. Reply NO_REPLY.",
+          systemPrompt: "Write durable notes only.",
+          relativePath: "memory/checkpoint.md",
+          model: "test-provider/test-model",
+        }));
         admission = await beginSessionWorkAdmission({
           scope: scope.storePath,
           identities: [scope.sessionKey, scope.sessionId],
@@ -399,6 +437,7 @@ it.each(["completed", "interrupted"] as const)(
             await mcpManager.disposeSession(sessionId);
           }
         }
+        await scheduler.stop();
         clearMemoryPluginState();
         clearRuntimeConfigSnapshot();
         stopDiagnostics();

@@ -21,6 +21,7 @@ import {
   resolveMcpLoopbackClientGrant,
   revokeMcpLoopbackClientGrant,
 } from "../gateway/mcp-grant-store.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { CronService } from "./service.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";
 import { loadCronStore } from "./store.js";
@@ -32,6 +33,8 @@ const { logger, makeStorePath } = setupCronServiceSuite({
 
 function createCronService(storePath: string) {
   return new CronService({
+    scheduler: createTestGatewayScheduler(),
+    nowMs: () => Date.now(),
     storePath,
     cronEnabled: false,
     log: logger,
@@ -63,6 +66,11 @@ const fullRequesterProvenance: CronToolsAllowProvenance = {
   source: "final-executable-surface",
   callerOrigin: { kind: "unknown" },
   channelRequester,
+};
+const localProvenance: CronToolsAllowProvenance = {
+  version: 1,
+  source: "authenticated-requester",
+  callerOrigin: { kind: "local" },
 };
 
 function requesterDeclaration(overrides: Partial<CronJobCreate> = {}): CronJobCreate {
@@ -487,4 +495,80 @@ describe("CronService authenticated channel requester", () => {
       }
     },
   );
+});
+
+describe("CronService authenticated caller origin", () => {
+  it("persists local creation, clears executable edits, and permits explicit reauthorization", async () => {
+    const { storePath } = await makeStorePath();
+    const cron = createCronService(storePath);
+    try {
+      const created = await cron.add(requesterDeclaration({ declarationKey: undefined }), {
+        scheduledToolPolicy: requesterPolicy,
+        toolsAllowProvenance: localProvenance,
+      });
+      expect(created.toolsAllowProvenance).toEqual(localProvenance);
+
+      await cron.update(created.id, {
+        description: "descriptive only",
+        displayName: "Daily report metadata",
+      });
+      expect((await loadCronStore(storePath)).jobs[0]?.toolsAllowProvenance).toEqual(
+        localProvenance,
+      );
+
+      await cron.update(created.id, {
+        payload: { kind: "agentTurn", toolsAllow: ["message"] },
+      });
+      expect((await loadCronStore(storePath)).jobs[0]?.toolsAllowProvenance).toEqual(
+        localProvenance,
+      );
+
+      await cron.update(created.id, { name: "Changed model context" });
+      expect((await loadCronStore(storePath)).jobs[0]?.toolsAllowProvenance).toBeUndefined();
+
+      await cron.update(
+        created.id,
+        { payload: { kind: "agentTurn", toolsAllow: ["message"] } },
+        { toolsAllowProvenance: localProvenance },
+      );
+      expect((await loadCronStore(storePath)).jobs[0]?.toolsAllowProvenance).toEqual(
+        localProvenance,
+      );
+    } finally {
+      cron.stop();
+    }
+  });
+
+  it("does not authorize an unchanged declarative job, but rebinds a changed declaration", async () => {
+    const { storePath } = await makeStorePath();
+    const cron = createCronService(storePath);
+    const declaration = requesterDeclaration();
+    try {
+      const created = await cron.add(declaration, { scheduledToolPolicy: requesterPolicy });
+      expect(created.toolsAllowProvenance).toBeUndefined();
+
+      expect(
+        await cron.add(declaration, {
+          scheduledToolPolicy: requesterPolicy,
+          toolsAllowProvenance: localProvenance,
+        }),
+      ).toMatchObject({ created: false, updated: false });
+      expect((await loadCronStore(storePath)).jobs[0]?.toolsAllowProvenance).toBeUndefined();
+
+      expect(
+        await cron.add(
+          {
+            ...declaration,
+            payload: { kind: "agentTurn", message: "changed report", toolsAllow: ["message"] },
+          },
+          { scheduledToolPolicy: requesterPolicy, toolsAllowProvenance: localProvenance },
+        ),
+      ).toMatchObject({ created: false, updated: true });
+      expect((await loadCronStore(storePath)).jobs[0]?.toolsAllowProvenance).toEqual(
+        localProvenance,
+      );
+    } finally {
+      cron.stop();
+    }
+  });
 });

@@ -17,7 +17,7 @@ import type { ScheduledToolPolicyContext } from "../src/agents/scheduled-tool-po
 import type { ChannelMessageActionAdapter } from "../src/channels/plugins/types.core.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../src/config/config.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
-import { createAgentRuntimeApprovalAuthorityValidator } from "../src/gateway/agent-runtime-identity-token.js";
+import { createAgentRuntimeApprovalAuthorityValidator } from "../src/gateway/agent-runtime-approval-authority.js";
 import type { CronAuthenticatedChannelRequester } from "../src/gateway/cron-creator-authority-grant.types.js";
 import {
   activateMcpLoopbackClientGrantCapture,
@@ -1480,16 +1480,49 @@ describe("CLI message authority integration", () => {
       ]);
     });
 
-    it("preserves bundled provider-owned scheduled pins without a write declaration", async () => {
+    it("keeps bundled interactive pins but denies undeclared scheduled writes", async () => {
       registerChannelPlugins({ discordOrigin: "bundled" });
       const actions = expectDefined(registeredDiscordActions, "bundled Discord actions");
       delete actions.writeAuthorityActions;
-      const turn = await createTurn("discord", { scheduledPolicy: accountScheduledPolicy });
 
+      const interactiveTurn = await createTurn("discord");
       expectSuccess(
-        await turn.call({ ...messageTarget, action: "pin", target: `channel:${discordSibling}` }),
+        await interactiveTurn.call({
+          ...messageTarget,
+          action: "pin",
+          target: `channel:${discordSibling}`,
+        }),
       );
+      const requestCount = requests.length;
+      const mismatchedOriginPolicy: ScheduledToolPolicyContext = {
+        ...accountScheduledPolicy,
+        ownerSessionKey: `agent:main:slack:channel:${channels.slack.current}`,
+        ownerOrigin: { kind: "external", channel: "slack" },
+      };
 
+      const mismatchedOriginTurn = await createTurn("discord", {
+        scheduledPolicy: mismatchedOriginPolicy,
+      });
+      expectDenied(
+        await mismatchedOriginTurn.call({
+          ...messageTarget,
+          action: "pin",
+          target: `channel:${discordSibling}`,
+        }),
+        /matching recorded creator origin/,
+      );
+      const undeclaredTurn = await createTurn("discord", {
+        scheduledPolicy: accountScheduledPolicy,
+      });
+      expectDenied(
+        await undeclaredTurn.call({
+          ...messageTarget,
+          action: "pin",
+          target: `channel:${discordSibling}`,
+        }),
+        /write authorization support/,
+      );
+      expect(requests).toHaveLength(requestCount);
       expect(requests.filter((request) => request.method !== "GET")).toEqual([
         expect.objectContaining({
           method: "PUT",
