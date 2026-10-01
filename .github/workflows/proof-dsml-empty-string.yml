@@ -1,0 +1,78 @@
+name: DSML empty string proof
+
+on:
+  push:
+    branches: [codex/proof-dsml-empty-string]
+
+permissions:
+  contents: read
+
+jobs:
+  proof:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      SOURCE_SHA: db6891ae1c703009ea0535020c57ffd1f166a32b
+      EXPECT_FIXED: "false"
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          persist-credentials: false
+          fetch-depth: 5
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 26.8.2
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa
+      - name: Install check tooling
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y ripgrep
+      - name: Install locked dependencies in secretless checkout
+        run: pnpm install --frozen-lockfile
+      - name: Verify source and stream plus registered HTTP boundary
+        run: |
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import fs from 'node:fs';
+          import { spawnSync } from 'node:child_process';
+          const fixed = process.env.EXPECT_FIXED === 'true';
+          const started = performance.now();
+          const result = spawnSync('node', ['scripts/run-vitest.mjs', 'packages/ai/src/transports/openai-completions-dsml.test.ts', 'packages/ai/src/transports/openai-completions-dsml.recovery.test.ts', '--maxWorkers=1', '--reporter=default', '--reporter=json', '--outputFile=/tmp/dsml-proof.json'], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
+          const output = result.stdout + result.stderr;
+          console.log(output);
+          console.log(JSON.stringify({ source: process.env.SOURCE_SHA, fixed, status: result.status, wallSeconds: (performance.now() - started) / 1000 }));
+          assert.equal(result.status, fixed ? 0 : 1);
+          const report = JSON.parse(fs.readFileSync('/tmp/dsml-proof.json', 'utf8'));
+          assert.equal(report.testResults.length, 2);
+          assert.doesNotMatch(output, /Unhandled Errors?|Unhandled Rejection|Uncaught Exception/);
+          for (const file of report.testResults) {
+            assert.equal(file.message, '');
+            assert.ok(file.assertionResults.length > 0);
+          }
+          assert.equal(report.numFailedTests, fixed ? 0 : 3);
+          if (!fixed) {
+            const failures = report.testResults.flatMap(file => file.assertionResults).filter(test => test.status === 'failed');
+            assert.deepEqual(failures.map(test => test.title).sort(), [
+              'preserves DSML parameter text as an own scalar argument (, duplicate: false)',
+              'preserves DSML parameter text as an own scalar argument (, duplicate: true)',
+              "gates HTTP DSML stop ''",
+            ].sort());
+            for (const failure of failures) {
+              assert.equal(failure.failureMessages.length, 1);
+              assert.match(failure.failureMessages[0], /^AssertionError:/);
+              assert.match(failure.failureMessages[0], failure.title.includes('duplicate: true') ? /first value/ : /toolUse/);
+            }
+          }
+          NODE
+      - name: Candidate formatting and diff
+        if: env.EXPECT_FIXED == 'true'
+        run: |
+          pnpm exec oxfmt --check packages/ai/src/transports/openai-completions-dsml.ts packages/ai/src/transports/openai-completions-dsml.test.ts packages/ai/src/transports/openai-completions-dsml.recovery.test.ts
+          git diff --check 85f09d7ea34b80af6e79dc33807ce6780ccf2dd9 HEAD
+      - name: Changed owner checks
+        if: env.EXPECT_FIXED == 'true'
+        run: |
+          node scripts/check-changed.mjs --dry-run --base 85f09d7ea34b80af6e79dc33807ce6780ccf2dd9 -- packages/ai/src/transports/openai-completions-dsml.ts packages/ai/src/transports/openai-completions-dsml.test.ts packages/ai/src/transports/openai-completions-dsml.recovery.test.ts
+          node scripts/check-changed.mjs --base 85f09d7ea34b80af6e79dc33807ce6780ccf2dd9 -- packages/ai/src/transports/openai-completions-dsml.ts packages/ai/src/transports/openai-completions-dsml.test.ts packages/ai/src/transports/openai-completions-dsml.recovery.test.ts
