@@ -24,6 +24,10 @@ jobs:
         with:
           node-version: 26.8.2
       - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa
+      - name: Install check tooling
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y ripgrep
       - name: Install locked dependencies in secretless checkout
         run: pnpm install --frozen-lockfile
       - name: Verify source and regression
