@@ -63,8 +63,8 @@ jobs:
             ].sort());
             for (const failure of failures) {
               assert.equal(failure.failureMessages.length, 1);
-              assert.match(failure.failureMessages[0], /^AssertionError:/);
-              assert.match(failure.failureMessages[0], /registry build failed/);
+              assert.match(failure.failureMessages[0], /^Error: promise rejected "Error: registry build failed" instead of resolving\n/);
+              assert.match(failure.failureMessages[0], /Assertion\.__VITEST_RESOLVES__/);
             }
           }
           NODE
