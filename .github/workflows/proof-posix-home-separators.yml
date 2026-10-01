@@ -85,5 +85,5 @@ jobs:
       - name: Changed owner checks
         if: env.EXPECT_FIXED == 'true'
         run: |
-          node scripts/check-changed.mjs --dry-run --base 85f09d7ea34b80af6e79dc33807ce6780ccf2dd9 -- src/infra/home-display.ts src/utils.test.ts
-          node scripts/check-changed.mjs --base 85f09d7ea34b80af6e79dc33807ce6780ccf2dd9 -- src/infra/home-display.ts src/utils.test.ts
+          node scripts/check-changed.mjs --dry-run --base 85f09d7ea34b80af6e79dc33807ce6780ccf2dd9
+          node scripts/check-changed.mjs --base 85f09d7ea34b80af6e79dc33807ce6780ccf2dd9
