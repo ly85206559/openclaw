@@ -1,0 +1,86 @@
+name: Explicit media capabilities proof
+
+on:
+  push:
+    branches: [codex/proof-media-explicit-capabilities]
+
+permissions:
+  contents: read
+
+jobs:
+  proof:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      SOURCE_SHA: e9363816bb6055d864e7783514b4d87b97118805
+      EXPECT_FIXED: "false"
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          persist-credentials: false
+          fetch-depth: 6
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 26.8.2
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa
+      - name: Install check tooling
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y ripgrep
+      - name: Install locked dependencies in secretless checkout
+        run: pnpm install --frozen-lockfile
+      - name: Verify source and media handoff regressions
+        run: |
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import fs from 'node:fs';
+          import { spawnSync } from 'node:child_process';
+          const fixed = process.env.EXPECT_FIXED === 'true';
+          const started = performance.now();
+          const result = spawnSync('node', ['scripts/run-vitest.mjs', 'src/media-understanding/apply.provider-registry-lazy.test.ts', 'src/media-understanding/runner.vision-skip.test.ts', 'src/media-understanding/resolve.test.ts', '--maxWorkers=1', '--reporter=default', '--reporter=json', '--outputFile=/tmp/media-proof.json'], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
+          const output = result.stdout + result.stderr;
+          console.log(output);
+          console.log(JSON.stringify({ source: process.env.SOURCE_SHA, fixed, status: result.status, wallSeconds: (performance.now() - started) / 1000 }));
+          assert.equal(result.status, fixed ? 0 : 1);
+          const report = JSON.parse(fs.readFileSync('/tmp/media-proof.json', 'utf8'));
+          assert.equal(report.testResults.length, 3);
+          assert.doesNotMatch(output, /Unhandled Errors?|Unhandled Rejection|Uncaught Exception/);
+          for (const file of report.testResults) {
+            assert.equal(file.message, '');
+            assert.ok(file.assertionResults.length > 0);
+          }
+          assert.equal(report.numFailedTests, fixed ? 0 : 3);
+          const cases = report.testResults.flatMap(file => file.assertionResults);
+          assert.equal(cases.find(test => test.title === 'keeps the native-vision handoff with no shared models and a broken registry')?.status, 'passed');
+          if (!fixed) {
+            const failures = cases.filter(test => test.status === 'failed');
+            assert.deepEqual(failures.map(test => test.title).sort(), [
+              'keeps the native-vision handoff with audio-only shared models and a broken registry',
+              'keeps the native-vision handoff with video-only shared models and a broken registry',
+              'keeps the native-vision handoff with audio and video shared models and a broken registry',
+            ].sort());
+            for (const failure of failures) {
+              assert.equal(failure.failureMessages.length, 1);
+              assert.match(failure.failureMessages[0], /^AssertionError:/);
+              assert.match(failure.failureMessages[0], /registry build failed/);
+            }
+          }
+          NODE
+      - name: Formatting diagnostic on regression-only source
+        if: env.EXPECT_FIXED == 'false'
+        run: |
+          pnpm exec oxfmt src/media-understanding/apply.provider-registry-lazy.test.ts
+          git diff -- src/media-understanding/apply.provider-registry-lazy.test.ts
+      - name: Candidate formatting and diff
+        if: env.EXPECT_FIXED == 'true'
+        run: |
+          pnpm exec oxfmt src/media-understanding/runner.ts src/media-understanding/apply.provider-registry-lazy.test.ts
+          git diff --exit-code -- src/media-understanding/runner.ts src/media-understanding/apply.provider-registry-lazy.test.ts
+          git diff --check 1bc8f9d62ffccb24baa4756694ae3198967dc839 HEAD
+      - name: Changed owner checks
+        if: env.EXPECT_FIXED == 'true'
+        run: |
+          node scripts/check-changed.mjs --dry-run --base 1bc8f9d62ffccb24baa4756694ae3198967dc839
+          node scripts/check-changed.mjs --base 1bc8f9d62ffccb24baa4756694ae3198967dc839
