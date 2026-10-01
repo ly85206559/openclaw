@@ -263,10 +263,13 @@ describe("openai completions DSML", () => {
   });
 
   it.each([
-    { finishReason: "stop", allowed: true },
-    { finishReason: "length", allowed: false },
-    { finishReason: "content_filter", allowed: false },
-  ])("gates doubled DSML over HTTP on $finishReason", async ({ finishReason, allowed }) => {
+    { finishReason: "stop", allowed: true, code: 'return "ready";' },
+    { finishReason: "length", allowed: false, code: 'return "ready";' },
+    { finishReason: "content_filter", allowed: false, code: 'return "ready";' },
+    { finishReason: "stop", allowed: true, code: "" },
+    { finishReason: "length", allowed: false, code: "" },
+    { finishReason: "content_filter", allowed: false, code: "" },
+  ])("gates HTTP DSML $finishReason '$code'", async ({ finishReason, allowed, code }) => {
     const server = createServer((req, res) => {
       req.resume();
       req.on("end", () => {
@@ -276,7 +279,7 @@ describe("openai completions DSML", () => {
           connection: "keep-alive",
         });
         const content =
-          '<｜｜DSML｜｜tool_calls><｜｜DSML｜｜invoke name="exec"><｜｜DSML｜｜parameter name="code" string="true">return "ready";</｜｜DSML｜｜parameter></｜｜DSML｜｜invoke></｜｜DSML｜｜tool_calls>';
+          `<｜｜DSML｜｜tool_calls><｜｜DSML｜｜invoke name="exec"><｜｜DSML｜｜parameter name="code" string="true">${code}</｜｜DSML｜｜parameter></｜｜DSML｜｜invoke></｜｜DSML｜｜tool_calls>`;
         for (const char of content) {
           res.write(`data: ${JSON.stringify(makeCompletionsChunk({ content: char }))}\n\n`);
         }
@@ -329,7 +332,7 @@ describe("openai completions DSML", () => {
           message: {
             stopReason: allowed ? "toolUse" : "length",
             content: allowed
-              ? [{ type: "toolCall", name: "exec", arguments: { code: 'return "ready";' } }]
+              ? [{ type: "toolCall", name: "exec", arguments: { code } }]
               : [],
           },
         });
