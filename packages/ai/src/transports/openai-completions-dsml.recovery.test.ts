@@ -278,8 +278,7 @@ describe("openai completions DSML", () => {
           "cache-control": "no-cache",
           connection: "keep-alive",
         });
-        const content =
-          `<｜｜DSML｜｜tool_calls><｜｜DSML｜｜invoke name="exec"><｜｜DSML｜｜parameter name="code" string="true">${code}</｜｜DSML｜｜parameter></｜｜DSML｜｜invoke></｜｜DSML｜｜tool_calls>`;
+        const content = `<｜｜DSML｜｜tool_calls><｜｜DSML｜｜invoke name="exec"><｜｜DSML｜｜parameter name="code" string="true">${code}</｜｜DSML｜｜parameter></｜｜DSML｜｜invoke></｜｜DSML｜｜tool_calls>`;
         for (const char of content) {
           res.write(`data: ${JSON.stringify(makeCompletionsChunk({ content: char }))}\n\n`);
         }
