@@ -408,6 +408,14 @@ describe("openai completions DSML", () => {
       body: '<|DSML|invoke name="read"></|DSML|invoke>',
     },
     {
+      name: "empty non-string parameter",
+      body: '<|DSML|invoke name="read"><|DSML|parameter name="path" string="false"></|DSML|parameter></|DSML|invoke>',
+    },
+    {
+      name: "empty parameter without a string attribute",
+      body: '<|DSML|invoke name="read"><|DSML|parameter name="path"></|DSML|parameter></|DSML|invoke>',
+    },
+    {
       name: "asymmetric invoke marker",
       body: '<|DSML｜invoke name="read">{"path":"/tmp/unexecuted"}</|DSML|invoke>',
     },
