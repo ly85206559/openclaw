@@ -331,9 +331,7 @@ describe("openai completions DSML", () => {
           reason: allowed ? "toolUse" : "length",
           message: {
             stopReason: allowed ? "toolUse" : "length",
-            content: allowed
-              ? [{ type: "toolCall", name: "exec", arguments: { code } }]
-              : [],
+            content: allowed ? [{ type: "toolCall", name: "exec", arguments: { code } }] : [],
           },
         });
       }
