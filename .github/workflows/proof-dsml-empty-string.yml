@@ -62,7 +62,8 @@ jobs:
             for (const failure of failures) {
               assert.equal(failure.failureMessages.length, 1);
               assert.match(failure.failureMessages[0], /^AssertionError:/);
-              assert.match(failure.failureMessages[0], failure.title.includes('duplicate: true') ? /first value/ : /toolUse/);
+              const symptom = failure.title.includes('duplicate: true') ? /first value/ : failure.title.startsWith('gates HTTP') ? /expected \{ type: 'done', reason: 'stop',/ : /expected 'stop' to be 'toolUse'/;
+              assert.match(failure.failureMessages[0], symptom);
             }
           }
           NODE
