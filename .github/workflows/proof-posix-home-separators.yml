@@ -1,0 +1,79 @@
+name: POSIX home path display proof
+
+on:
+  push:
+    branches: [codex/proof-posix-home-separators]
+
+permissions:
+  contents: read
+
+jobs:
+  proof:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      SOURCE_SHA: 557be6560e39f8ac9247a84cb6ed8bac039a2a6a
+      EXPECT_FIXED: "false"
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 26.8.2
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa
+      - name: Install locked dependencies in secretless checkout
+        run: pnpm install --frozen-lockfile
+      - name: Verify source and regression
+        run: |
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { spawnSync } from 'node:child_process';
+          const fixed = process.env.EXPECT_FIXED === 'true';
+          const started = performance.now();
+          const result = spawnSync('node', ['scripts/run-vitest.mjs', 'src/utils.test.ts', '--maxWorkers=1', ...(fixed ? [] : ['-t', 'preserves POSIX home path boundaries and case'])], { encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 });
+          const output = result.stdout + result.stderr;
+          console.log(output);
+          console.log(JSON.stringify({ source: process.env.SOURCE_SHA, fixed, status: result.status, wallSeconds: (performance.now() - started) / 1000 }));
+          assert.equal(result.status, fixed ? 0 : 1);
+          if (!fixed) {
+            assert.match(output, /preserves POSIX home path boundaries and case/);
+            assert.match(output, /AssertionError/);
+            assert.match(output, /OpenClaw-Home/);
+          }
+          NODE
+      - name: Real registered CLI path and descendant control
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import fs from 'node:fs';
+          import os from 'node:os';
+          import path from 'node:path';
+          import { spawnSync } from 'node:child_process';
+          const root = fs.mkdtempSync(path.join(os.tmpdir(), 'openclaw-home-display-proof-'));
+          const home = path.join(root, 'home');
+          const fixed = process.env.EXPECT_FIXED === 'true';
+          for (const [kind, configPath, expected] of [
+            ['sibling', `${home}\\sibling/openclaw.json`, fixed ? `${home}\\sibling/openclaw.json` : '~\\sibling/openclaw.json'],
+            ['descendant', `${home}/work\\space/openclaw.json`, '~/work\\space/openclaw.json'],
+          ]) {
+            const env = { ...process.env, HOME: home, OPENCLAW_STATE_DIR: path.join(root, `state-${kind}`), OPENCLAW_CONFIG_PATH: configPath, OPENCLAW_CONFIG_READONLY: '1', NO_COLOR: '1' };
+            delete env.OPENCLAW_HOME;
+            delete env.GITHUB_TOKEN;
+            delete env.GH_TOKEN;
+            const started = performance.now();
+            const result = spawnSync('pnpm', ['openclaw', 'config', 'validate'], { env, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
+            const output = result.stdout + result.stderr;
+            console.log(output);
+            console.log(JSON.stringify({ source: process.env.SOURCE_SHA, kind, configPath, expected, status: result.status, wallSeconds: (performance.now() - started) / 1000 }));
+            assert.equal(result.status, 1);
+            assert.ok(output.includes(`Config file not found: ${expected}`));
+          }
+          NODE
+      - name: Candidate formatting and diff
+        if: env.EXPECT_FIXED == 'true'
+        run: |
+          pnpm exec oxfmt --check src/infra/home-display.ts src/utils.test.ts
+          git diff --check HEAD^
