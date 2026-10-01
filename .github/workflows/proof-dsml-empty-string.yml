@@ -70,7 +70,8 @@ jobs:
       - name: Candidate formatting and diff
         if: env.EXPECT_FIXED == 'true'
         run: |
-          pnpm exec oxfmt --check packages/ai/src/transports/openai-completions-dsml.ts packages/ai/src/transports/openai-completions-dsml.test.ts packages/ai/src/transports/openai-completions-dsml.recovery.test.ts
+          pnpm exec oxfmt packages/ai/src/transports/openai-completions-dsml.ts packages/ai/src/transports/openai-completions-dsml.test.ts packages/ai/src/transports/openai-completions-dsml.recovery.test.ts
+          git diff --exit-code -- packages/ai/src/transports/openai-completions-dsml.ts packages/ai/src/transports/openai-completions-dsml.test.ts packages/ai/src/transports/openai-completions-dsml.recovery.test.ts
           git diff --check 85f09d7ea34b80af6e79dc33807ce6780ccf2dd9 HEAD
       - name: Changed owner checks
         if: env.EXPECT_FIXED == 'true'
