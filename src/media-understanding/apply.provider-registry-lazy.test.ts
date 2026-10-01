@@ -154,37 +154,40 @@ describe("applyMediaUnderstanding - lazy provider registry", () => {
     { name: "audio-only shared models", capabilities: ["audio"] },
     { name: "video-only shared models", capabilities: ["video"] },
     { name: "audio and video shared models", capabilities: ["audio", "video"] },
-  ] as const)("keeps the native-vision handoff with $name and a broken registry", async ({ capabilities }) => {
-    resolvePluginCapabilityProvidersSpy.mockImplementation(() => {
-      throw new Error("registry build failed");
-    });
-    const cfg = {
-      models: {
-        providers: { "usage-proxy": { models: [{ id: "gpt-5.4", input: ["text", "image"] }] } },
-      },
-      ...(capabilities
-        ? { tools: { media: { models: [{ provider: "usage-proxy", capabilities }] } } }
-        : {}),
-    } as unknown as OpenClawConfig;
+  ] as const)(
+    "keeps the native-vision handoff with $name and a broken registry",
+    async ({ capabilities }) => {
+      resolvePluginCapabilityProvidersSpy.mockImplementation(() => {
+        throw new Error("registry build failed");
+      });
+      const cfg = {
+        models: {
+          providers: { "usage-proxy": { models: [{ id: "gpt-5.4", input: ["text", "image"] }] } },
+        },
+        ...(capabilities
+          ? { tools: { media: { models: [{ provider: "usage-proxy", capabilities }] } } }
+          : {}),
+      } as unknown as OpenClawConfig;
 
-    const ctx: MsgContext = { media: [{ path: "/tmp/image.png", contentType: "image/png" }] };
-    await expect(
-      applyMediaUnderstanding({
-        ctx,
-        cfg,
-        activeModel: { provider: "usage-proxy", model: "gpt-5.4" },
-      }),
-    ).resolves.toEqual({ extractedFileImages: [] });
-    expect(ctx.MediaUnderstandingDecisions).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          capability: "image",
-          outcome: "skipped",
-          nativeVisionActive: true,
-          attachmentDispositions: { 0: { kind: "handed-to-native-vision" } },
+      const ctx: MsgContext = { media: [{ path: "/tmp/image.png", contentType: "image/png" }] };
+      await expect(
+        applyMediaUnderstanding({
+          ctx,
+          cfg,
+          activeModel: { provider: "usage-proxy", model: "gpt-5.4" },
         }),
-      ]),
-    );
-    expect(resolvePluginCapabilityProvidersSpy).not.toHaveBeenCalled();
-  });
+      ).resolves.toEqual({ extractedFileImages: [] });
+      expect(ctx.MediaUnderstandingDecisions).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            capability: "image",
+            outcome: "skipped",
+            nativeVisionActive: true,
+            attachmentDispositions: { 0: { kind: "handed-to-native-vision" } },
+          }),
+        ]),
+      );
+      expect(resolvePluginCapabilityProvidersSpy).not.toHaveBeenCalled();
+    },
+  );
 });
