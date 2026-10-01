@@ -12,8 +12,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
-      SOURCE_SHA: db6891ae1c703009ea0535020c57ffd1f166a32b
-      EXPECT_FIXED: "false"
+      SOURCE_SHA: 4749fbba168d6a3f8a0b4d458c18c71339375b85
+      EXPECT_FIXED: "true"
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
@@ -75,5 +75,5 @@ jobs:
       - name: Changed owner checks
         if: env.EXPECT_FIXED == 'true'
         run: |
-          node scripts/check-changed.mjs --dry-run --base 85f09d7ea34b80af6e79dc33807ce6780ccf2dd9 -- packages/ai/src/transports/openai-completions-dsml.ts packages/ai/src/transports/openai-completions-dsml.test.ts packages/ai/src/transports/openai-completions-dsml.recovery.test.ts
-          node scripts/check-changed.mjs --base 85f09d7ea34b80af6e79dc33807ce6780ccf2dd9 -- packages/ai/src/transports/openai-completions-dsml.ts packages/ai/src/transports/openai-completions-dsml.test.ts packages/ai/src/transports/openai-completions-dsml.recovery.test.ts
+          node scripts/check-changed.mjs --dry-run --base 85f09d7ea34b80af6e79dc33807ce6780ccf2dd9
+          node scripts/check-changed.mjs --base 85f09d7ea34b80af6e79dc33807ce6780ccf2dd9
