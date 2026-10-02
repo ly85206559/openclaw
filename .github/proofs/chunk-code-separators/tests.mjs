@@ -43,6 +43,9 @@ for (const [index, testCase] of cases.entries()) {
   assert.equal(result.status, expectedFailures.length ? 1 : 0);
   assert.deepEqual(failures.map((test) => test.fullName).sort(), [...expectedFailures].sort());
   for (const control of testCase.controls) {
+    if (!assertions.some((test) => test.fullName === control)) {
+      console.log(JSON.stringify({ missingControl: control, observedUnicodeTests: assertions.filter((test) => /U\+202[89]/.test(test.fullName)).map((test) => ({ name: test.fullName, status: test.status })) }));
+    }
     assert.equal(assertions.find((test) => test.fullName === control)?.status, "passed");
   }
   for (const regression of testCase.failures) {
