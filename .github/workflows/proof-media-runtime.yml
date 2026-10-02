@@ -1,0 +1,49 @@
+name: Native media Gateway HTTP proof
+on:
+  push:
+    branches: [codex/proof-media-explicit-capabilities]
+    paths: [".github/proofs/media-runtime/**", ".github/workflows/proof-media-runtime.yml"]
+permissions:
+  contents: read
+jobs:
+  runtime:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - expectation: red
+            source: 1bc8f9d62ffccb24baa4756694ae3198967dc839
+          - expectation: green
+            source: 2e1eb0dd0a1a4f710cf3208b352d5f3422a3fe36
+    env:
+      SOURCE_SHA: ${{ matrix.source }}
+      PROOF_EXPECT: ${{ matrix.expectation }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          path: proof-assets
+          persist-credentials: false
+          fetch-depth: 1
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          path: source
+          persist-credentials: false
+          fetch-depth: 1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 26.8.2
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa
+        with:
+          package_json_file: source/package.json
+      - name: Install locked dependencies in secretless checkout
+        working-directory: source
+        run: pnpm install --frozen-lockfile
+      - name: Real Gateway reply and HTTP image transport
+        working-directory: source
+        run: |
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          pnpm openclaw --version
+          node ../proof-assets/.github/proofs/media-runtime/run.mjs

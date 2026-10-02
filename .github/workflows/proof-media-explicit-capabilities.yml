@@ -3,6 +3,7 @@ name: Explicit media capabilities proof
 on:
   push:
     branches: [codex/proof-media-explicit-capabilities]
+    paths: [".github/workflows/proof-media-explicit-capabilities.yml"]
 
 permissions:
   contents: read
