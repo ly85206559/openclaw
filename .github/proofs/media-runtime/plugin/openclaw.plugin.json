@@ -1,0 +1,7 @@
+{
+  "id": "proof-native-media",
+  "name": "Isolated native media proof",
+  "activation": { "onStartup": true },
+  "contracts": { "mediaUnderstandingProviders": ["proof-unused-audio"] },
+  "configSchema": { "type": "object", "additionalProperties": false, "properties": {} }
+}
