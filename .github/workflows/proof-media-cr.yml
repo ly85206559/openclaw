@@ -1,0 +1,53 @@
+name: CR MEDIA real reply boundary proof
+
+on:
+  push:
+    branches: [codex/proof-media-cr-20261002]
+    paths: [".github/workflows/proof-media-cr.yml", ".github/proofs/media-cr/**", "src/media/parse.test.ts"]
+
+permissions:
+  contents: read
+
+jobs:
+  red:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      SOURCE_SHA: 32e30e59d9a7fd1f5b3a9e9659427d45145779dd
+      PROOF_EXPECT: red
+      OPENCLAW_STATE_DIR: /tmp/media-cr-isolated-state
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          path: proof-assets
+          persist-credentials: false
+          fetch-depth: 1
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          repository: openclaw/openclaw
+          ref: ${{ env.SOURCE_SHA }}
+          path: source
+          persist-credentials: false
+          fetch-depth: 1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 26.8.2
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa
+        with:
+          package_json_file: source/package.json
+      - name: Install locked dependencies without secrets
+        working-directory: source
+        run: pnpm install --frozen-lockfile
+      - name: Verify unchanged production and prepare source imports
+        working-directory: source
+        run: |
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          cp ../proof-assets/src/media/parse.test.ts src/media/parse.test.ts
+          test -z "$(git diff --name-only -- src/media/parse-output.ts)"
+          pnpm openclaw --version
+      - name: Real reply producer, local PNG loader, and failed settled delivery
+        working-directory: source
+        run: node --import ./scripts/tsx.mjs ../proof-assets/.github/proofs/media-cr/run.mjs
+      - name: Focused regression RED with LF and CRLF controls
+        working-directory: source
+        run: node ../proof-assets/.github/proofs/media-cr/tests.mjs

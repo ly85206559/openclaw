@@ -939,6 +939,45 @@ describe("splitMediaFromOutput", () => {
     );
   });
 
+  it.each(["\n", "\r\n", "\r"])("separates MEDIA directives across %j line endings", (newline) => {
+    const result = splitMediaFromOutput(
+      `MEDIA:/tmp/first.png${newline}MEDIA:/tmp/second.png${newline}Caption${newline}End`,
+    );
+    expect(result.mediaUrls).toEqual(["/tmp/first.png", "/tmp/second.png"]);
+    expect(result.text).toBe(`Caption${newline}End`);
+    expect(result.segments).toEqual([
+      { type: "media", url: "/tmp/first.png" },
+      { type: "media", url: "/tmp/second.png" },
+      { type: "text", text: `Caption${newline}End` },
+    ]);
+  });
+
+  it.each(["\n", "\r\n", "\r"])("keeps fenced MEDIA literal across %j line endings", (newline) => {
+    const code = ["```txt", "MEDIA:/tmp/literal.png", "  value  ", "```"].join(newline);
+    const result = splitMediaFromOutput(`${code}${newline}MEDIA:/tmp/real.png${newline}`, {
+      preserveTrailingWhitespace: true,
+    });
+    expect(result.mediaUrls).toEqual(["/tmp/real.png"]);
+    expect(result.text).toBe(`${code}${newline}`);
+    expect(result.segments).toEqual([
+      { type: "text", text: `${code}${newline}` },
+      { type: "media", url: "/tmp/real.png" },
+    ]);
+  });
+
+  it("keeps mixed source separators around MEDIA directives", () => {
+    const caption = "Caption\r\n```txt\nMEDIA:/tmp/literal.png\r  value  \r\n```";
+    const result = splitMediaFromOutput(`MEDIA:/tmp/real.png\r${caption}`, {
+      preserveTrailingWhitespace: true,
+    });
+    expect(result.mediaUrls).toEqual(["/tmp/real.png"]);
+    expect(result.text).toBe(caption);
+    expect(result.segments).toEqual([
+      { type: "media", url: "/tmp/real.png" },
+      { type: "text", text: caption },
+    ]);
+  });
+
   it.each([
     "![x](file:///etc/passwd)",
     "![x](/var/run/secrets/kubernetes.io/serviceaccount/token)",
