@@ -3,6 +3,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
+import { isMainThread } from "node:worker_threads";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -110,6 +111,7 @@ describe("real Synapse canonical Matrix Unicode proof", () => {
     const requestedPhase = process.env.PROOF_EXPECT;
     assert.ok(requestedPhase === "red" || requestedPhase === "green", "Missing proof phase");
     phase = requestedPhase;
+    assert.equal(isMainThread, true, "Real shared-state owner requires the host main thread");
     source = pinnedSources[phase];
     assert.equal(process.env.SOURCE_SHA, source, "Proof phase/source mismatch");
     assert.equal(execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim(), source);

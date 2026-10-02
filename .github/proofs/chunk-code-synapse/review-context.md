@@ -75,3 +75,12 @@ the exact read-back, cleanup and add-mask records rather than depending on
 default reporters. The wrapper prints captured stdout (including masks) before
 stderr or summarized test failure diagnostics. This matches the official
 Vitest 5.0.1 onUserConsoleLog dispatch contract.
+
+First hosted run 37049708084 correctly failed both phases before any send:
+shared-state admission requires isMainThread, but generic project routing chose
+a thread worker for this new proof file. This is not a product RED. The proof now
+uses the repository's existing infra config (it already specifies pool:forks)
+and explicit --pool=forks, and beforeAll asserts a real Node host main thread.
+Normal shared-state ownership, native SQLite workers, grants and cleanup remain
+unchanged. Do not add a fake broker/store or disable state admission. This local
+OpenClaw SQLite owner is unrelated to the forbidden external crabbox broker.
