@@ -9,12 +9,22 @@ permissions:
   contents: read
 
 jobs:
-  green:
+  runtime:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - phase: red
+            repository: openclaw/openclaw
+            source: 32e30e59d9a7fd1f5b3a9e9659427d45145779dd
+          - phase: green
+            repository: ly85206559/openclaw
+            source: b61076e6faf38c353c016a9739935e11d41f157e
     env:
-      SOURCE_SHA: b61076e6faf38c353c016a9739935e11d41f157e
-      PROOF_EXPECT: green
+      SOURCE_SHA: ${{ matrix.source }}
+      PROOF_EXPECT: ${{ matrix.phase }}
       OPENCLAW_STATE_DIR: /tmp/discord-playback-clock-state
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
@@ -24,7 +34,7 @@ jobs:
           fetch-depth: 1
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
-          repository: ly85206559/openclaw
+          repository: ${{ matrix.repository }}
           ref: ${{ env.SOURCE_SHA }}
           path: source
           persist-credentials: false
@@ -38,27 +48,14 @@ jobs:
       - name: Install locked dependencies without secrets
         working-directory: source
         run: pnpm install --frozen-lockfile
-      # Baseline RED37034749362 is already successful and retained unchanged.
-      - name: Verify exact candidate with no regression overlay
+      # Exact b610 regression/fmt/lint/types GREEN37036653431 remains valid.
+      - name: Verify exact source with no overlay and prepare supported imports
         working-directory: source
         run: |
           test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
           test -z "$(git status --porcelain)"
-      - name: Changed-file formatting and lint
+          pnpm openclaw --version
+          test -z "$(git status --porcelain)"
+      - name: Production output, real voice SDK/resource and libopus clock-shift trace
         working-directory: source
-        run: |
-          if ! pnpm exec oxfmt --check extensions/discord/src/voice/realtime-output.runtime.ts extensions/discord/src/voice/realtime-playback.test.ts; then
-            pnpm exec oxfmt --write extensions/discord/src/voice/realtime-playback.test.ts
-            git diff -- extensions/discord/src/voice/realtime-playback.test.ts
-            exit 1
-          fi
-          node scripts/run-oxlint.mjs --tsconfig extensions/tsconfig.json extensions/discord/src/voice/realtime-output.runtime.ts extensions/discord/src/voice/realtime-playback.test.ts
-          git diff --check
-      - name: Real manager, worker, audio sink and player watchdog GREEN
-        working-directory: source
-        run: node ../proof-assets/.github/proofs/discord-playback-clock/tests.mjs
-      - name: Proportional plugin production and test type graphs
-        working-directory: source
-        run: |
-          pnpm tsgo:extensions
-          pnpm tsgo:extensions:test
+        run: node --import ./scripts/tsx.mjs ../proof-assets/.github/proofs/discord-playback-clock/runtime.mjs
