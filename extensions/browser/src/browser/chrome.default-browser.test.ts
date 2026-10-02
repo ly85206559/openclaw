@@ -148,21 +148,24 @@ describe("browser default executable detection", () => {
     ["older ARM64", "/tmp/browsers", "chrome-linux"],
     ["XDG ARM64", undefined, "chrome-linux-arm64", "/tmp/xdg-cache"],
     ["empty XDG", undefined, "chrome-linux64", ""],
-  ])("discovers Playwright Chromium in the %s cache layout", (_name, cachePath, linuxDir, xdgCacheHome) => {
-    vi.stubEnv("PLAYWRIGHT_BROWSERS_PATH", cachePath);
-    vi.stubEnv("XDG_CACHE_HOME", xdgCacheHome);
-    const browserCache = cachePath ?? `${xdgCacheHome || "/Users/test/.cache"}/ms-playwright`;
-    const executable = `${browserCache}/chromium-1243/${linuxDir}/chrome`;
-    vi.mocked(fs.readdirSync).mockImplementation((candidate) => {
-      return (String(candidate) === browserCache ? ["chromium-1243"] : []) as never;
-    });
-    vi.mocked(fs.existsSync).mockImplementation((candidate) => String(candidate) === executable);
+  ])(
+    "discovers Playwright Chromium in the %s cache layout",
+    (_name, cachePath, linuxDir, xdgCacheHome) => {
+      vi.stubEnv("PLAYWRIGHT_BROWSERS_PATH", cachePath);
+      vi.stubEnv("XDG_CACHE_HOME", xdgCacheHome);
+      const browserCache = cachePath ?? `${xdgCacheHome || "/Users/test/.cache"}/ms-playwright`;
+      const executable = `${browserCache}/chromium-1243/${linuxDir}/chrome`;
+      vi.mocked(fs.readdirSync).mockImplementation((candidate) => {
+        return (String(candidate) === browserCache ? ["chromium-1243"] : []) as never;
+      });
+      vi.mocked(fs.existsSync).mockImplementation((candidate) => String(candidate) === executable);
 
-    expect(resolveBrowserExecutableForPlatform(config, "linux")).toEqual({
-      kind: "chromium",
-      path: executable,
-    });
-  });
+      expect(resolveBrowserExecutableForPlatform(config, "linux")).toEqual({
+        kind: "chromium",
+        path: executable,
+      });
+    },
+  );
 
   it("preserves executable and cache precedence when ARM64 Chromium is installed", () => {
     const browserCache = "/tmp/browsers";
