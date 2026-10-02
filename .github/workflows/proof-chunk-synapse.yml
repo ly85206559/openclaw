@@ -1,0 +1,93 @@
+name: Unicode code preservation real Synapse proof
+
+on:
+  push:
+    branches: [codex/proof-chunk-code-separators-20261003]
+    paths: [".github/workflows/proof-chunk-synapse.yml", ".github/proofs/chunk-code-synapse/**"]
+
+permissions:
+  contents: read
+
+jobs:
+  synapse-proof:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - phase: red
+            repository: openclaw/openclaw
+            source: 32e30e59d9a7fd1f5b3a9e9659427d45145779dd
+          - phase: green
+            repository: ly85206559/openclaw
+            source: 2725b3b8951af667b1367b1785efc2f721202790
+    env:
+      SOURCE_SHA: ${{ matrix.source }}
+      PROOF_EXPECT: ${{ matrix.phase }}
+      OPENCLAW_STATE_DIR: /tmp/chunk-code-separators-synapse-state
+      SYNAPSE_IMAGE: matrixdotorg/synapse@sha256:6b84a7bbac36f080b2d2e51e0289cf1b08b349598ea44a558df38d558f2c2311
+      SYNAPSE_CONTAINER: unicode-synapse-${{ github.run_id }}-${{ matrix.phase }}
+      SYNAPSE_VOLUME: unicode-synapse-data-${{ github.run_id }}-${{ matrix.phase }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          path: proof-assets
+          persist-credentials: false
+          fetch-depth: 1
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          repository: ${{ matrix.repository }}
+          ref: ${{ env.SOURCE_SHA }}
+          path: source
+          persist-credentials: false
+          fetch-depth: 1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 26.8.2
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
+        with:
+          package_json_file: source/package.json
+      - name: Install locked dependencies without secrets
+        working-directory: source
+        run: pnpm install --frozen-lockfile
+      - name: Start task-owned loopback-only real Synapse
+        run: |
+          docker pull "$SYNAPSE_IMAGE"
+          docker volume create "$SYNAPSE_VOLUME"
+          docker run --rm --mount "type=volume,src=$SYNAPSE_VOLUME,dst=/data" \
+            -e SYNAPSE_SERVER_NAME=unicode-proof.test -e SYNAPSE_REPORT_STATS=no \
+            "$SYNAPSE_IMAGE" generate
+          docker create --name "$SYNAPSE_CONTAINER" \
+            --mount "type=volume,src=$SYNAPSE_VOLUME,dst=/data" \
+            -p 127.0.0.1:8008:8008 "$SYNAPSE_IMAGE" run \
+            --config-path=/data/homeserver.yaml --config-path=/data/proof-local.yaml
+          docker cp proof-assets/.github/proofs/chunk-code-synapse/synapse-local.yaml "$SYNAPSE_CONTAINER:/data/proof-local.yaml"
+          docker start "$SYNAPSE_CONTAINER"
+          for attempt in $(seq 1 90); do
+            if curl --fail --silent http://127.0.0.1:8008/health >/dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker inspect --format '{{.State.Status}} {{.State.ExitCode}}' "$SYNAPSE_CONTAINER"
+          exit 1
+      - name: Verify exact source and install only the transport proof test
+        working-directory: source
+        run: |
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test -z "$(git status --porcelain)"
+          cp ../proof-assets/.github/proofs/chunk-code-synapse/synapse-proof.test.ts src/infra/outbound/chunk-code-separators.synapse.proof.test.ts
+          test -z "$(git diff --name-only -- src/auto-reply/chunk.ts src/infra/outbound/message-plan.ts src/infra/outbound/message.ts extensions/matrix)"
+      - name: Real canonical send, real SDK and read-back from real homeserver
+        working-directory: source
+        run: node ../proof-assets/.github/proofs/chunk-code-synapse/synapse-tests.mjs
+      - name: Remove only this job's homeserver and volume
+        if: always()
+        run: |
+          if docker container inspect "$SYNAPSE_CONTAINER" >/dev/null 2>&1; then
+            docker rm --force "$SYNAPSE_CONTAINER"
+          fi
+          if docker volume inspect "$SYNAPSE_VOLUME" >/dev/null 2>&1; then
+            docker volume rm "$SYNAPSE_VOLUME"
+          fi

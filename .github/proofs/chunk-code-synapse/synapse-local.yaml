@@ -1,0 +1,19 @@
+# Disposable, loopback-only Actions homeserver; no federation or external users.
+listeners:
+  - port: 8008
+    tls: false
+    type: http
+    x_forwarded: false
+    resources:
+      - names: [client]
+        compress: false
+enable_registration: true
+enable_registration_without_verification: true
+trusted_key_servers: []
+federation_domain_whitelist: []
+rc_registration:
+  per_second: 100
+  burst_count: 100
+rc_message:
+  per_second: 100
+  burst_count: 100
