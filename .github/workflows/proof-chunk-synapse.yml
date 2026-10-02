@@ -78,6 +78,7 @@ jobs:
           test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
           test -z "$(git status --porcelain)"
           cp ../proof-assets/.github/proofs/chunk-code-synapse/synapse-proof.test.ts src/infra/outbound/chunk-code-separators.synapse.proof.test.ts
+          cp ../proof-assets/.github/proofs/chunk-code-synapse/synapse.config.ts test/vitest/vitest.chunk-code-synapse.proof.config.ts
           test -z "$(git diff --name-only -- src/auto-reply/chunk.ts src/infra/outbound/message-plan.ts src/infra/outbound/message.ts extensions/matrix)"
       - name: Real canonical send, real SDK and read-back from real homeserver
         working-directory: source

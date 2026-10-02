@@ -95,3 +95,16 @@ remain unchanged. afterAll also awaits the actual existing shared-state owner's
 closeOpenClawStateDatabaseAsync, aggregates that failure with logout failures and
 emits cleanup-complete only after retirement. Only isolated job-owned state exists
 in this test process; no external host/member broker or live operator state.
+
+Third hosted run 37051890632 correctly rejected both phases with zero collected
+tests. The scoped infra configuration automatically excludes files classified
+into unit-fast; this fixture has no vi mocks, filesystem helpers or dynamic
+imports, so content-based discovery classifies it there despite actual transport
+and SQLite work. This is not a product RED. A fork-only config is now copied
+beside the existing configs and invokes the existing createScopedVitestConfig
+with only this exact proof file, isolate:true, pool:forks, name:infra and
+passWithNoTests:false. excludeUnitFastTests:false prevents cross-lane dedup from
+removing this explicit fixture. It does not change any maintained config,
+baseline, source, shared setup, runtime preparation, state admission or guard.
+The normal diagnostic forks owner and runtime setup remain selected; all four
+read-back assertions and error/cleanup rejection gates remain unchanged.

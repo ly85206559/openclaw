@@ -10,7 +10,7 @@ const file = "src/infra/outbound/chunk-code-separators.synapse.proof.test.ts";
 const reportPath = "/tmp/chunk-code-separators-synapse.json";
 const started = performance.now();
 const errorReporter = fileURLToPath(new URL("./synapse-error-reporter.mjs", import.meta.url));
-const result = spawnSync(process.execPath, ["scripts/run-vitest.mjs", "run", "--config=test/vitest/vitest.infra.config.ts", file, "--pool=forks", "--maxWorkers=1", "--reporter=json", `--reporter=${errorReporter}`, `--outputFile=${reportPath}`], { encoding: "utf8", maxBuffer: 8 * 1024 * 1024 });
+const result = spawnSync(process.execPath, ["scripts/run-vitest.mjs", "run", "--config=test/vitest/vitest.chunk-code-synapse.proof.config.ts", file, "--pool=forks", "--maxWorkers=1", "--reporter=json", `--reporter=${errorReporter}`, `--outputFile=${reportPath}`], { encoding: "utf8", maxBuffer: 8 * 1024 * 1024 });
 console.log(result.stdout);
 console.log(result.stderr);
 const report = JSON.parse(fs.readFileSync(reportPath, "utf8"));
