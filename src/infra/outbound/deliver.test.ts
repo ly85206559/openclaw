@@ -6,7 +6,7 @@ import { setImmediate as waitForImmediate } from "node:timers/promises";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { TrustedMessageAuditEvent } from "../../audit/message-audit-events.js";
 import { onTrustedMessageAuditEventForTest as onTrustedMessageAuditEvent } from "../../audit/message-audit-events.test-support.js";
-import { chunkText } from "../../auto-reply/chunk.js";
+import { chunkMarkdownText, chunkText } from "../../auto-reply/chunk.js";
 import { createMessageReceiptFromOutboundResults } from "../../channels/message/receipt.js";
 import type {
   ChannelMessageSendResult,
@@ -2817,6 +2817,46 @@ describe("deliverOutboundPayloads", () => {
     deliverMatrix,
     requireMatrixSendCall,
   });
+
+  it.each(
+    [
+      { label: "U+2028", separator: "\u2028" },
+      { label: "U+2029", separator: "\u2029" },
+    ].flatMap((testCase) =>
+      (["length", "newline"] as const).map((chunkMode) => ({ ...testCase, chunkMode })),
+    ),
+  )(
+    "preserves literal $label in raw fenced JSON in $chunkMode mode",
+    async ({ separator, chunkMode }) => {
+      const text = `\`\`\`json\n{"separator":"first${separator}second"}\n\`\`\``;
+      const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m1", roomId: "!room:example" });
+      setTestOutbound({
+        ...matrixOutboundForTest,
+        chunker: chunkMarkdownText,
+        chunkerMode: "markdown",
+      });
+
+      await deliverMatrix({
+        cfg: {
+          channels: {
+            matrix: { textChunkLimit: 4000, streaming: { chunkMode } },
+          } as OpenClawConfig["channels"],
+        },
+        payloads: [{ text }],
+        deps: { matrix: sendMatrix },
+      });
+
+      expect(sendMatrix).toHaveBeenCalledTimes(1);
+      const sentText = requireMatrixSendCall(sendMatrix)[1];
+      if (typeof sentText !== "string") {
+        throw new Error("Expected Matrix sender text");
+      }
+      expect(JSON.parse(sentText.slice("```json\n".length, -"\n```".length))).toEqual({
+        separator: `first${separator}second`,
+      });
+      expect(sentText).toBe(text);
+    },
+  );
 
   it("logs a warning when failDelivery rejects on bestEffort partial failure (#83113)", async () => {
     queueMocks.failDelivery.mockRejectedValueOnce(new Error("queue storage down"));
