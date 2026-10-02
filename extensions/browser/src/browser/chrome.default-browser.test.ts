@@ -150,7 +150,7 @@ describe("browser default executable detection", () => {
     ["empty XDG", undefined, "chrome-linux64", ""],
   ])(
     "discovers Playwright Chromium in the %s cache layout",
-    (_name, cachePath, linuxDir, xdgCacheHome) => {
+    (_name, cachePath, linuxDir, xdgCacheHome?: string) => {
       vi.stubEnv("PLAYWRIGHT_BROWSERS_PATH", cachePath);
       vi.stubEnv("XDG_CACHE_HOME", xdgCacheHome);
       const browserCache = cachePath ?? `${xdgCacheHome || "/Users/test/.cache"}/ms-playwright`;
