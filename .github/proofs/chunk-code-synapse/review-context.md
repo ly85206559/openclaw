@@ -84,3 +84,14 @@ and explicit --pool=forks, and beforeAll asserts a real Node host main thread.
 Normal shared-state ownership, native SQLite workers, grants and cleanup remain
 unchanged. Do not add a fake broker/store or disable state admission. This local
 OpenClaw SQLite owner is unrelated to the forbidden external crabbox broker.
+
+Second hosted run 37051011888 failed before any test because package test directly
+uses test-projects, which injects its planned unit-fast --config and retained the
+explicit infra --config. Vitest correctly rejects duplicate scalar options. The
+runner now uses supported node scripts/run-vitest.mjs run --config=infra instead;
+its existing explicit-config guard skips project delegation while retaining
+normal runtime preparation/watchdog/cleanup. --pool=forks and every row assertion
+remain unchanged. afterAll also awaits the actual existing shared-state owner's
+closeOpenClawStateDatabaseAsync, aggregates that failure with logout failures and
+emits cleanup-complete only after retirement. Only isolated job-owned state exists
+in this test process; no external host/member broker or live operator state.

@@ -9,6 +9,7 @@ import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../conf
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { loadAndActivateRootPluginRegistry } from "../../plugins/loader.js";
 import { disposePluginRegistryInstances } from "../../plugins/runtime.js";
+import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db-cache.js";
 import { sendMessage } from "./message.js";
 
 const homeserver = "http://127.0.0.1:8008";
@@ -143,8 +144,13 @@ describe("real Synapse canonical Matrix Unicode proof", () => {
     const failures = logouts.flatMap((result) =>
       result.status === "rejected" ? [result.reason] : [],
     );
+    try {
+      await closeOpenClawStateDatabaseAsync();
+    } catch (error) {
+      failures.push(error);
+    }
     if (failures.length > 0) {
-      throw new AggregateError(failures, "Task account logout failed");
+      throw new AggregateError(failures, "Task account or state-owner cleanup failed");
     }
     assert.equal(issuedTokens.size, 2);
     console.log(`SYNAPSE_CLEANUP_COMPLETE ${phase}`);
