@@ -7,6 +7,7 @@ assert.ok(phase === "red" || phase === "green");
 const labels = ["U+2028", "U+2029"];
 const plannerName = (label, code, mode) => `outbound message planning plans ${label} in ${code} in ${mode} mode with one implicit reply`;
 const deliveryName = (label, mode) => `deliverOutboundPayloads preserves literal ${label} in raw fenced JSON in ${mode} mode`;
+const canonicalName = (label, mode) => `canonical Matrix sendMessage Unicode code proof preserves literal ${label} in fenced JSON in ${mode} mode`;
 const cases = [
   {
     file: "src/infra/outbound/message-plan.test.ts",
@@ -20,9 +21,15 @@ const cases = [
     controls: labels.map((label) => deliveryName(label, "length")),
   },
   {
+    file: "src/infra/outbound/chunk-code-separators.canonical.proof.test.ts",
+    failures: labels.map((label) => canonicalName(label, "newline")),
+    controls: labels.map((label) => canonicalName(label, "length")),
+    total: 4,
+  },
+  {
     file: "src/auto-reply/chunk.test.ts",
     failures: [],
-    controls: ["chunkByParagraph Unicode line/paragraph separators treats lone U+2029 as a standalone paragraph boundary", "chunkByParagraph Unicode line/paragraph separators treats lone U+2028 as a line break within one paragraph"],
+    controls: ["chunkByParagraph Unicode line/paragraph separators treats lone U+2029 as a standalone para…", "chunkByParagraph Unicode line/paragraph separators treats lone U+2028 as a line break with…"],
   },
 ];
 
@@ -38,6 +45,7 @@ for (const [index, testCase] of cases.entries()) {
   assert.equal(report.testResults.length, 1);
   assert.ok(report.testResults[0].name.endsWith(`/${testCase.file}`));
   const assertions = report.testResults[0].assertionResults;
+  if (testCase.total) assert.equal(assertions.length, testCase.total);
   const failures = assertions.filter((test) => test.status === "failed");
   const expectedFailures = phase === "red" ? testCase.failures : [];
   assert.equal(result.status, expectedFailures.length ? 1 : 0);

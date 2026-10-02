@@ -3,18 +3,28 @@ name: Unicode code preservation outbound proof
 on:
   push:
     branches: [codex/proof-chunk-code-separators-20261003]
-    paths: [".github/workflows/proof-chunk-code-separators.yml", ".github/proofs/chunk-code-separators/**", "src/infra/outbound/message-plan.test.ts", "src/infra/outbound/deliver.test.ts"]
+    paths: [".github/workflows/proof-chunk-code-separators.yml", ".github/proofs/chunk-code-separators/**", "src/infra/outbound/message-plan.test.ts", "src/infra/outbound/deliver.test.ts", "src/infra/outbound/chunk-code-separators.canonical.proof.test.ts"]
 
 permissions:
   contents: read
 
 jobs:
-  red:
+  proof:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - phase: red
+            repository: openclaw/openclaw
+            source: 32e30e59d9a7fd1f5b3a9e9659427d45145779dd
+          - phase: green
+            repository: ly85206559/openclaw
+            source: 2725b3b8951af667b1367b1785efc2f721202790
     env:
-      SOURCE_SHA: 32e30e59d9a7fd1f5b3a9e9659427d45145779dd
-      PROOF_EXPECT: red
+      SOURCE_SHA: ${{ matrix.source }}
+      PROOF_EXPECT: ${{ matrix.phase }}
       OPENCLAW_STATE_DIR: /tmp/chunk-code-separators-state
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
@@ -24,7 +34,7 @@ jobs:
           fetch-depth: 1
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
-          repository: openclaw/openclaw
+          repository: ${{ matrix.repository }}
           ref: ${{ env.SOURCE_SHA }}
           path: source
           persist-credentials: false
@@ -38,13 +48,34 @@ jobs:
       - name: Install locked dependencies without secrets
         working-directory: source
         run: pnpm install --frozen-lockfile
-      - name: Verify untouched production and overlay only regression tests
+      - name: Verify exact source and overlay only proof tests
         working-directory: source
         run: |
           test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
-          cp ../proof-assets/src/infra/outbound/message-plan.test.ts src/infra/outbound/message-plan.test.ts
+          test -z "$(git status --porcelain)"
+          if test "$PROOF_EXPECT" = red; then
+            cp ../proof-assets/src/infra/outbound/message-plan.test.ts src/infra/outbound/message-plan.test.ts
+          fi
           cp ../proof-assets/src/infra/outbound/deliver.test.ts src/infra/outbound/deliver.test.ts
+          cp ../proof-assets/src/infra/outbound/chunk-code-separators.canonical.proof.test.ts src/infra/outbound/chunk-code-separators.canonical.proof.test.ts
           test -z "$(git diff --name-only -- src/auto-reply/chunk.ts src/infra/outbound/message-plan.ts src/infra/outbound/deliver-core.ts)"
-      - name: Planner, raw outbound transport and prose controls RED
+      - name: Changed product formatting and lint
+        if: matrix.phase == 'green'
+        working-directory: source
+        run: |
+          if ! pnpm exec oxfmt --check src/auto-reply/chunk.ts src/auto-reply/chunk.test.ts src/infra/outbound/message-plan.test.ts; then
+            pnpm exec oxfmt --write src/auto-reply/chunk.ts src/auto-reply/chunk.test.ts src/infra/outbound/message-plan.test.ts
+            git diff -- src/auto-reply/chunk.ts src/auto-reply/chunk.test.ts src/infra/outbound/message-plan.test.ts
+            exit 1
+          fi
+          node scripts/run-oxlint.mjs src/auto-reply/chunk.ts src/auto-reply/chunk.test.ts src/infra/outbound/message-plan.test.ts
+          git diff --check
+      - name: Canonical message, planner, raw substrate and prose controls
         working-directory: source
         run: node ../proof-assets/.github/proofs/chunk-code-separators/tests.mjs
+      - name: Proportional core production and test types
+        if: matrix.phase == 'green'
+        working-directory: source
+        run: |
+          pnpm tsgo:core
+          pnpm tsgo:test:src
