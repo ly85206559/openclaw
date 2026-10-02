@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      SOURCE_SHA: 55d0052d44ce2b72f8316aafb3654f82be65c33d
+      SOURCE_SHA: 67660486c2c774694275924e28fcaa9e9da73afd
       PROOF_EXPECT: green
       OPENCLAW_STATE_DIR: /tmp/media-cr-isolated-state
     steps:
@@ -48,7 +48,11 @@ jobs:
       - name: Changed-file formatting and lint
         working-directory: source
         run: |
-          pnpm exec oxfmt --check src/media/parse-output.ts src/media/parse.test.ts
+          if ! pnpm exec oxfmt --check src/media/parse-output.ts src/media/parse.test.ts; then
+            pnpm exec oxfmt --write src/media/parse.test.ts
+            git diff -- src/media/parse.test.ts
+            exit 1
+          fi
           node scripts/run-oxlint.mjs src/media/parse-output.ts src/media/parse.test.ts
           git diff --check
       - name: Real reply producer, local PNG loader, and settled delivery GREEN
