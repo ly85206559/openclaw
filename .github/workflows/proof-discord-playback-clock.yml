@@ -9,12 +9,12 @@ permissions:
   contents: read
 
 jobs:
-  red:
+  green:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      SOURCE_SHA: 32e30e59d9a7fd1f5b3a9e9659427d45145779dd
-      PROOF_EXPECT: red
+      SOURCE_SHA: b61076e6faf38c353c016a9739935e11d41f157e
+      PROOF_EXPECT: green
       OPENCLAW_STATE_DIR: /tmp/discord-playback-clock-state
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
@@ -24,7 +24,7 @@ jobs:
           fetch-depth: 1
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
-          repository: openclaw/openclaw
+          repository: ly85206559/openclaw
           ref: ${{ env.SOURCE_SHA }}
           path: source
           persist-credentials: false
@@ -38,12 +38,27 @@ jobs:
       - name: Install locked dependencies without secrets
         working-directory: source
         run: pnpm install --frozen-lockfile
-      - name: Verify untouched production and install regression matrix
+      # Baseline RED37034749362 is already successful and retained unchanged.
+      - name: Verify exact candidate with no regression overlay
         working-directory: source
         run: |
           test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
-          cp ../proof-assets/extensions/discord/src/voice/realtime-playback.test.ts extensions/discord/src/voice/realtime-playback.test.ts
-          test -z "$(git diff --name-only -- extensions/discord/src/voice/realtime-output.runtime.ts)"
-      - name: Real manager, worker, audio sink and player watchdog RED
+          test -z "$(git status --porcelain)"
+      - name: Changed-file formatting and lint
+        working-directory: source
+        run: |
+          if ! pnpm exec oxfmt --check extensions/discord/src/voice/realtime-output.runtime.ts extensions/discord/src/voice/realtime-playback.test.ts; then
+            pnpm exec oxfmt --write extensions/discord/src/voice/realtime-playback.test.ts
+            git diff -- extensions/discord/src/voice/realtime-playback.test.ts
+            exit 1
+          fi
+          node scripts/run-oxlint.mjs --tsconfig extensions/tsconfig.json extensions/discord/src/voice/realtime-output.runtime.ts extensions/discord/src/voice/realtime-playback.test.ts
+          git diff --check
+      - name: Real manager, worker, audio sink and player watchdog GREEN
         working-directory: source
         run: node ../proof-assets/.github/proofs/discord-playback-clock/tests.mjs
+      - name: Proportional plugin production and test type graphs
+        working-directory: source
+        run: |
+          pnpm tsgo:extensions
+          pnpm tsgo:extensions:test
