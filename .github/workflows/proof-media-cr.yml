@@ -9,12 +9,12 @@ permissions:
   contents: read
 
 jobs:
-  red:
+  green:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      SOURCE_SHA: 32e30e59d9a7fd1f5b3a9e9659427d45145779dd
-      PROOF_EXPECT: red
+      SOURCE_SHA: 55d0052d44ce2b72f8316aafb3654f82be65c33d
+      PROOF_EXPECT: green
       OPENCLAW_STATE_DIR: /tmp/media-cr-isolated-state
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
@@ -24,7 +24,7 @@ jobs:
           fetch-depth: 1
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
-          repository: openclaw/openclaw
+          repository: ly85206559/openclaw
           ref: ${{ env.SOURCE_SHA }}
           path: source
           persist-credentials: false
@@ -32,22 +32,33 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: 26.8.2
-      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
         with:
           package_json_file: source/package.json
       - name: Install locked dependencies without secrets
         working-directory: source
         run: pnpm install --frozen-lockfile
-      - name: Verify unchanged production and prepare source imports
+      # Baseline RED run 37031930491 is retained; do not repeat unchanged baseline proof.
+      - name: Verify exact candidate and prepare source imports
         working-directory: source
         run: |
           test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
-          cp ../proof-assets/src/media/parse.test.ts src/media/parse.test.ts
-          test -z "$(git diff --name-only -- src/media/parse-output.ts)"
+          test -z "$(git status --porcelain)"
           pnpm openclaw --version
-      - name: Real reply producer, local PNG loader, and failed settled delivery
+      - name: Changed-file formatting and lint
+        working-directory: source
+        run: |
+          pnpm exec oxfmt --check src/media/parse-output.ts src/media/parse.test.ts
+          node scripts/run-oxlint.mjs src/media/parse-output.ts src/media/parse.test.ts
+          git diff --check
+      - name: Real reply producer, local PNG loader, and settled delivery GREEN
         working-directory: source
         run: node --import ./scripts/tsx.mjs ../proof-assets/.github/proofs/media-cr/run.mjs
-      - name: Focused regression RED with LF and CRLF controls
+      - name: Focused regression GREEN with uniform and mixed separators
         working-directory: source
         run: node ../proof-assets/.github/proofs/media-cr/tests.mjs
+      - name: Proportional core production and test type checks
+        working-directory: source
+        run: |
+          pnpm tsgo:core
+          pnpm tsgo:test:src
