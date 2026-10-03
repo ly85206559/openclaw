@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, matchesGlob } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -55,6 +55,7 @@ import {
 import { createAgentsSupportVitestConfig } from "../vitest/vitest.agents-support.config.ts";
 import { createAgentsToolsVitestConfig } from "../vitest/vitest.agents-tools.config.ts";
 import { createAgentsVitestConfig } from "../vitest/vitest.agents.config.ts";
+import { createAutoReplyReplyVitestConfig } from "../vitest/vitest.auto-reply-reply.config.ts";
 import { cliProcessTestFiles } from "../vitest/vitest.cli-process-paths.mjs";
 import { createCliProcessVitestConfig } from "../vitest/vitest.cli-process.config.ts";
 import { createCommandsVitestConfig } from "../vitest/vitest.commands.config.ts";
@@ -2055,6 +2056,32 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     }
   });
 
+  it("runs Telegram skill script changes, including test-only edits, through the skill wrapper", () => {
+    const wrapper = "test/scripts/telegram-e2e-userbot-skill.test.ts";
+    const scriptsDir = ".agents/skills/telegram-e2e-userbot/scripts";
+    const scripts = readdirSync(scriptsDir, { withFileTypes: true })
+      .filter((entry) => entry.isFile() && !entry.name.startsWith("."))
+      .map((entry) => `${scriptsDir}/${entry.name}`);
+    expect(scripts.filter((file) => /\.test\.(?:mjs|py)$/u.test(file)).length).toBeGreaterThan(0);
+    for (const changedPath of scripts) {
+      expect(resolvePolicyTestTargets([changedPath]), changedPath).toContain(wrapper);
+    }
+    const changedTest = `${scriptsDir}/telegram-run-composition.test.mjs`;
+    const shards = expectDefined(
+      createChangedNodeTestShards([changedTest], { selectionMode: "aggressive" }),
+      "skill test plan",
+    );
+    const groups = shards.flatMap((shard) => shard.groups ?? []);
+    const selected = [
+      ...shards.flatMap((shard) => shard.targets ?? []),
+      ...groups.flatMap((group) => group.includePatterns ?? []),
+    ];
+    expect(selected).not.toContain(changedTest);
+    const owners = groups.filter((group) => group.includePatterns?.includes(wrapper));
+    expect(owners).toHaveLength(1);
+    expect(owners[0]?.configs).toEqual(["test/vitest/vitest.tooling.config.ts"]);
+  });
+
   it("matches policy owners with literal and native glob semantics", () => {
     const changedPath = "ui/src/styles/base.css";
     expect(isPolicyTestOwnedPath(changedPath)).toBe(true);
@@ -3735,6 +3762,8 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     expect(infra.test?.setupFiles).toEqual(support.test?.setupFiles);
     const admitted = new Set(listMatchedTestFiles(infra));
     for (const file of [
+      "src/agents/embedded-agent-runner/run/attempt-bootstrap-prepare.test.ts",
+      "src/auto-reply/reply/session-reset-prompt.test.ts",
       "src/agents/prepared-model-runtime.hot-reload-dispatch.test.ts",
       "src/agents/subagents/registry/subagent-registry.session-failure.test.ts",
       "src/plugin-sdk/session-transcript-runtime.test.ts",
@@ -3755,6 +3784,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         support,
         createAgentsToolsVitestConfig({}),
         createAgentsVitestConfig({}),
+        createAutoReplyReplyVitestConfig({}),
         createPluginSdkLightVitestConfig({}),
         createPluginSdkVitestConfig({}),
         createPluginsVitestConfig({}),
