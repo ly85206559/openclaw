@@ -1,0 +1,13 @@
+[
+  "relative install root cache layout",
+  "relative working directory cache layout",
+  "npm cache cache layout",
+  "package cache cache layout",
+  "npm cache precedence cache layout",
+  "npm install root cache layout",
+  "package install root cache layout",
+  "empty direct install root cache layout",
+  "relative XDG install root cache layout",
+  "cache path spaces cache layout",
+  "hermetic install cache layout"
+]

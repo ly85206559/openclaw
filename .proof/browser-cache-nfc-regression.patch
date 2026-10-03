@@ -1,0 +1,31 @@
+diff --git a/extensions/memory-core/src/memory/mmr.test.ts b/extensions/memory-core/src/memory/mmr.test.ts
+index 31620e0cb51..be012f49dc8 100644
+--- a/extensions/memory-core/src/memory/mmr.test.ts
++++ b/extensions/memory-core/src/memory/mmr.test.ts
+@@ -59,6 +59,26 @@ describe("memory MMR", () => {
+       ],
+       expected: ["/primary.md", "/diverse.md", "/duplicate.md", "/tail.md"],
+     },
++    {
++      name: "diversifies canonically equivalent Hangul snippets",
++      results: [
++        ["/primary.md", 1, "각"],
++        ["/duplicate.md", 0.98, "\u1100\u1161\u11a8"],
++        ["/diverse.md", 0.94, "나"],
++        ["/tail.md", 0.4, "garden compost schedule"],
++      ],
++      expected: ["/primary.md", "/diverse.md", "/duplicate.md", "/tail.md"],
++    },
++    {
++      name: "diversifies canonically equivalent kana snippets",
++      results: [
++        ["/primary.md", 1, "が"],
++        ["/duplicate.md", 0.98, "\u304b\u3099"],
++        ["/diverse.md", 0.94, "な"],
++        ["/tail.md", 0.4, "garden compost schedule"],
++      ],
++      expected: ["/primary.md", "/diverse.md", "/duplicate.md", "/tail.md"],
++    },
+     {
+       name: "keeps input order as the tie breaker for equal relevance and diversity",
+       results: [
