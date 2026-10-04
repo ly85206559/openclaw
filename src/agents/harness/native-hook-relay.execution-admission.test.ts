@@ -6,6 +6,7 @@ import {
 import { createMockPluginRegistry } from "../../plugins/hooks.test-fixtures.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import {
   invokeNativeHookRelay,
   registerNativeHookRelay,
@@ -23,24 +24,88 @@ afterEach(async () => {
 });
 
 describe("native hook execution admission", () => {
-  it.each(["owned", "public"] as const)(
-    "records native execution custody only through the bundled owner (%s)",
-    async (registration) => {
+  it("waits for async native admission and preserves a preparation rejection", async () => {
+    const entered = createDeferredCore();
+    const prepared = createDeferredCore();
+    const relay = registerOwnedNativeHookRelay({
+      provider: "codex",
+      sessionId: "async-admission",
+      runId: "async-admission",
+      assertActive: () => {},
+      executionAdmission: {
+        toolNames: ["exec"],
+        admit: async (_invocation, assertCurrent) => {
+          entered.resolve();
+          await prepared.promise;
+          assertCurrent();
+          throw new Error("native provider is not qualified");
+        },
+      },
+    });
+    const accepted = vi.fn();
+    const invocation = invokeNativeHookRelay({
+      provider: "codex",
+      relayId: relay.relayId,
+      event: "pre_tool_use",
+      rawPayload: {
+        session_id: "native-thread",
+        turn_id: "native-turn",
+        tool_use_id: "native-call",
+        tool_name: "exec_command",
+        tool_input: { command: "true" },
+      },
+    }).then(accepted);
+    await Promise.race([
+      entered.promise,
+      invocation.then(() => {
+        throw new Error("Native admission returned before preparation");
+      }),
+    ]);
+    prepared.resolve();
+    await expect(invocation).rejects.toThrow("native provider is not qualified");
+    expect(accepted).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { registration: "owned", work: "none", matcher: ["exec"] },
+    { registration: "public", work: "none", matcher: undefined },
+    { registration: "owned", work: "scoped policy", matcher: ["apply_patch", "exec"] },
+    { registration: "owned", work: "all tools", matcher: undefined },
+    { registration: "owned", work: "loop detection", matcher: undefined },
+  ] as const)(
+    "selects native execution custody for $registration registration with $work",
+    async ({ registration, work, matcher }) => {
+      if (work === "scoped policy" || work === "all tools") {
+        initializeGlobalHookRunner(
+          createMockPluginRegistry([
+            {
+              hookName: "before_tool_call",
+              handler: vi.fn(),
+              ...(work === "scoped policy" ? { matcher: ["apply_patch"] } : {}),
+            },
+          ]),
+        );
+      }
       const admit = vi.fn();
       const params = {
         provider: "codex" as const,
         sessionId: "openclaw-session",
         runId: "execution-admission",
-        executionAdmission: { toolNames: ["exec_command"], admit },
+        ...(work !== "none" ? { sessionKey: "agent:main:execution-admission" } : {}),
+        ...(work === "loop detection"
+          ? { config: { tools: { loopDetection: { enabled: true } } } }
+          : {}),
+        executionAdmission: { toolNames: [work === "none" ? "exec_command" : "exec"], admit },
       };
       const relay =
         registration === "owned"
           ? registerOwnedNativeHookRelay(params)
           : registerNativeHookRelay(params);
       expect(relay.shouldRelayEvent("pre_tool_use")).toBe(registration === "owned");
-      expect(relay.toolMatcherForEvent("pre_tool_use")).toEqual(
-        registration === "owned" ? ["exec"] : undefined,
-      );
+      expect(relay.toolMatcherForEvent("pre_tool_use")).toEqual(matcher);
+      if (work !== "none") {
+        return;
+      }
       const rawPayload = {
         session_id: "native-root",
         turn_id: "native-turn",
@@ -65,6 +130,7 @@ describe("native hook execution admission", () => {
             rawPayload,
           }),
           expect.any(Function),
+          expect.objectContaining({ assertCurrent: expect.any(Function) }),
         );
       } else {
         expect(admit).not.toHaveBeenCalled();
@@ -77,37 +143,6 @@ describe("native hook execution admission", () => {
         rawPayload: { ...rawPayload, tool_name: "apply_patch" },
       });
       expect(admit).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each(["scoped policy", "all tools", "loop detection"] as const)(
-    "unions execution custody with existing pre-tool work (%s)",
-    (work) => {
-      if (work !== "loop detection") {
-        initializeGlobalHookRunner(
-          createMockPluginRegistry([
-            {
-              hookName: "before_tool_call",
-              handler: vi.fn(),
-              ...(work === "scoped policy" ? { matcher: ["apply_patch"] } : {}),
-            },
-          ]),
-        );
-      }
-      const relay = registerOwnedNativeHookRelay({
-        provider: "codex",
-        sessionId: "execution-admission",
-        sessionKey: "agent:main:execution-admission",
-        runId: "execution-admission",
-        ...(work === "loop detection"
-          ? { config: { tools: { loopDetection: { enabled: true } } } }
-          : {}),
-        executionAdmission: { toolNames: ["exec"], admit: vi.fn() },
-      });
-      expect(relay.shouldRelayEvent("pre_tool_use")).toBe(true);
-      expect(relay.toolMatcherForEvent("pre_tool_use")).toEqual(
-        work === "scoped policy" ? ["apply_patch", "exec"] : undefined,
-      );
     },
   );
 

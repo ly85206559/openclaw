@@ -1,15 +1,153 @@
 import type { DatabaseSync } from "node:sqlite";
+import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { Insertable, Selectable } from "kysely";
+import type { Insertable, Selectable, Updateable } from "kysely";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
 import type { SandboxBrowserRegistryEntry, SandboxRegistryEntry } from "./registry.types.js";
 
 export type SandboxRegistryInsert = Insertable<DB["sandbox_registry_entries"]>;
+export type SandboxRegistryWrite =
+  | { operation: "update"; entry: SandboxRegistryEntry }
+  | { operation: "updateBrowser"; entry: SandboxBrowserRegistryEntry }
+  | { operation: "removeBrowser"; containerName: string }
+  | {
+      operation: "removeGeneration";
+      kind: "container" | "browser";
+      entry: SandboxRegistryEntry | SandboxBrowserRegistryEntry;
+    }
+  | { operation: "complete"; entry: SandboxRegistryEntry; retired: boolean }
+  | { operation: "remove"; containerName: string; preserveRemovalIntent?: boolean };
 
 type SandboxRegistryRow = Selectable<DB["sandbox_registry_entries"]>;
 type SandboxRegistryDatabase = Pick<DB, "sandbox_registry_entries">;
+
+function rowToUpdate(row: SandboxRegistryInsert): Updateable<DB["sandbox_registry_entries"]> {
+  const { registry_kind: _registryKind, container_name: _containerName, ...update } = row;
+  return update;
+}
+
+export function insertSandboxRegistryRowInDatabase(
+  db: DatabaseSync,
+  row: SandboxRegistryInsert,
+): void {
+  executeSqliteQuerySync(
+    db,
+    getNodeSqliteKysely<SandboxRegistryDatabase>(db)
+      .insertInto("sandbox_registry_entries")
+      .values(row)
+      .onConflict((conflict) =>
+        conflict.columns(["registry_kind", "container_name"]).doUpdateSet(rowToUpdate(row)),
+      ),
+  );
+}
+
+export function assertSandboxRegistryReservationCurrent(
+  current: SandboxRegistryEntry | null,
+  expected: Pick<SandboxRegistryEntry, "backendId" | "sessionKey">,
+): asserts current is SandboxRegistryEntry {
+  if (
+    !current ||
+    current.runtimeState === "removing" ||
+    current.runtimeState === "removing-pending" ||
+    current.backendId !== expected.backendId ||
+    current.sessionKey !== expected.sessionKey
+  ) {
+    throw new Error(
+      "Sandbox runtime was removed or is being removed; retry after sandbox recreate completes.",
+    );
+  }
+}
+
+function removeRegistryRowInDatabase(
+  db: DatabaseSync,
+  kind: "container" | "browser",
+  containerName: string,
+): void {
+  executeSqliteQuerySync(
+    db,
+    getNodeSqliteKysely<SandboxRegistryDatabase>(db)
+      .deleteFrom("sandbox_registry_entries")
+      .where("registry_kind", "=", kind)
+      .where("container_name", "=", containerName),
+  );
+}
+
+export function writeSandboxRegistryInDatabase(
+  db: DatabaseSync,
+  write: SandboxRegistryWrite,
+): void {
+  if (write.operation === "removeGeneration") {
+    const { kind, entry } = write;
+    const row = readSandboxRegistryRowInDatabase(db, kind, entry.containerName);
+    const current = row && (kind === "browser" ? rowToBrowserEntry(row) : rowToContainerEntry(row));
+    if (!current || !sameSandboxRegistryGeneration(current, entry)) {
+      throw new Error("Sandbox runtime generation changed during retirement");
+    }
+    removeRegistryRowInDatabase(db, kind, entry.containerName);
+    return;
+  }
+  if (write.operation === "updateBrowser") {
+    const { entry } = write;
+    const row = readSandboxRegistryRowInDatabase(db, "browser", entry.containerName);
+    insertSandboxRegistryRowInDatabase(
+      db,
+      browserEntryToRow(entry, row ? rowToBrowserEntry(row) : null),
+    );
+    return;
+  }
+  if (write.operation === "removeBrowser") {
+    removeRegistryRowInDatabase(db, "browser", write.containerName);
+    return;
+  }
+  if (write.operation === "remove") {
+    if (write.preserveRemovalIntent) {
+      const row = readSandboxRegistryRowInDatabase(db, "container", write.containerName);
+      const current = row ? rowToContainerEntry(row) : null;
+      if (current?.runtimeState === "removing" || current?.runtimeState === "removing-pending") {
+        return;
+      }
+    }
+    removeRegistryRowInDatabase(db, "container", write.containerName);
+    return;
+  }
+  const { entry } = write;
+  const row = readSandboxRegistryRowInDatabase(db, "container", entry.containerName);
+  const existing = row ? rowToContainerEntry(row) : null;
+  if (write.operation === "update") {
+    if (entry.runtimeState === "pending" && existing?.runtimeState !== undefined) {
+      assertSandboxRegistryReservationCurrent(existing, entry);
+    }
+    insertSandboxRegistryRowInDatabase(db, containerEntryToRow(entry, existing));
+    return;
+  }
+  assertSandboxRegistryReservationCurrent(existing, entry);
+  if (write.retired) {
+    removeRegistryRowInDatabase(db, "container", entry.containerName);
+  } else {
+    insertSandboxRegistryRowInDatabase(
+      db,
+      containerEntryToRow(
+        { ...entry, runtimeState: "ready" },
+        {
+          ...existing,
+          image: existing.runtimeState === "pending" ? entry.image : existing.image,
+        },
+      ),
+    );
+  }
+}
+
+// Activity stamps can advance without changing custody; all allocation facts must match.
+function sameSandboxRegistryGeneration(
+  current: SandboxRegistryEntry | SandboxBrowserRegistryEntry,
+  expected: SandboxRegistryEntry | SandboxBrowserRegistryEntry,
+): boolean {
+  const { lastUsedAtMs: _currentUse, ...currentGeneration } = current;
+  const { lastUsedAtMs: _expectedUse, ...expectedGeneration } = expected;
+  return isDeepStrictEqual(currentGeneration, expectedGeneration);
+}
 
 export function containerEntryToRow(
   entry: SandboxRegistryEntry,
@@ -45,7 +183,7 @@ export function containerEntryToRow(
   } satisfies SandboxRegistryInsert;
 }
 
-export function browserEntryToRow(
+function browserEntryToRow(
   entry: SandboxBrowserRegistryEntry,
   existing?: SandboxBrowserRegistryEntry | null,
 ) {
