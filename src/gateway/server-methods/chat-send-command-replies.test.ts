@@ -223,102 +223,6 @@ describe("selectChatSendFinalReplyInputs", () => {
     ).toEqual([]);
   });
 
-  it("folds duplicate command media and semantics into the block reply", () => {
-    const deliveredReplies = [
-      {
-        kind: "block" as const,
-        payload: setReplyPayloadMetadata(
-          {
-            text: "done",
-            mediaUrl: "file:///tmp/result.png",
-            trustedLocalMedia: true,
-          },
-          { assistantMessageIndex: 4 },
-        ),
-      },
-      {
-        kind: "final" as const,
-        payload: setReplyPayloadMetadata(
-          {
-            text: "done",
-            mediaUrls: ["/tmp/result.png"],
-            sensitiveMedia: true,
-            replyToId: "message-1",
-            attachments: [
-              { path: "/tmp/result.png", name: "Result chart.png", mimeType: "image/png" },
-            ],
-          },
-          { sessionWriterDeliveryAuthority: staleWriterAuthority },
-        ),
-      },
-    ];
-    const originalReplies = structuredClone(deliveredReplies);
-    const replies = selectRawReplies({
-      deliveredReplies,
-      foldCommandBlocks: true,
-      suppressReplies: false,
-    });
-
-    expect(replies.map(({ attachments: _attachments, ...payload }) => payload)).toEqual([
-      {
-        text: "done",
-        mediaUrl: undefined,
-        mediaUrls: ["file:///tmp/result.png"],
-        trustedLocalMedia: true,
-        sensitiveMedia: true,
-        replyToId: "message-1",
-      },
-    ]);
-    expect(replies.flatMap((payload) => collectReplyMediaEntries(payload))).toMatchObject([
-      {
-        url: "file:///tmp/result.png",
-        attachment: { name: "Result chart.png", mimeType: "image/png" },
-      },
-    ]);
-    expect(getReplyPayloadMetadata(replies[0]!)).toMatchObject({ assistantMessageIndex: 4 });
-    expectStaleWriterRejected(replies[0]!);
-    expect(deliveredReplies).toEqual(originalReplies);
-  });
-
-  it("keeps unmatched final text while deduplicating its media", () => {
-    const replies = selectRawReplies({
-      deliveredReplies: [
-        {
-          kind: "block",
-          payload: { text: "progress", mediaUrl: "/tmp/result.png" },
-        },
-        {
-          kind: "final",
-          payload: setReplyPayloadMetadata(
-            {
-              text: "done",
-              mediaUrl: "file:///tmp/result.png",
-              audioAsVoice: true,
-            },
-            { sessionWriterDeliveryAuthority: staleWriterAuthority },
-          ),
-        },
-      ],
-      foldCommandBlocks: true,
-      suppressReplies: false,
-    });
-    expect(replies).toEqual([
-      {
-        text: "progress",
-        mediaUrl: undefined,
-        mediaUrls: ["/tmp/result.png"],
-        audioAsVoice: true,
-      },
-      {
-        text: "done",
-        mediaUrl: undefined,
-        mediaUrls: undefined,
-        audioAsVoice: true,
-      },
-    ]);
-    expectStaleWriterRejected(replies[1]!);
-  });
-
   it.each([
     ["stale block", staleWriterAuthority, currentWriterAuthority],
     ["stale final", currentWriterAuthority, staleWriterAuthority],
@@ -415,15 +319,29 @@ describe("selectChatSendFinalReplyInputs", () => {
     const deliveredReplies = [
       {
         kind: "block" as const,
-        payload: {
-          text: testCase.blockText,
-          mediaUrl,
-          attachments: [{ path: mediaPath, height: 480 }],
-        },
+        payload: setReplyPayloadMetadata(
+          {
+            text: testCase.blockText,
+            mediaUrl,
+            ...(testCase.caption === "matching" ? { trustedLocalMedia: true } : {}),
+            attachments: [{ path: mediaPath, height: 480 }],
+          },
+          { assistantMessageIndex: 4 },
+        ),
       },
       {
         kind: "final" as const,
-        payload: { text: "done", mediaUrls: [mediaPath], attachments: [attachment] },
+        payload: setReplyPayloadMetadata(
+          {
+            text: "done",
+            mediaUrls: [mediaPath],
+            attachments: [attachment],
+            ...(testCase.caption === "matching"
+              ? { sensitiveMedia: true, replyToId: "message-1" }
+              : { audioAsVoice: true }),
+          },
+          { sessionWriterDeliveryAuthority: staleWriterAuthority },
+        ),
       },
     ];
     const originalReplies = structuredClone(deliveredReplies);
@@ -434,6 +352,30 @@ describe("selectChatSendFinalReplyInputs", () => {
       suppressReplies: false,
     });
 
+    expect(replies.map(({ attachments: _attachments, ...payload }) => payload)).toEqual(
+      testCase.caption === "matching"
+        ? [
+            {
+              text: "done",
+              mediaUrl: undefined,
+              mediaUrls: [mediaUrl],
+              trustedLocalMedia: true,
+              sensitiveMedia: true,
+              replyToId: "message-1",
+            },
+          ]
+        : [
+            { text: "preview", mediaUrl: undefined, mediaUrls: [mediaUrl], audioAsVoice: true },
+            { text: "done", mediaUrl: undefined, mediaUrls: undefined, audioAsVoice: true },
+          ],
+    );
+    if (testCase.caption === "matching") {
+      expect(replies.flatMap((payload) => collectReplyMediaEntries(payload))).toMatchObject([
+        { url: mediaUrl, attachment: { name: "Quarterly chart.png", mimeType: "image/png" } },
+      ]);
+      expect(getReplyPayloadMetadata(replies[0]!)).toMatchObject({ assistantMessageIndex: 4 });
+    }
+    expectStaleWriterRejected(replies[testCase.caption === "matching" ? 0 : 1]!);
     expect(replies.map((payload) => payload.text)).toEqual(testCase.expectedTexts);
     expect(replies.flatMap((payload) => payload.mediaUrls ?? [])).toEqual([mediaUrl]);
     expect(replies[0]).toMatchObject({
