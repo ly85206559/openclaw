@@ -48,10 +48,12 @@ describe("canonical CJK diversity through actual file sync and hybrid search", (
     { name: "kana MMR on", primary: "が", duplicate: "か\u3099", diverse: "な", enabled: true },
     { name: "kana MMR off", primary: "が", duplicate: "か\u3099", diverse: "な", enabled: false },
   ])("$name", async ({ name, primary, duplicate, diverse, enabled }) => {
+    // Saturate the existing length boost equally so MMR, not NFD byte length, decides diversity.
+    const prefix = "nfcprobe alpha reference context notes ";
     const files = [
-      { name: "a-primary.md", text: `nfcprobe alpha ${primary}` },
-      { name: "b-duplicate.md", text: `nfcprobe alpha ${duplicate}` },
-      { name: "c-diverse.md", text: `nfcprobe alpha ${diverse}` },
+      { name: "a-primary.md", text: `${prefix}${primary}` },
+      { name: "b-duplicate.md", text: `${prefix}${duplicate}` },
+      { name: "c-diverse.md", text: `${prefix}${diverse}` },
     ];
     await fs.writeFile(path.join(fixture.paths.memory, "2026-01-12.md"), "unrelated fixture");
     for (const file of files) {
@@ -86,6 +88,8 @@ describe("canonical CJK diversity through actual file sync and hybrid search", (
     expect(results).toHaveLength(3);
     expect(results.every((row) => row.vectorScore === 1 && (row.textScore ?? 0) > 0)).toBe(true);
     expect(new Set(results.map((row) => row.textScore)).size).toBe(1);
+    console.log(`NFC_RUNTIME_TRACE ${JSON.stringify({ phase, name, results })}`);
+    expect(new Set(results.map((row) => row.score)).size).toBe(1);
     const expected =
       enabled && phase === "green"
         ? ["memory/a-primary.md", "memory/c-diverse.md", "memory/b-duplicate.md"]

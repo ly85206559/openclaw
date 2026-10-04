@@ -26,6 +26,8 @@ const baseEnv = {
   HOME: path.join(taskRoot, "home"), XDG_CACHE_HOME: path.join(taskRoot, "empty-cache"),
   XDG_CONFIG_HOME: path.join(taskRoot, "xdg-config"),
   OPENCLAW_SKIP_CHANNELS: "1", OPENCLAW_SKIP_PROVIDERS: "1",
+  // Isolated HOME must retain exact trust for this task-owned checkout, not host credentials.
+  GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "safe.directory", GIT_CONFIG_VALUE_0: candidate,
 };
 await fs.mkdir(baseEnv.HOME);
 const report = { mode, sourceSha, playwrightVersion: "1.63.0", cases: [], passed: false };
