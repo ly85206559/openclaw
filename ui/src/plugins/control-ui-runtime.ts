@@ -1,4 +1,5 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { racePromiseWithAbortSignal, raceWithTimeout } from "@openclaw/retry";
 import type {
   PluginControlUiDiagnostic,
   PluginControlUiModule,
@@ -13,7 +14,6 @@ import type {
   ControlUiSurface,
 } from "../../../src/plugin-sdk/control-ui.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import type { RouteId } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { readGatewayOperatorAccess } from "../app/operator-access.ts";
 import { hasSameOriginGatewayTransport } from "../dev-gateway.ts";
@@ -40,6 +40,19 @@ export type ControlUiPluginOwner = {
   host: ControlUiHost;
 };
 
+const UI_CAPABILITY_BY_CONTRIBUTION = {
+  pages: "page",
+  navigation: "navigation",
+  panels: "panel",
+  actions: "action",
+  accessories: "accessory",
+  widgets: "widget",
+  replacements: "replacement",
+} as const satisfies Record<
+  keyof ControlUiContributions,
+  import("../../../packages/gateway-protocol/src/plugin-ui-capabilities.ts").PluginUiCapability
+>;
+
 const CONTRIBUTION_ID = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/;
 const ACTIVATION_TIMEOUT_MS = 15_000;
 
@@ -51,16 +64,32 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
   private loadingCatalog: "pending" | Set<string> | null = null;
   private readonly stops: ControlUiDisposer[] = [];
   private client: GatewayBrowserClient | null = null;
-  private hello: object | null = null;
+  private connectionId: string | null = null;
   private refreshGeneration = 0;
   private disposed = false;
   private diagnostics: PluginControlUiDiagnostic[] = [];
   private grantTimer: ReturnType<typeof setInterval> | null = null;
 
-  constructor(private readonly getContext: () => ApplicationContext<RouteId>) {}
+  constructor(private readonly getContext: () => ApplicationContext) {}
 
   get errors(): readonly PluginControlUiDiagnostic[] {
-    return this.diagnostics;
+    // Warnings belong to live registrations, so ordinary catalog refreshes retain
+    // them and retiring a contribution removes them without hiding activation errors.
+    const warnings = [...this.owners.values(), ...this.loadingOwners].flatMap((owner) =>
+      // SAFETY: the canonical mapping satisfies exactly the contribution registry keys.
+      (Object.keys(UI_CAPABILITY_BY_CONTRIBUTION) as (keyof ControlUiContributions)[])
+        .filter(
+          (kind) =>
+            owner.contributions[kind].size > 0 &&
+            owner.descriptor.uiCapabilities &&
+            !owner.descriptor.uiCapabilities.includes(UI_CAPABILITY_BY_CONTRIBUTION[kind]),
+        )
+        .map((kind) => ({
+          pluginId: owner.descriptor.pluginId,
+          message: `Registered UI capability "${UI_CAPABILITY_BY_CONTRIBUTION[kind]}" is missing from uiCapabilities in openclaw.plugin.json.`,
+        })),
+    );
+    return [...this.diagnostics, ...warnings];
   }
 
   get hasPlugins(): boolean {
@@ -90,9 +119,9 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
       throw new Error("Reloading plugin UI requires a connected operator with admin access.");
     }
     const client = this.client;
-    const hello = this.hello;
+    const connectionId = this.connectionId;
     await client.request("plugins.controlUi.reload", {});
-    if (this.disposed || this.client !== client || this.hello !== hello) {
+    if (this.disposed || this.client !== client || this.connectionId !== connectionId) {
       throw new Error("The connection changed while reloading plugin UI. Reconnect and retry.");
     }
     await this.refresh();
@@ -115,7 +144,7 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
     this.stops.push(
       context.gateway.subscribe(() => this.syncConnection()),
       context.gateway.subscribeEvents((event) => {
-        if (event.event === "plugins.controlUi.changed") {
+        if (event.event === "plugins.controlUi.changed" || event.event === "plugins.changed") {
           void this.refresh();
         }
       }),
@@ -126,13 +155,14 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
   private syncConnection(): void {
     const snapshot = this.getContext().gateway.snapshot;
     const client = snapshot.phase === "connected" ? snapshot.client : null;
-    const hello = client ? snapshot.hello : null;
-    if (this.client === client && this.hello === hello) {
+    // Plugin generations can change while the server connection and UI owners survive.
+    const connectionId = client ? (snapshot.hello?.server?.connId ?? null) : null;
+    if (this.client === client && this.connectionId === connectionId) {
       return;
     }
     this.retireOwners();
     this.client = client;
-    this.hello = hello;
+    this.connectionId = connectionId;
     this.diagnostics = [];
     this.publish();
     if (client && isGatewayMethodAdvertised(snapshot, "plugins.controlUi.list")) {
@@ -287,7 +317,6 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
       selections: new Map<ControlUiSurface, string | null>(),
     };
     this.loadingOwners.add(owner);
-    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       const styles: HTMLLinkElement[] = [];
       const initialize = async (): Promise<ControlUiPluginOwner | undefined> => {
@@ -296,25 +325,19 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
           this.disposeOwner(owner),
         );
       };
-      const complete = await Promise.race([
-        initialize(),
-        new Promise<never>((_resolve, reject) => {
-          timer = setTimeout(
-            () =>
-              reject(
-                new Error(
-                  "Plugin UI initialization timed out. Check the plugin and reload its UI.",
-                ),
-              ),
-            ACTIVATION_TIMEOUT_MS,
+      const complete = await raceWithTimeout(
+        racePromiseWithAbortSignal(
+          initialize(),
+          abort.signal,
+          () => new Error("Plugin UI activation ended."),
+        ),
+        ACTIVATION_TIMEOUT_MS,
+        () => {
+          throw new Error(
+            "Plugin UI initialization timed out. Check the plugin and reload its UI.",
           );
-          abort.signal.addEventListener(
-            "abort",
-            () => reject(new Error("Plugin UI activation ended.")),
-            { once: true },
-          );
-        }),
-      ]);
+        },
+      );
       if (!complete || !current() || abort.signal.aborted) {
         this.disposeOwner(owner);
         return;
@@ -382,7 +405,6 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
         await this.reportActivation(descriptor, client, current, "failed", error);
       }
     } finally {
-      clearTimeout(timer);
       this.loadingOwners.delete(owner);
     }
   }

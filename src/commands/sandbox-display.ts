@@ -1,7 +1,3 @@
-/**
- * Display utilities for sandbox CLI
- */
-
 import type { SandboxBrowserInfo, SandboxContainerInfo } from "../agents/sandbox.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
@@ -59,51 +55,38 @@ export function displayBrowsers(browsers: SandboxBrowserInfo[], runtime: Runtime
 }
 
 export function displaySummary(
-  containers: SandboxContainerInfo[],
-  browsers: SandboxBrowserInfo[],
+  entries: (SandboxContainerInfo | SandboxBrowserInfo)[],
+  browser: boolean,
   runtime: RuntimeEnv,
 ): void {
-  const totalCount = containers.length + browsers.length;
-  const runningCount =
-    containers.filter((c) => c.running).length + browsers.filter((b) => b.running).length;
-  const mismatchCount =
-    containers.filter((c) => !c.imageMatch).length + browsers.filter((b) => !b.imageMatch).length;
+  const runningCount = entries.filter((entry) => entry.running).length;
+  const mismatchCount = entries.filter((entry) => !entry.imageMatch).length;
 
-  runtime.log(`Total: ${totalCount} (${runningCount} running)`);
+  runtime.log(`Total: ${entries.length} (${runningCount} running)`);
 
   if (mismatchCount > 0) {
     runtime.log(`\n⚠️  ${mismatchCount} runtime(s) with config mismatch detected.`);
-    runtime.log(
-      `   Run '${formatCliCommand("openclaw sandbox recreate --all")}' to update all runtimes.`,
+    const command = formatCliCommand(
+      `openclaw sandbox recreate --all${browser ? " --browser" : ""}`,
     );
+    runtime.log(`   Run '${command}' to update all runtimes.`);
   }
 }
 
 export function displayRecreatePreview(
   containers: SandboxContainerInfo[],
-  browsers: SandboxBrowserInfo[],
+  browser: boolean,
   runtime: RuntimeEnv,
 ): void {
   runtime.log("\nSandbox runtimes to be recreated:\n");
-
-  if (containers.length > 0) {
-    runtime.log("📦 Sandbox Runtimes:");
-    for (const container of containers) {
-      runtime.log(
-        `  - ${container.runtimeLabel ?? container.containerName} [${container.backendId ?? "docker"}] (${container.running ? "running" : "stopped"})`,
-      );
-    }
+  runtime.log(browser ? "\n🌐 Browser Containers:" : "📦 Sandbox Runtimes:");
+  for (const container of containers) {
+    const label = browser
+      ? container.containerName
+      : `${container.runtimeLabel ?? container.containerName} [${container.backendId ?? "docker"}]`;
+    runtime.log(`  - ${label} (${container.running ? "running" : "stopped"})`);
   }
-
-  if (browsers.length > 0) {
-    runtime.log("\n🌐 Browser Containers:");
-    for (const browser of browsers) {
-      runtime.log(`  - ${browser.containerName} (${browser.running ? "running" : "stopped"})`);
-    }
-  }
-
-  const total = containers.length + browsers.length;
-  runtime.log(`\nTotal: ${total} runtime(s)`);
+  runtime.log(`\nTotal: ${containers.length} runtime(s)`);
 }
 
 export function displayRecreateResult(

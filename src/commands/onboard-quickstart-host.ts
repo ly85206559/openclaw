@@ -9,7 +9,10 @@ import type { RuntimeEnv } from "../runtime.js";
 import { createQuickstartNotePrompter } from "../system-agent/setup-apply.js";
 import { t } from "../wizard/i18n/index.js";
 import { resolveGatewayStartupTiming } from "./gateway-startup-timing.js";
-import { runBrowserHatchHandoff } from "./onboard-browser-handoff.js";
+import {
+  resolveOnboardingDashboardTarget,
+  runBrowserHatchHandoff,
+} from "./onboard-browser-handoff.js";
 import { resolveLocalControlUiProbeLinks, waitForGatewayReachable } from "./onboard-helpers.js";
 
 type QuickstartForegroundGatewayDeps = {
@@ -21,7 +24,7 @@ type QuickstartForegroundGatewayDeps = {
 
 /** Start the foreground Gateway with fresh plugin facts after onboarding installs. */
 export async function runQuickstartForegroundGateway(
-  params: { runtime: RuntimeEnv; suppressTokenOutput?: boolean },
+  params: { runtime: RuntimeEnv; suppressTokenOutput?: boolean; agentId?: string },
   deps: QuickstartForegroundGatewayDeps = {},
 ): Promise<void> {
   return await withPluginCache(createPluginCache(), async () => {
@@ -48,7 +51,10 @@ export async function runQuickstartForegroundGateway(
       (deps.waitForGateway ?? waitForGatewayReachable)({
         url: links.wsUrl,
         token: authMode === "token" ? credentials.token : undefined,
-        password: authMode === "password" ? credentials.password : undefined,
+        password:
+          authMode === "password" || authMode === "trusted-proxy"
+            ? credentials.password
+            : undefined,
         ...resolveGatewayStartupTiming(),
       }),
     ]);
@@ -63,6 +69,7 @@ export async function runQuickstartForegroundGateway(
           config,
           prompter: createQuickstartNotePrompter(runtime),
           suppressTokenOutput: params.suppressTokenOutput,
+          ...(params.agentId ? { agentId: params.agentId } : {}),
         }).catch(() => ({ handedOff: false })),
       ]);
       if (!handoff) {
@@ -74,10 +81,20 @@ export async function runQuickstartForegroundGateway(
     } else {
       runtime.log(t("wizard.guided.quickstartGatewayPending"));
     }
-    runtime.log(t("wizard.guided.quickstartDashboard", { url: links.httpUrl }));
+    const { url: dashboardUrl, setupOnly } = await resolveOnboardingDashboardTarget(
+      links.httpUrl,
+      config,
+      params.agentId,
+    );
+    runtime.log(t("wizard.guided.quickstartDashboard", { url: dashboardUrl.toString() }));
     runtime.log(t("wizard.guided.quickstartForeground"));
     runtime.log(t("wizard.guided.quickstartBackground"));
     runtime.log(t("wizard.guided.quickstartReopen"));
+    if (setupOnly) {
+      runtime.log(
+        "Use openclaw setup for the setup assistant. Choose a primary model with openclaw onboard before regular agent chat.",
+      );
+    }
     await gateway;
   });
 }

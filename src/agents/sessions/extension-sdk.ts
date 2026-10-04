@@ -6,7 +6,8 @@
  * so importing loader-owned modules here creates runtime cycles.
  */
 
-export { getAgentDir, PACKAGE_MANIFEST_VERSION as VERSION } from "../config.js";
+export { getAgentDir } from "../config.js";
+export { PACKAGE_MANIFEST_VERSION as VERSION } from "../package-metadata.js";
 export * from "./auth-storage.js";
 export * from "./bash-executor.js";
 export * from "./compaction/index.js";
@@ -15,7 +16,6 @@ export type { ReadonlyFooterDataProvider } from "./footer-data-provider.js";
 export { convertToLlm } from "./messages.js";
 export * from "./model-registry.js";
 export * from "./model-resolver.js";
-export * from "./package-manager.js";
 export type { PromptTemplate } from "./prompt-templates.js";
 export type { ResourceCollision, ResourceDiagnostic } from "./diagnostics.js";
 export * from "./session-manager.js";

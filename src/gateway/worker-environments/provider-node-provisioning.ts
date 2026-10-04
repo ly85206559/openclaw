@@ -1,4 +1,5 @@
 import type { WorkerAdmissionHandshake } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import type {
   WorkerLease,
   WorkerNodeEnrollment,
@@ -8,6 +9,7 @@ import type {
 } from "../../plugins/types.js";
 import type { WorkerInstallationArtifact } from "./bundle.js";
 import type { WorkerCredentialBroker } from "./credential-broker.js";
+import { workerEnvironmentServiceError as serviceError } from "./environment-errors.js";
 import { readWorkerProjectPreparation } from "./preparation-identity.js";
 import type { createWorkerProjectPreparation } from "./project-preparation.js";
 import type { WorkerProviderLifecycleOptions } from "./provider-lifecycle.types.js";
@@ -32,7 +34,6 @@ type WorkerNodeProvisioningOptions = Pick<
   | "registerPreparedWorkspace"
   | "move"
   | "saveError"
-  | "serviceError"
 > & {
   commitReady: WorkerCredentialBroker["commitReady"];
   failBootstrap: (
@@ -69,22 +70,34 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
     signal?: AbortSignal,
     beforeProvision?: () => void,
   ) => {
-    if (!provider.requiresNodeEnrollment || !options.prepareNodeBootstrap) {
+    const prepareNodeBootstrap = options.prepareNodeBootstrap;
+    if (!provider.requiresNodeEnrollment || !prepareNodeBootstrap) {
       return undefined;
     }
     let identity: WorkerNodeRuntimeIdentity;
-    let installation: WorkerInstallationArtifact | undefined;
+    let installation: Awaited<ReturnType<typeof prepareBundle>>;
     // Replay also identifies the requested bytes; it must not relabel a previously enrolled node.
     try {
-      const nodeBootstrapSha256 = await options.prepareNodeBootstrap(record, signal);
-      if (record.profileSnapshot.project) {
-        installation = await prepareBundle(undefined, signal);
+      const [bootstrapResult, installationResult] = await racePromiseWithAbortSignal(
+        Promise.allSettled([
+          Promise.resolve().then(() => prepareNodeBootstrap(record, signal)),
+          prepareBundle(undefined, signal),
+        ]),
+        signal,
+      );
+      signal?.throwIfAborted();
+      if (bootstrapResult.status === "rejected") {
+        throw bootstrapResult.reason;
       }
+      if (installationResult.status === "rejected") {
+        throw installationResult.reason;
+      }
+      const nodeBootstrapSha256 = bootstrapResult.value;
+      installation = installationResult.value;
       const preparation = readWorkerProjectPreparation(record.profileSnapshot.project);
       if (
         preparation &&
         (preparation.artifacts.nodeBootstrapSha256 !== nodeBootstrapSha256 ||
-          installation?.install !== "bundle" ||
           preparation.artifacts.workerArchiveSha256 !== installation.tarballSha256)
       ) {
         throw new Error("Prepared project runtime artifacts changed after admission");
@@ -93,9 +106,7 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
         nodeBootstrapSha256,
         executionMode:
           record.profileSnapshot.executionMode === "remote-exec" ? "remote-exec" : "worker-turn",
-        ...(installation?.install === "bundle"
-          ? { workerBundleSha256: installation.tarballSha256 }
-          : {}),
+        workerBundleSha256: installation.tarballSha256,
       };
     } catch (error) {
       signal?.throwIfAborted();
@@ -106,12 +117,12 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
         current.destroyRequestedAtMs === null
       ) {
         if (current.state === "requested") {
-          options.move(current, "failed", { lastError: boundedError(error) });
+          await options.move(current, "failed", { lastError: boundedError(error) });
         } else if (current.state === "provisioning") {
-          options.saveError(current, error);
+          await options.saveError(current, error);
         }
       }
-      throw options.serviceError(
+      throw serviceError(
         "bootstrap_failure",
         `Worker node bootstrap preparation failed: ${boundedError(error)}`,
       );
@@ -126,7 +137,7 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
       current.ownerEpoch !== record.ownerEpoch ||
       current.destroyRequestedAtMs !== null
     ) {
-      throw options.serviceError(
+      throw serviceError(
         "invalid_state",
         "Worker provisioning changed during bootstrap preparation",
       );
@@ -154,6 +165,9 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
     const controller = new AbortController();
     let runtime: WorkerNodeRuntimePreparation | undefined;
     let pendingRuntime: Promise<WorkerNodeRuntimePreparation> | undefined;
+    let pendingInstallation: ReturnType<typeof prepareBundle> | undefined;
+    const prepareInstallation = () =>
+      (pendingInstallation ??= prepareBundle(preparedInstallation, signal));
     let enrollment: WorkerNodeEnrollment | undefined;
     let pending: Promise<WorkerNodeEnrollment> | undefined;
     const close = () => {
@@ -212,11 +226,17 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
       }
     };
     return {
+      get installation() {
+        return pendingInstallation ?? preparedInstallation;
+      },
       prepareRuntime: prepareNodeRuntime
         ? async () => {
             assertRuntimeCurrent();
             pendingRuntime ??= (async () => {
-              const artifact = await prepareBundle(preparedInstallation, controller.signal);
+              const artifact = await racePromiseWithAbortSignal(
+                prepareInstallation(),
+                controller.signal,
+              );
               assertRuntimeCurrent();
               const prepared = await prepareNodeRuntime(record, artifact, controller.signal);
               try {
@@ -250,7 +270,9 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
           enrollment = prepared;
           return prepared;
         });
-        return await pending;
+        const prepared = await pending;
+        assertCurrent();
+        return prepared;
       },
       close,
     };
@@ -261,7 +283,7 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
     lease: NodeLease,
     provider: WorkerProvider,
     patch: { leaseId: string; sharedHost: boolean; desktop: WorkerLease["desktop"] | null },
-    preparedInstallation?: WorkerInstallationArtifact,
+    preparedInstallation?: WorkerInstallationArtifact | Promise<WorkerInstallationArtifact>,
     cancellation?: ReturnType<typeof createWorkerProvisionCancellation>,
     preparedWorkspace?: ReturnType<
       ReturnType<typeof createWorkerProjectPreparation>["getPreparedWorkspace"]
@@ -279,25 +301,19 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
       cancellation?.assertActive();
       beforeProvision?.();
       const current = options.store.get(record.environmentId);
-      if (current?.preparation?.consumedAtMs === null && current.preparation.expiresAtMs <= now()) {
-        options.store.requestDestroy({
-          environmentId: current.environmentId,
-          state: current.state,
-          lastError: "Unused prepared worker expired before readiness",
-        });
-      }
       if (
         options.isStopping() ||
         !current ||
         current.state !== record.state ||
         current.provisionOperationId !== record.provisionOperationId ||
         current.ownerEpoch !== record.ownerEpoch ||
+        (current.preparation?.consumedAtMs === null && current.preparation.expiresAtMs <= now()) ||
         (current.preparation !== null && current.preparation.consumedAtMs !== null) ||
         (preparation !== undefined &&
           (!enrollmentOwner?.nodeSetupId ||
             current.nodeSetupId !== enrollmentOwner.nodeSetupId ||
             current.nodeDeviceId !== lease.node.deviceId)) ||
-        options.store.get(record.environmentId)?.destroyRequestedAtMs !== null
+        current.destroyRequestedAtMs !== null
       ) {
         throw new Error("Prepared worker provisioning owner is no longer current");
       }
@@ -308,17 +324,24 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
       if (!options.ensureNodeWorkerBundle) {
         throw new Error("Device worker bundle installer is unavailable");
       }
-      const artifact = await prepareBundle(preparedInstallation, cancellation?.signal);
+      const artifact = await prepareBundle(await preparedInstallation, cancellation?.signal);
       assertCurrent();
       if (preparation && artifact.tarballSha256 !== preparation.artifacts.workerArchiveSha256) {
         throw new Error("Worker bundle differs from its admitted preparation");
       }
+      // Conversation attachments do not run the agent; only worker turns need its prewarm.
+      const prewarm =
+        record.profileSnapshot.executionMode !== "remote-exec" &&
+        !(await options.store.hasSessionAttachment(record.environmentId));
+      assertCurrent();
       nodeBuild = await options.ensureNodeWorkerBundle({
+        reason: "provision",
+        environmentId: record.environmentId,
         deviceId: lease.node.deviceId,
         artifact,
-        // Remote execution uses its harness runtime; unspecified mode retains worker prewarming.
-        prewarm: record.profileSnapshot.executionMode !== "remote-exec",
+        prewarm,
         signal: cancellation?.signal,
+        assertCurrent,
       });
       assertCurrent();
       if (preparation) {
@@ -341,9 +364,15 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
         assertCurrent();
       }
     } catch (error) {
+      await cancellation?.settleStopIntent();
       return await options.failBootstrap(record, lease.leaseId, provider, error, nodePatch);
     }
-    return options.commitReady(record, { ...nodeBuild, installKind: "bundle" }, nodePatch);
+    return options.commitReady(
+      record,
+      { ...nodeBuild, installKind: "bundle" },
+      nodePatch,
+      assertCurrent,
+    );
   };
 
   return { prepare, createEnrollmentOperation, finish };

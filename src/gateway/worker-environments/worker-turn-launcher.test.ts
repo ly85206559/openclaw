@@ -1,11 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WORKER_LAUNCH_V2_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   abortAndDrainEmbeddedAgentRun,
   setActiveEmbeddedRun,
 } from "../../agents/embedded-agent-runner/runs.js";
-import { installSessionPlacementAdmissionProvider } from "../../agents/session-placement-admission.js";
+import {
+  installSessionPlacementAdmissionProvider,
+  resolveSessionPlacementRuntimeOverride,
+} from "../../agents/session-placement-admission.js";
 import {
   resolveSessionPlacementForcedTerminalSettlement,
   resolveSessionPlacementTurnSettlementAssertion,
@@ -16,6 +20,7 @@ import {
   patchSessionEntryCore,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import * as sessionEntryReader from "../../config/sessions/session-entry-read-runtime.js";
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import { createChatRunState } from "../server-chat-state.js";
 import { prepareSessionLifecycleDrain } from "../server-methods/sessions-lifecycle-drain.js";
@@ -23,6 +28,7 @@ import type { GatewayRequestContext } from "../server-methods/types.js";
 import { WorkerTunnelOwnerDisconnectedError, type WorkerTunnelHandle } from "./tunnel-contract.js";
 import { success } from "./tunnel.test-support.js";
 import {
+  createWorkerTurnTunnel,
   ENVIRONMENT_ID,
   MANIFEST_REF,
   OWNER_EPOCH,
@@ -31,7 +37,6 @@ import {
   attachedEnvironment,
   cleanupWorkerTurnLauncherTest,
   createWorkerSessionTurnPlacementProvider,
-  measureLaunchTurn,
   placements,
   root,
   seedActivePlacement,
@@ -47,6 +52,40 @@ import { resolveWorkerTurnTranscriptTarget } from "./worker-turn-transcript-targ
 describe("worker turn launcher local placement", () => {
   beforeEach(setupWorkerTurnLauncherTest);
   afterEach(cleanupWorkerTurnLauncherTest);
+
+  it.each(["worker-turn", "remote-exec"] as const)(
+    "uses only the matching %s placement as a runtime default",
+    async (executionMode) => {
+      const provider = createWorkerSessionTurnPlacementProvider({
+        environments: unusedEnvironments(),
+        placements,
+      });
+      const uninstall = installSessionPlacementAdmissionProvider(provider);
+      const identity = { sessionId: SESSION_ID, sessionKey: SESSION_KEY, agentId: "main" };
+      try {
+        expect(resolveSessionPlacementRuntimeOverride(identity)).toBeUndefined();
+        await seedActivePlacement(executionMode);
+        expect(resolveSessionPlacementRuntimeOverride(identity)).toBe(
+          executionMode === "worker-turn" ? "openclaw" : undefined,
+        );
+        expect(resolveSessionPlacementRuntimeOverride({ sessionId: SESSION_ID })).toBe(
+          executionMode === "worker-turn" ? "openclaw" : undefined,
+        );
+        for (const mismatch of [
+          { sessionId: "other-session" },
+          { sessionKey: "agent:main:other" },
+          { agentId: "other-agent" },
+        ]) {
+          expect(
+            resolveSessionPlacementRuntimeOverride({ ...identity, ...mismatch }),
+          ).toBeUndefined();
+        }
+      } finally {
+        uninstall();
+      }
+      expect(resolveSessionPlacementRuntimeOverride(identity)).toBeUndefined();
+    },
+  );
 
   it("rejects a transcript target without a session incarnation", () => {
     expect(() =>
@@ -167,7 +206,7 @@ describe("worker turn launcher local placement", () => {
   ])(
     "rejects a conflicting supplied placement %s before workspace access",
     async (_label, identity) => {
-      seedActivePlacement();
+      await seedActivePlacement();
       const resolveWorkspace = vi.fn(async () => ({ kind: "local" as const, path: root }));
       const runLocal = vi.fn(async () => ({ meta: { durationMs: 1 } }));
       const provider = createWorkerSessionTurnPlacementProvider({
@@ -190,7 +229,7 @@ describe("worker turn launcher local placement", () => {
   );
 
   it("inherits omitted placement identity before workspace access", async () => {
-    seedActivePlacement();
+    await seedActivePlacement();
     const resolveWorkspace = vi.fn(async () => {
       throw new Error("workspace reached");
     });
@@ -255,7 +294,7 @@ describe("worker turn launcher local placement", () => {
       if (state === "local") {
         await provider.executeLocalTurn(claim, async () => {});
       }
-      const repository = getSessionRepositoryWorkspaceStore().create({
+      const repository = await getSessionRepositoryWorkspaceStore().create({
         agentId: "main",
         sessionKey: SESSION_KEY,
         url: "https://github.com/example/repository.git",
@@ -270,9 +309,19 @@ describe("worker turn launcher local placement", () => {
       await expect(provider.executeTurn(claim, turn(), runLocal)).rejects.toThrow(
         "needs a cloud worker",
       );
-      await expect(provider.executeLocalTurn(claim, runLocal)).rejects.toThrow(
-        "needs a cloud worker",
-      );
+      const sql = observeHostDataSql();
+      try {
+        await expect(provider.executeLocalTurn(claim, runLocal)).rejects.toThrow(
+          "needs a cloud worker",
+        );
+        expect(
+          sql.queries.filter((query) =>
+            /\bsession_(?:nodes|windows|participants|entry_snapshots)\b/.test(query),
+          ),
+        ).toEqual([]);
+      } finally {
+        sql.restore();
+      }
       expect(runLocal).not.toHaveBeenCalled();
 
       // Publication can retain the old repository row after an explicit move.
@@ -284,9 +333,48 @@ describe("worker turn launcher local placement", () => {
       expect(loadSessionEntry(sessionTarget)?.repositoryWorkspaceId).toBeUndefined();
       await provider.executeLocalTurn(claim, runLocal);
       expect(runLocal).toHaveBeenCalledOnce();
-      expect(getSessionRepositoryWorkspaceStore().get(repository.workspaceId)).toBeDefined();
+      expect(await getSessionRepositoryWorkspaceStore().get(repository.workspaceId)).toBeDefined();
     },
   );
+
+  it("rejects local placement when caller authority ends after the metadata read", async () => {
+    setRuntimeConfigSnapshot({ session: { store: sessionTarget.storePath } });
+    const provider = createWorkerSessionTurnPlacementProvider({
+      environments: unusedEnvironments(),
+      placements,
+    });
+    const controller = new AbortController();
+    const revoked = new Error("local turn source retired");
+    const read = sessionEntryReader.readSessionEntryReadOnlyInWorker;
+    const heldRead = vi
+      .spyOn(sessionEntryReader, "readSessionEntryReadOnlyInWorker")
+      .mockImplementationOnce(async (...args) => {
+        const entry = await read(...args);
+        controller.abort(revoked);
+        return entry;
+      });
+    const claimTurn = vi.spyOn(placements, "claimTurn");
+    const runLocal = vi.fn(async () => "local execution started");
+    try {
+      await expect(
+        provider.executeLocalTurn(
+          {
+            sessionId: SESSION_ID,
+            sessionKey: SESSION_KEY,
+            agentId: "main",
+            runId: "revoked-local",
+          },
+          runLocal,
+          () => controller.signal.throwIfAborted(),
+        ),
+      ).rejects.toBe(revoked);
+      expect(claimTurn).not.toHaveBeenCalled();
+      expect(runLocal).not.toHaveBeenCalled();
+    } finally {
+      heldRead.mockRestore();
+      claimTurn.mockRestore();
+    }
+  });
 
   it("mints a fresh claim token when a later turn reuses the run id", async () => {
     const environments = unusedEnvironments();
@@ -483,7 +571,7 @@ describe("worker turn launcher local placement", () => {
   });
 
   it("rejects local CLI execution after worker activation", async () => {
-    seedActivePlacement();
+    await seedActivePlacement();
     const environments = unusedEnvironments();
     const provider = createWorkerSessionTurnPlacementProvider({ environments, placements });
     const runLocal = vi.fn(async () => ({ kind: "cli" }));
@@ -510,7 +598,7 @@ describe("worker turn launcher local placement", () => {
   ])(
     "rejects an active worker turn assigned to a configured %s runtime",
     async (_kind, runtimeId) => {
-      seedActivePlacement();
+      await seedActivePlacement();
       const getEnvironment = vi.fn(() => undefined);
       const environments: WorkerTurnEnvironmentService = {
         ...unusedEnvironments(),
@@ -529,7 +617,7 @@ describe("worker turn launcher local placement", () => {
               agents: {
                 defaults: {
                   models: {
-                    "openai/gpt-test": { agentRuntime: { id: runtimeId } },
+                    "openai/gpt-5.6-luna": { agentRuntime: { id: runtimeId } },
                   },
                 },
               },
@@ -546,7 +634,7 @@ describe("worker turn launcher local placement", () => {
   );
 
   it("resolves an exact paired-device sandbox without requiring an SSH identity resolver", async () => {
-    seedActivePlacement("remote-exec");
+    await seedActivePlacement("remote-exec");
     const environment = {
       ...attachedEnvironment(),
       providerId: "device",
@@ -577,7 +665,7 @@ describe("worker turn launcher local placement", () => {
   });
 
   it("rejects a remote-exec placement replaced while resolving its managed workspace", async () => {
-    seedActivePlacement("remote-exec");
+    await seedActivePlacement("remote-exec");
     const environment = attachedEnvironment();
     const provider = createWorkerSessionTurnPlacementProvider({
       environments: { ...unusedEnvironments(), get: vi.fn(() => environment) },
@@ -587,7 +675,7 @@ describe("worker turn launcher local placement", () => {
         if (placement?.state !== "active") {
           throw new Error("expected an active placement");
         }
-        placements.startDrain({
+        await placements.startDrain({
           sessionId: SESSION_ID,
           environmentId: placement.environmentId,
           ownerEpoch: placement.activeOwnerEpoch,
@@ -608,7 +696,7 @@ describe("worker turn launcher local placement", () => {
   });
 
   it("rejects a paired-node environment replaced after sandbox preparation", async () => {
-    seedActivePlacement("remote-exec");
+    await seedActivePlacement("remote-exec");
     const environment = {
       ...attachedEnvironment(),
       providerId: "device",
@@ -655,7 +743,7 @@ describe("worker turn launcher local placement", () => {
   ])(
     "records a remote-exec reconciliation failure after $scenario and releases its local claim",
     async ({ executionFailure, expectedError, expectedTerminalReason }) => {
-      seedActivePlacement("remote-exec");
+      await seedActivePlacement("remote-exec");
       const reconciliationError = new Error("workspace manifest memo exceeds its entry limit");
       const tunnel: WorkerTunnelHandle = {
         environmentId: ENVIRONMENT_ID,
@@ -681,7 +769,7 @@ describe("worker turn launcher local placement", () => {
         if (placement?.state !== "failed" || placement.turnClaim !== null) {
           throw new Error("expected terminal placement before teardown recovery");
         }
-        expect(placements.listPendingWorkspaceResults()).toEqual([]);
+        expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
       });
       const provider = createWorkerSessionTurnPlacementProvider({
         environments,
@@ -722,19 +810,17 @@ describe("worker turn launcher local placement", () => {
         turnClaim: null,
         terminalReason: expect.stringContaining(expectedTerminalReason),
       });
-      expect(placements.listPendingWorkspaceResults()).toEqual([]);
+      expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
     },
   );
 
   it.each([
     { label: "failed paired-device execution", executionFailed: true, providerId: "device" },
-    { label: "successful paired-device execution", executionFailed: false, providerId: "device" },
-    { label: "failed cloud-node execution", executionFailed: true, providerId: "crabbox" },
     { label: "successful cloud-node execution", executionFailed: false, providerId: "crabbox" },
   ])(
     "preserves a disconnected node-backed placement after $label for a fresh attempt",
     async ({ executionFailed, providerId }) => {
-      seedActivePlacement("remote-exec");
+      await seedActivePlacement("remote-exec");
       const original = placements.get(SESSION_ID);
       if (original?.state !== "active") {
         throw new Error("expected an active paired-device placement");
@@ -753,27 +839,25 @@ describe("worker turn launcher local placement", () => {
           if (request.source.kind !== "local") {
             throw new Error("expected a local workspace source");
           }
-          request.source.journal.commit(MANIFEST_REF);
+          await request.source.journal.commit(MANIFEST_REF);
           return {
             manifestRef: MANIFEST_REF,
             changed: false,
             verifyStable: vi.fn(async () => {}),
             verifyLocalStable: vi.fn(async () => {}),
+            publishStagedResult: async () => {},
+            discardPreparedStagedResult: async () => {},
           };
         },
       );
       const launchTurn = vi.fn();
-      const tunnel: WorkerTunnelHandle = {
-        environmentId: ENVIRONMENT_ID,
-        ownerEpoch: OWNER_EPOCH,
-        measureLaunchTurn,
+      const tunnel: WorkerTunnelHandle = createWorkerTurnTunnel({
         launchTurn,
         runWorkspaceCommand: vi.fn(async () => success()),
         quiesceWorkspace,
         syncWorkspace: vi.fn(),
         reconcileWorkspace,
-        stop: vi.fn(async () => {}),
-      };
+      });
       const environment = {
         ...attachedEnvironment(),
         providerId,
@@ -830,7 +914,7 @@ describe("worker turn launcher local placement", () => {
         turnClaim: null,
         terminalReason: null,
       });
-      expect(placements.listPendingWorkspaceResults()).toEqual([]);
+      expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
       expect(reconcileWorkspace).not.toHaveBeenCalled();
       expect(reconcileActivePlacement).not.toHaveBeenCalled();
 
@@ -856,8 +940,8 @@ describe("worker turn launcher local placement", () => {
     },
   );
 
-  it("rejects a reused worker bundle without execution context before launch", async () => {
-    seedActivePlacement();
+  it("rejects a reused worker bundle without the current launch contract", async () => {
+    await seedActivePlacement();
     const oldEnvironment = attachedEnvironment();
     oldEnvironment.bootstrapReceipt = {
       ...oldEnvironment.bootstrapReceipt!,

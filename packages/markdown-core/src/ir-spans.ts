@@ -36,25 +36,22 @@ export type MarkdownLinkSpan = {
 // Every span transform must use copyMarkdownLinkSpan so the private fact survives.
 const autoLinkedMarkdownLinks = new WeakSet<MarkdownLinkSpan>();
 
+/** Callers supply a fresh span; transforms copy before attaching provenance. */
 export function createMarkdownLinkSpan(
   span: MarkdownLinkSpan,
-  options: { autoLinked?: boolean } = {},
+  autoLinked: boolean,
 ): MarkdownLinkSpan {
-  const created = { ...span };
-  if (options.autoLinked) {
-    autoLinkedMarkdownLinks.add(created);
+  if (autoLinked) {
+    autoLinkedMarkdownLinks.add(span);
   }
-  return created;
+  return span;
 }
 
 export function copyMarkdownLinkSpan(
   span: MarkdownLinkSpan,
-  overrides: Partial<MarkdownLinkSpan> = {},
+  overrides?: Partial<MarkdownLinkSpan>,
 ): MarkdownLinkSpan {
-  return createMarkdownLinkSpan(
-    { ...span, ...overrides },
-    { autoLinked: autoLinkedMarkdownLinks.has(span) },
-  );
+  return createMarkdownLinkSpan({ ...span, ...overrides }, autoLinkedMarkdownLinks.has(span));
 }
 
 export function isAutoLinkedMarkdownLink(span: MarkdownLinkSpan): boolean {
@@ -101,26 +98,8 @@ function clipSpans<T extends { start: number; end: number }>(
   return clipped;
 }
 
-export function clampStyleSpans(
-  spans: MarkdownStyleSpan[],
-  maxLength: number,
-): MarkdownStyleSpan[] {
-  return clipSpans(spans, 0, maxLength, createStyleSpan);
-}
-
-export function clampLinkSpans(spans: MarkdownLinkSpan[], maxLength: number): MarkdownLinkSpan[] {
-  return clipSpans(spans, 0, maxLength, copyMarkdownLinkSpan);
-}
-
-export function clampAnnotationSpans(
-  spans: MarkdownAnnotationSpan[],
-  maxLength: number,
-): MarkdownAnnotationSpan[] {
-  return clipSpans(spans, 0, maxLength, (span) => ({ ...span }));
-}
-
 export function mergeAnnotationSpans(spans: MarkdownAnnotationSpan[]): MarkdownAnnotationSpan[] {
-  const sorted = [...spans].toSorted((a, b) => a.start - b.start || a.end - b.end);
+  const sorted = spans.toSorted((a, b) => a.start - b.start || a.end - b.end);
   const merged: MarkdownAnnotationSpan[] = [];
   for (const span of sorted) {
     const previous = merged.at(-1);
@@ -140,7 +119,7 @@ export function mergeAnnotationSpans(spans: MarkdownAnnotationSpan[]): MarkdownA
 }
 
 export function mergeStyleSpans(spans: MarkdownStyleSpan[]): MarkdownStyleSpan[] {
-  const sorted = [...spans].toSorted((a, b) => {
+  const sorted = spans.toSorted((a, b) => {
     if (a.start !== b.start) {
       return a.start - b.start;
     }

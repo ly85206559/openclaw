@@ -139,7 +139,7 @@ module.exports = {
       const config: OpenClawConfig = {
         agents: {
           defaults: { workspace: state.workspaceDir, model: { primary } },
-          entries: { main: { default: true } },
+          entries: { main: {} },
         },
         plugins: {
           allow: fixtureProviderIds,
@@ -328,7 +328,7 @@ describe("config model validation with provider runtime", () => {
         expect(imported("pin-beta")).toBe(false);
         expect(imported("pin-unrelated")).toBe(false);
       } finally {
-        lease.release();
+        await lease[Symbol.asyncDispose]();
       }
     });
   });

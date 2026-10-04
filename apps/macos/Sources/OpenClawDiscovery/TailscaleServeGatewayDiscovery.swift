@@ -12,7 +12,6 @@ enum TailscaleServeGatewayDiscovery {
     private static let maxCandidates = 32
     private static let probeConcurrency = 6
     private static let defaultProbeTimeoutSeconds: TimeInterval = 1.6
-    private static let probeSession = URLSession(configuration: .ephemeral)
 
     struct DiscoveryContext {
         var tailscaleStatus: @Sendable () async -> String?
@@ -21,7 +20,11 @@ enum TailscaleServeGatewayDiscovery {
         static let live = DiscoveryContext(
             tailscaleStatus: { await readTailscaleStatus() },
             probeHost: { host, timeout in
-                await probeHostForGatewayChallenge(host: host, timeout: timeout)
+                var components = URLComponents()
+                components.scheme = "wss"
+                components.host = host
+                guard let url = components.url else { return false }
+                return await GatewayDiscoveryProbe.shared.hasGatewayChallenge(url: url, timeout: timeout)
             })
     }
 
@@ -53,14 +56,9 @@ enum TailscaleServeGatewayDiscovery {
                 index += 1
                 group.addTask {
                     let remaining = deadline.timeIntervalSinceNow
-                    if remaining <= 0 {
-                        return nil
-                    }
+                    guard remaining > 0 else { return nil }
                     let timeout = min(perProbeTimeout, remaining)
-                    let reachable = await context.probeHost(candidate.dnsName, timeout)
-                    if !reachable {
-                        return nil
-                    }
+                    guard await context.probeHost(candidate.dnsName, timeout) else { return nil }
                     return TailscaleServeGatewayBeacon(
                         displayName: candidate.displayName,
                         tailnetDns: candidate.dnsName,
@@ -97,19 +95,11 @@ enum TailscaleServeGatewayDiscovery {
         var seen = Set<String>()
 
         for node in status.peer.values {
-            if node.online == false {
-                continue
-            }
-            guard let dnsName = normalizeDnsName(node.dnsName) else {
-                continue
-            }
-            if dnsName == selfDns {
-                continue
-            }
-            if seen.contains(dnsName) {
-                continue
-            }
-            seen.insert(dnsName)
+            guard node.online != false,
+                  let dnsName = normalizeDnsName(node.dnsName),
+                  dnsName != selfDns,
+                  seen.insert(dnsName).inserted
+            else { continue }
 
             out.append(Candidate(
                 dnsName: dnsName,
@@ -124,14 +114,7 @@ enum TailscaleServeGatewayDiscovery {
     }
 
     private static func displayName(hostName: String?, dnsName: String) -> String {
-        if let hostName {
-            let trimmed = hostName.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !trimmed.isEmpty { return trimmed }
-        }
-        return dnsName
-            .split(separator: ".")
-            .first
-            .map(String.init) ?? dnsName
+        hostName?.trimmedNonEmpty ?? dnsName.split(separator: ".").first.map(String.init) ?? dnsName
     }
 
     private static func normalizeDnsName(_ raw: String?) -> String? {
@@ -174,14 +157,11 @@ enum TailscaleServeGatewayDiscovery {
         guard !trimmed.isEmpty else { return nil }
 
         let fileManager = FileManager.default
-        let hasPathSeparator = trimmed.contains("/")
-        if hasPathSeparator {
+        if trimmed.contains("/") {
             return fileManager.isExecutableFile(atPath: trimmed) ? trimmed : nil
         }
 
-        let pathRaw = env["PATH"] ?? ""
-        let entries = pathRaw.split(separator: ":").map(String.init)
-        for entry in entries {
+        for entry in (env["PATH"] ?? "").split(separator: ":") {
             let dir = entry.trimmingCharacters(in: .whitespacesAndNewlines)
             if dir.isEmpty { continue }
             let fullPath = URL(fileURLWithPath: dir)
@@ -209,19 +189,36 @@ enum TailscaleServeGatewayDiscovery {
     }
 
     private static func parseStatus(_ raw: String) -> TailscaleStatus? {
-        guard let data = raw.data(using: .utf8) else { return nil }
-        return try? JSONDecoder().decode(TailscaleStatus.self, from: data)
+        try? JSONDecoder().decode(TailscaleStatus.self, from: Data(raw.utf8))
+    }
+}
+
+/// Owns the credential-free transport used to identify candidate Gateways.
+final class GatewayDiscoveryProbe: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    static let shared = GatewayDiscoveryProbe()
+
+    private lazy var session: URLSession = {
+        let configuration = URLSessionConfiguration.ephemeral
+        // Candidate discovery must neither inherit credentials nor collect them
+        // from one peer for a later probe.
+        configuration.httpShouldSetCookies = false
+        configuration.httpCookieStorage = nil
+        configuration.urlCredentialStorage = nil
+        configuration.urlCache = nil
+        return URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
+    }()
+
+    override private init() {
+        super.init()
+        // Initialize once before concurrent peer probes access the shared session.
+        _ = self.session
     }
 
-    private static func probeHostForGatewayChallenge(host: String, timeout: TimeInterval) async -> Bool {
-        var components = URLComponents()
-        components.scheme = "wss"
-        components.host = host
-        guard let url = components.url else { return false }
-
+    func hasGatewayChallenge(url: URL, timeout: TimeInterval) async -> Bool {
+        guard !Task.isCancelled, timeout > 0, url.user == nil, url.password == nil else { return false }
         // Discovery fans out and retries during startup. Reuse the session;
         // AsyncTimeout owns each deadline and every websocket task owns its cancel.
-        let task = self.probeSession.webSocketTask(with: url)
+        let task = self.session.webSocketTask(with: url)
         task.resume()
 
         defer {
@@ -235,7 +232,7 @@ enum TailscaleServeGatewayDiscovery {
                 operation: {
                     while true {
                         let message = try await task.receive()
-                        if self.isConnectChallenge(message: message) {
+                        if Self.isConnectChallenge(message: message) {
                             return true
                         }
                     }
@@ -245,28 +242,57 @@ enum TailscaleServeGatewayDiscovery {
         }
     }
 
+    func urlSession(
+        _: URLSession,
+        task _: URLSessionTask,
+        willPerformHTTPRedirection _: HTTPURLResponse,
+        newRequest _: URLRequest,
+        completionHandler: @escaping @Sendable (URLRequest?) -> Void)
+    {
+        completionHandler(nil)
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        task _: URLSessionTask,
+        didReceive challenge: URLAuthenticationChallenge,
+        completionHandler: @escaping @Sendable (URLSession.AuthChallengeDisposition, URLCredential?) -> Void)
+    {
+        self.urlSession(session, didReceive: challenge, completionHandler: completionHandler)
+    }
+
+    func urlSession(
+        _: URLSession,
+        didReceive challenge: URLAuthenticationChallenge,
+        completionHandler: @escaping @Sendable (URLSession.AuthChallengeDisposition, URLCredential?) -> Void)
+    {
+        // Keep ordinary certificate verification. Discovery never answers
+        // HTTP, proxy, or client-certificate authentication challenges.
+        let disposition: URLSession.AuthChallengeDisposition =
+            challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust
+                ? .performDefaultHandling : .cancelAuthenticationChallenge
+        completionHandler(disposition, nil)
+    }
+
     private static func isConnectChallenge(message: URLSessionWebSocketTask.Message) -> Bool {
         let data: Data
         switch message {
         case let .data(value):
             data = value
         case let .string(value):
-            guard let encoded = value.data(using: .utf8) else { return false }
-            data = encoded
+            data = Data(value.utf8)
         @unknown default:
             return false
         }
 
         guard let object = try? JSONSerialization.jsonObject(with: data),
               let dict = object as? [String: Any],
-              let type = dict["type"] as? String,
-              type == "event",
-              let event = dict["event"] as? String
+              dict["type"] as? String == "event"
         else {
             return false
         }
 
-        return event == "connect.challenge"
+        return dict["event"] as? String == "connect.challenge"
     }
 }
 

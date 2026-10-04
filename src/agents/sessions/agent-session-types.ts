@@ -1,13 +1,7 @@
+import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { ImageContent, Model } from "../../llm/types.js";
+import type { Agent, AgentEvent, AgentMessage, ThinkingLevel } from "../runtime/index.js";
 import type {
-  Agent,
-  AgentEvent,
-  AgentMessage,
-  AgentTool,
-  ThinkingLevel,
-} from "../runtime/index.js";
-import type {
-  ContextUsage,
   ExtensionCommandContextActions,
   ExtensionErrorListener,
   ExtensionRunner,
@@ -64,25 +58,19 @@ export type AgentSessionWriteSettlementRunner = <T>(run: () => Promise<T> | T) =
 
 export interface AgentSessionConfig {
   agent: Agent;
+  /** Exact system prompt prepared by the runtime owner. */
+  systemPrompt: string;
   sessionManager: SessionManager;
   settingsManager: SettingsManager;
   cwd: string;
-  /** Models to cycle through with Ctrl+P. */
-  scopedModels?: Array<{ model: Model; thinkingLevel?: ThinkingLevel }>;
-  /** Resource loader for skills, prompts, themes, context files, and system prompt. */
+  /** Resource loader for extensions, skills, prompts, and themes. */
   resourceLoader: ResourceLoader;
   /** SDK custom tools registered outside extensions. */
   customTools?: ToolDefinition[];
   /** Model registry for API key resolution and model discovery. */
   modelRegistry: ModelRegistry;
-  /** Initial active built-in tool names. Defaults to read, bash, edit, and write. */
-  initialActiveToolNames?: string[];
-  /** Optional tool allowlist. */
-  allowedToolNames?: string[];
-  /** Exclude built-in shell and filesystem tools from the registry. */
-  disableBuiltInTools?: boolean;
-  /** Override base tools for custom runtimes. */
-  baseToolsOverride?: Record<string, AgentTool>;
+  /** Runtime-owned tool allowlist, also used for initial activation. */
+  allowedToolNames: string[];
   /** Mutable reference used by Agent to access the current extension runner. */
   extensionRunnerRef?: { current?: ExtensionRunner };
   /** Session start metadata emitted when extensions bind to this runtime. */
@@ -91,6 +79,11 @@ export interface AgentSessionConfig {
   withSessionWriteSettlement?: AgentSessionWriteSettlementRunner;
   /** Owner of reactive context-overflow recovery. Defaults to the session. */
   contextOverflowRecoveryOwner?: "session" | "caller";
+  /** Resolve the admitted compaction policy from the active model, including provider defaults. */
+  resolveCompactionThinkingLevel?: (
+    model: Model & { compactionThinkingDefault?: ThinkLevel },
+    inheritedLevel: ThinkingLevel,
+  ) => ThinkingLevel;
   /** Whether disposing this object ends the durable provider session. Defaults to true. */
   cleanupProviderSessionResourcesOnDispose?: boolean;
 }
@@ -116,26 +109,4 @@ export interface PromptOptions {
   preflightResult?: (success: boolean) => void;
   /** Internal identity for a current user turn that is already durable. */
   persistedUserIdempotencyKey?: string;
-}
-
-/** Result from cycling the active model. */
-export interface ModelCycleResult {
-  model: Model;
-  thinkingLevel: ThinkingLevel;
-  /** Whether the cycle used the scoped model list. */
-  isScoped: boolean;
-}
-
-/** Session statistics exposed to session commands. */
-export interface SessionStats {
-  sessionFile: string | undefined;
-  sessionId: string;
-  userMessages: number;
-  assistantMessages: number;
-  toolCalls: number;
-  toolResults: number;
-  totalMessages: number;
-  tokens: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
-  cost: number;
-  contextUsage?: ContextUsage;
 }

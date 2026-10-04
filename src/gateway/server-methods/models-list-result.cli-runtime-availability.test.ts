@@ -21,15 +21,13 @@ import {
 const config = {
   agents: {
     defaults: { model: { primary: "anthropic/claude-opus-5" } },
-    list: [
-      {
-        id: "main",
-        default: true,
+    entries: {
+      main: {
         models: {
           "anthropic/claude-opus-5": { agentRuntime: { id: "claude-cli" } },
         },
       },
-    ],
+    },
   },
 } satisfies OpenClawConfig;
 
@@ -52,6 +50,7 @@ async function listClaudeCliModel(
     preparedAuthModes: params.authenticated ? { "claude-cli": "api_key" } : {},
     catalogComplete: true,
     view: "configured",
+    includeDefaultModels: false,
   });
 }
 
@@ -318,7 +317,7 @@ describe("models.list CLI runtime availability", () => {
         const cfg: OpenClawConfig = {
           agents: {
             defaults: { model: { primary: `${provider}/${modelId}` } },
-            list: [{ id: "main", default: true }],
+            entries: { main: {} },
           },
           auth: {
             profiles: {
