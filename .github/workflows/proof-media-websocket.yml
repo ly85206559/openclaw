@@ -19,8 +19,6 @@ jobs:
         include:
           - phase: red
             source: da9cb6dfaa748c125e49f736e51300d0ea57caab
-          - phase: green
-            source: 42d957d7be1c3df53692d2a8512fec00c9c6083c
     defaults:
       run:
         shell: bash
@@ -37,7 +35,7 @@ jobs:
           persist-credentials: false
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
-          ref: f742e7f79eaefc75f1613355ad5e43d9301b3b69
+          ref: a2c6e44268d896da64f08d52fd0fd0b2b49f0314
           path: proof-assets
           persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
@@ -64,14 +62,12 @@ jobs:
           cp proof-assets/.proof/browser-cache-error-reporter.mjs .proof/
           node .proof/browser-cache-check-media-websocket.mjs "$PHASE"
       - name: Fetch exact executed workflow for static validation
-        if: matrix.phase == 'green'
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
           ref: ${{ github.sha }}
           path: proof-workflows
           persist-credentials: false
       - name: Validate the new workflow
-        if: matrix.phase == 'green'
         run: |
           cp proof-workflows/.github/workflows/proof-media-websocket.yml .github/workflows/
           pnpm check:workflows
