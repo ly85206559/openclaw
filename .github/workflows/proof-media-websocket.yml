@@ -37,7 +37,7 @@ jobs:
           persist-credentials: false
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
-          ref: 8a9c36abb06624f9a7119c7a34f24a072a407bec
+          ref: f742e7f79eaefc75f1613355ad5e43d9301b3b69
           path: proof-assets
           persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
