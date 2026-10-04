@@ -109,7 +109,7 @@ describe("subscribed WebSocket session.message MEDIA display", () => {
       mode: "cli",
       hasDeviceIdentity: true,
     });
-    const sessionId = `media-websocket-proof-${name}`;
+    const sessionId = `media-websocket-proof-${name.toLowerCase()}`;
     const sessionKey = `agent:main:${sessionId}`;
     const scope = {
       agentId: "main",
