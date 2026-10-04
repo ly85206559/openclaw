@@ -88,7 +88,11 @@ jobs:
           export default class RuntimeErrorsReporter {
             onTestRunEnd(modules, errors, reason) {
               const suiteErrors = [];
+              const hookErrors = [];
               const visit = (task) => {
+                for (const [hook, state] of Object.entries(task.result?.hooks ?? {})) {
+                  if (state !== "pass") hookErrors.push({ name: task.name, hook, state });
+                }
                 if (task.type === "suite") {
                   for (const error of task.result?.errors ?? []) {
                     suiteErrors.push({ name: task.name, message: error.message });
@@ -97,7 +101,7 @@ jobs:
                 }
               };
               for (const module of modules) visit(module.task);
-              fs.writeFileSync(process.env.PROOF_ERRORS_FILE, JSON.stringify({ errors, reason, suiteErrors }));
+              fs.writeFileSync(process.env.PROOF_ERRORS_FILE, JSON.stringify({ errors, reason, suiteErrors, hookErrors }));
             }
           }
           REPORTER
@@ -157,6 +161,7 @@ jobs:
             const runtime = JSON.parse(fs.readFileSync(`${reportPath}.errors.json`, "utf8"));
             assert.deepEqual(runtime.errors, [], `${file}: unhandled runtime errors`);
             assert.deepEqual(runtime.suiteErrors, [], `${file}: suite or hook errors`);
+            assert.deepEqual(runtime.hookErrors, [], `${file}: failed or incomplete test hooks`);
             assert(runtime.reason === "passed" || runtime.reason === "failed", `${file}: interrupted run`);
             assert.equal(report.numPendingTests, 0, `${file}: skipped tests are not proof`);
             assert.equal(report.numTodoTests, 0, `${file}: todo tests are not proof`);
@@ -177,7 +182,8 @@ jobs:
             assert.equal(Number(exitText), failed.length > 0 ? 1 : 0, `${file}: process failure does not match test assertions`);
             for (const test of failed) {
               assert(expectedFailures.has(test.fullName), `Unexpected failed assertion: ${test.fullName}`);
-              assert(test.failureMessages.some((message) => message.includes("AssertionError")), `Not an assertion failure: ${test.fullName}`);
+              assert.equal(test.failureMessages.length, 1, `Additional errors on expected failure: ${test.fullName}`);
+              assert(test.failureMessages[0].includes("AssertionError"), `Not an assertion failure: ${test.fullName}`);
             }
             assertions.push(...current);
             fileSummaries.push({ file, tests: current.length, failed: failed.length, exit: Number(exitText) });
