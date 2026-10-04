@@ -24,7 +24,7 @@ jobs:
     env:
       CI: "true"
       PROOF_LANE: ${{ matrix.lane }}
-      SOURCE_SHA: 11607856403e83fb879109457dde6d217c1cce1b
+      SOURCE_SHA: 6c363f1c86f952960b5313fec3d428e747227f21
       BASE_SHA: 4d2617d425ab247a2f55a18523da8cc6a483746c
       OPENCLAW_VITEST_MAX_WORKERS: "1"
       OPENCLAW_TEST_PROJECTS_PARALLEL: "1"
@@ -227,6 +227,7 @@ jobs:
           printf 'FULL_DIFF_BASE=%s SOURCE_SHA=%s\n' "$BASE_SHA" "$SOURCE_SHA"
           printf 'CHANGED_FILE=%s\n' "${changed_paths[@]}"
           pnpm exec oxfmt --check "${changed_paths[@]}"
+          node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.core.json "${changed_paths[@]}"
           git diff --check "$BASE_SHA"...HEAD
           node scripts/check-changed.mjs --base "$BASE_SHA" --dry-run -- "${changed_paths[@]}"
           node scripts/check-changed.mjs --base "$BASE_SHA" -- "${changed_paths[@]}"
