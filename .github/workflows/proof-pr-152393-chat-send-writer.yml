@@ -1,0 +1,221 @@
+name: PR 152393 current chat.send writer proof
+
+on:
+  push:
+    branches: [codex/proof-chat-send-current-20261004]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  NODE_VERSION: "24.19.0"
+  PRODUCT_HEAD: fafd2646bb155b5636ceda91fd62fb334ca2deaf
+  BASELINE_HEAD: 4d2617d425ab247a2f55a18523da8cc6a483746c
+  PROOF_ASSET: .github/proof/pr-152393-chat-send-writer.isolated-gateway.test.ts
+  PROOF_TEST: src/gateway/server-methods/chat-send-writer-authority.proof.isolated-gateway.test.ts
+
+jobs:
+  proof:
+    if: github.repository == 'ly85206559/openclaw' && github.ref == 'refs/heads/codex/proof-chat-send-current-20261004'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [red, green]
+    env:
+      PROOF_MODE: ${{ matrix.mode }}
+    steps:
+      - name: Checkout proof assets
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 3
+          persist-credentials: false
+
+      - name: Verify proof lineage and materialize exact source
+        shell: bash
+        run: |
+          set -euo pipefail
+          artifact_dir="$RUNNER_TEMP/pr-152393-$PROOF_MODE"
+          mkdir -p "$artifact_dir"
+          proof_head="$(git rev-parse HEAD)"
+          test "$(git rev-list --parents -n 1 HEAD | awk '{ print NF - 1 }')" -eq 1
+          test "$(git rev-parse HEAD^)" = "$PRODUCT_HEAD"
+          git merge-base --is-ancestor "$BASELINE_HEAD" "$PRODUCT_HEAD"
+          git diff --name-only "$BASELINE_HEAD" "$PRODUCT_HEAD" | sort > "$artifact_dir/product-changed.txt"
+          printf '%s\n' \
+            src/gateway/server-methods/chat-send-command-replies.test.ts \
+            src/gateway/server-methods/chat-send-command-replies.ts \
+            | sort > "$artifact_dir/product-expected.txt"
+          diff -u "$artifact_dir/product-expected.txt" "$artifact_dir/product-changed.txt"
+          git diff --name-only "$PRODUCT_HEAD" "$proof_head" | sort > "$artifact_dir/changed.txt"
+          printf '%s\n' "$PROOF_ASSET" .github/workflows/proof-pr-152393-chat-send-writer.yml \
+            | sort > "$artifact_dir/expected.txt"
+          diff -u "$artifact_dir/expected.txt" "$artifact_dir/changed.txt"
+          cp "$PROOF_ASSET" "$artifact_dir/fixture.ts"
+          source_head="$PRODUCT_HEAD"
+          if [[ "$PROOF_MODE" == red ]]; then source_head="$BASELINE_HEAD"; fi
+          git checkout --detach "$source_head"
+          test "$(git rev-parse HEAD)" = "$source_head"
+          test -z "$(git status --porcelain)"
+          test ! -e "$PROOF_TEST"
+          cp "$artifact_dir/fixture.ts" "$PROOF_TEST"
+          {
+            printf 'candidate_head=%s\nsource_head=%s\nproof_head=%s\nmode=%s\n' \
+              "$PRODUCT_HEAD" "$source_head" "$proof_head" "$PROOF_MODE"
+            printf 'overlay=%s\n' "$PROOF_TEST"
+            sha256sum "$artifact_dir/fixture.ts" "$PROOF_TEST"
+          } | tee "$artifact_dir/lineage.txt"
+          {
+            echo "PR_152393_ARTIFACT_DIR=$artifact_dir"
+            echo "PR_152393_PRODUCT_HEAD=$source_head"
+            echo "PR_152393_PROOF_HEAD=$proof_head"
+          } >> "$GITHUB_ENV"
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          cache-mode: restore
+          node-version: ${{ env.NODE_VERSION }}
+          install-bun: "false"
+
+      - name: Run the same registered chat.send fixture on one worker
+        shell: bash
+        env:
+          NO_COLOR: "1"
+        run: |
+          set -euo pipefail
+          artifact_dir="$PR_152393_ARTIFACT_DIR"
+          cat > "$artifact_dir/runtime-reporter.mjs" <<'REPORTER'
+          import { writeFileSync } from "node:fs";
+          import path from "node:path";
+          export default class {
+            onTestRunEnd(modules, unhandledErrors, reason) {
+              const suiteErrors = [];
+              const visit = (task) => {
+                if (task.type === "suite") {
+                  for (const error of task.result?.errors ?? []) {
+                    suiteErrors.push({ name: task.name, message: error.message });
+                  }
+                  for (const child of task.tasks ?? []) visit(child);
+                }
+              };
+              for (const module of modules) visit(module.task);
+              writeFileSync(path.join(process.env.PR_152393_ARTIFACT_DIR, "runtime.json"),
+                JSON.stringify({ reason, unhandledErrors, suiteErrors }, null, 2));
+            }
+          }
+          REPORTER
+          set +e
+          /usr/bin/time -v -o "$artifact_dir/timing.txt" \
+            node scripts/run-vitest.mjs "$PROOF_TEST" --maxWorkers=1 --retry=0 \
+            --reporter=verbose --reporter=json --reporter="$artifact_dir/runtime-reporter.mjs" \
+            --outputFile="$artifact_dir/vitest.json" 2>&1 | tee "$artifact_dir/proof.log"
+          statuses=("${PIPESTATUS[@]}")
+          set -e
+          test "${statuses[1]}" -eq 0
+          echo "PR_152393_TEST_EXIT=${statuses[0]}" >> "$GITHUB_ENV"
+          test "$(git rev-parse HEAD)" = "$PR_152393_PRODUCT_HEAD"
+          git diff --exit-code "$PR_152393_PRODUCT_HEAD"
+          cmp "$artifact_dir/fixture.ts" "$PROOF_TEST"
+
+      - name: Validate exact behavior, controls, and failure attribution
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'CHECKER'
+          import assert from "node:assert/strict";
+          import fs from "node:fs";
+          import path from "node:path";
+          const dir = process.env.PR_152393_ARTIFACT_DIR;
+          const result = JSON.parse(fs.readFileSync(path.join(dir, "vitest.json"), "utf8"));
+          const runtime = JSON.parse(fs.readFileSync(path.join(dir, "runtime.json"), "utf8"));
+          const log = fs.readFileSync(path.join(dir, "proof.log"), "utf8");
+          const receipts = [...log.matchAll(/PROOF_RECEIPT (\{[^\r\n]*\})/g)].map((m) => JSON.parse(m[1]));
+          const expected = new Map([
+            ["current block then current final", { block: "current", final: "current", rows: 1, frames: 1 }],
+            ["stale block then stale final", { block: "stale", final: "stale", rows: 0, frames: 0 }],
+            ["stale block then current final", { block: "stale", final: "current", rows: 0, frames: 0 }],
+            ["current block then stale final", { block: "current", final: "stale", rows: 1, frames: 1 }],
+          ]);
+          assert.deepEqual(runtime.unhandledErrors, [], "unhandled errors invalidate proof");
+          assert.deepEqual(runtime.suiteErrors, [], "hook or suite errors invalidate proof");
+          assert.equal(result.numTotalTests, 4);
+          assert.equal(result.numPendingTests, 0);
+          assert.equal(result.numPendingTestSuites, 0);
+          assert.equal(result.numTodoTests, 0);
+          assert.equal(result.testResults.length, 1);
+          const file = result.testResults[0];
+          assert.equal(file.message, "", "file-level failure invalidates proof");
+          assert.ok(file.name.replaceAll("\\", "/").endsWith("/" + process.env.PROOF_TEST));
+          assert.equal(file.assertionResults.length, 4);
+          assert.equal(receipts.length, 4);
+          assert.equal(new Set(receipts.map((r) => r.case)).size, 4);
+          assert.equal(new Set(file.assertionResults.map((t) => t.title)).size, 4);
+          let failed = 0;
+          for (const receipt of receipts) {
+            const control = expected.get(receipt.case);
+            assert.ok(control, "unexpected case");
+            assert.equal(receipt.productHead, process.env.PR_152393_PRODUCT_HEAD);
+            assert.equal(receipt.proofHead, process.env.PR_152393_PROOF_HEAD);
+            assert.equal(receipt.blockOwner, control.block);
+            assert.equal(receipt.finalOwner, control.final);
+            assert.equal(receipt.expectedAssistantRows, control.rows);
+            assert.equal(receipt.expectedContentFrames, control.frames);
+            assert.equal(receipt.resolverCalls, 1);
+            assert.equal(receipt.dispatchInboundCalls, 0);
+            assert.ok(Number.isInteger(receipt.terminalFrames) && receipt.terminalFrames > 0);
+            assert.ok(Number.isInteger(receipt.assistantRows) && receipt.assistantRows >= 0);
+            assert.ok(Number.isInteger(receipt.contentFrames) && receipt.contentFrames >= 0);
+            const test = file.assertionResults.find((t) => t.title === receipt.case);
+            assert.ok(test, "missing assertion result");
+            const frameMismatch = receipt.contentFrames !== control.frames;
+            const rowMismatch = receipt.assistantRows !== control.rows;
+            if (frameMismatch || rowMismatch) {
+              assert.equal(process.env.PROOF_MODE, "red", "candidate behavior regressed");
+              assert.notEqual(receipt.case, "current block then current final", "positive control failed");
+              assert.ok(receipt.contentFrames >= control.frames && receipt.assistantRows >= control.rows,
+                "a missing valid reply is not the stale-writer leak");
+              assert.equal(test.status, "failed");
+              assert.equal(test.failureMessages.length, 1, "additional failure invalidates attribution");
+              const marker = frameMismatch ? "PR152393_FOLDING_CONTENT_COUNT" : "PR152393_FOLDING_HISTORY_COUNT";
+              assert.ok(test.failureMessages[0].includes(marker), "failure is outside the folding assertion");
+              failed += 1;
+            } else {
+              assert.equal(test.status, "passed");
+              assert.deepEqual(test.failureMessages, []);
+            }
+          }
+          assert.equal(result.numFailedTests, failed);
+          assert.equal(result.numPassedTests, 4 - failed);
+          const red = process.env.PROOF_MODE === "red";
+          assert.equal(process.env.PR_152393_TEST_EXIT, red ? "1" : "0");
+          assert.equal(runtime.reason, red ? "failed" : "passed");
+          assert.equal(result.success, !red);
+          assert.equal(file.status, red ? "failed" : "passed");
+          if (red) assert.ok(failed > 0, "baseline did not reproduce the folding defect");
+          else assert.equal(failed, 0);
+          fs.writeFileSync(path.join(dir, "receipts.json"), JSON.stringify({
+            candidateHead: process.env.PRODUCT_HEAD,
+            sourceHead: process.env.PR_152393_PRODUCT_HEAD,
+            proofHead: process.env.PR_152393_PROOF_HEAD,
+            fixtureOverlay: process.env.PROOF_TEST,
+            mode: process.env.PROOF_MODE,
+            assertionFailures: failed,
+            suiteErrors: 0,
+            unhandledErrors: 0,
+            cases: receipts,
+          }, null, 2));
+          console.log("PR152393_STRICT_PROOF", process.env.PROOF_MODE, "passed", { failed });
+          CHECKER
+
+      - name: Upload exact source and proof receipts
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: pr-152393-current-${{ matrix.mode }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/pr-152393-${{ matrix.mode }}/**
+          if-no-files-found: error
+          retention-days: 90
