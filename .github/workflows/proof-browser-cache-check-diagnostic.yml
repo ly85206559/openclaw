@@ -1,0 +1,56 @@
+name: Bounded contract check diagnostic
+
+on:
+  push:
+    branches: [codex/proof-browser-cache-contract-20261003]
+    paths: [".github/workflows/proof-browser-cache-check-diagnostic.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    container: ubuntu:24.04
+    timeout-minutes: 12
+    defaults:
+      run:
+        shell: bash
+    env:
+      SOURCE_SHA: 42d957d7be1c3df53692d2a8512fec00c9c6083c
+    steps:
+      - name: Prepare isolated diagnostic tooling
+        run: |
+          apt-get update -qq
+          apt-get install -y ca-certificates git ripgrep curl xz-utils libatomic1 procps
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          persist-credentials: false
+          fetch-depth: 3
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: 2e27f76864c6d47e283bd1d0dae04a2422fd90a9
+          path: proof-assets
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 26.8.2
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa
+      - name: Prepare the same pinned package manager and dependencies
+        run: |
+          npm install --global corepack@0.36.0
+          test "$(corepack pnpm --version)" = 12.5.1
+          pnpm install --frozen-lockfile
+      - name: Locate the active command without replacing normal proof gates
+        run: |
+          git config --global --add safe.directory "$PWD"
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          mkdir -p .proof
+          cp proof-assets/.proof/browser-cache-* .proof/
+          printf 'DIAGNOSTIC_ONLY: the full GREEN jobs remain authoritative.\n'
+          set +e
+          timeout --signal=TERM --kill-after=10s 180s node scripts/check-changed.mjs --base da9cb6dfaa748c125e49f736e51300d0ea57caab -- src/gateway/chat-display-projection.helpers.ts src/gateway/chat-display-projection.media.test.ts
+          diagnostic_status=$?
+          ps -eo pid,ppid,stat,comm
+          exit "$diagnostic_status"
