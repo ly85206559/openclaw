@@ -135,7 +135,7 @@ async function gatewayIdentity(port, configPath) {
       assert.equal(initCwd, installCwd, "pnpm must preserve the actual invocation directory");
       return { pid: Number(pid), cwd, initCwd };
     } catch (error) {
-      if (error.code === "ENOENT" || error.code === "EACCES") continue;
+      if (error.code === "ENOENT" || error.code === "EACCES" || error.code === "ESRCH") continue;
       throw error;
     }
   }

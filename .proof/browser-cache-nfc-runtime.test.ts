@@ -32,23 +32,23 @@ describe("canonical CJK diversity through actual file sync and hybrid search", (
 
   it.each([
     {
-      name: "Hangul MMR on",
+      name: "Hangul hybrid MMR",
       primary: "각",
       duplicate: "\u1100\u1161\u11a8",
       diverse: "나",
-      enabled: true,
+      lexicalOnly: false,
     },
     {
-      name: "Hangul MMR off",
+      name: "Hangul lexical-only control",
       primary: "각",
       duplicate: "\u1100\u1161\u11a8",
       diverse: "나",
-      enabled: false,
+      lexicalOnly: true,
     },
-    { name: "kana MMR on", primary: "が", duplicate: "か\u3099", diverse: "な", enabled: true },
-    { name: "kana MMR off", primary: "が", duplicate: "か\u3099", diverse: "な", enabled: false },
-  ])("$name", async ({ name, primary, duplicate, diverse, enabled }) => {
-    // Saturate the existing length boost equally so MMR, not NFD byte length, decides diversity.
+    { name: "kana hybrid MMR", primary: "が", duplicate: "か\u3099", diverse: "な", lexicalOnly: false },
+    { name: "kana lexical-only control", primary: "が", duplicate: "か\u3099", diverse: "な", lexicalOnly: true },
+  ])("$name", async ({ name, primary, duplicate, diverse, lexicalOnly }) => {
+    // Saturate the existing length boost equally so MMR, not decomposed text length, decides diversity.
     const prefix = "nfcprobe alpha reference context notes ";
     const files = [
       { name: "a-primary.md", text: `${prefix}${primary}` },
@@ -65,33 +65,18 @@ describe("canonical CJK diversity through actual file sync and hybrid search", (
       vectorEnabled: false,
       minScore: 0.01,
     });
-    const search = cfg.memory?.search;
-    if (!search) {
-      throw new Error("Expected the fixture's existing memory search configuration");
-    }
-    search.sync = { watch: false, onSearch: false, onSessionStart: false };
-    search.query = {
-      minScore: 0.01,
-      hybrid: {
-        enabled: true,
-        vectorWeight: 0.7,
-        textWeight: 0.3,
-        mmr: { enabled, lambda: 0.7 },
-        temporalDecay: { enabled: false },
-      },
-    };
-    const manager = await fixture.getFreshManager(cfg);
+    const manager = await fixture.getFreshManager(cfg, "cli");
     await manager.sync({ reason: "test", force: true });
     expect(manager.status()).toMatchObject({ provider: "mock", fts: { available: true } });
-    const results = await manager.search("nfcprobe alpha", { maxResults: 3, minScore: 0.01 });
-    expect(fixture.provider.embeddedQueryTexts).toEqual(["nfcprobe alpha"]);
+    const results = await manager.search("nfcprobe alpha", { maxResults: 3, minScore: 0.01, lexicalOnly });
+    expect(fixture.provider.embeddedQueryTexts).toEqual(lexicalOnly ? [] : ["nfcprobe alpha"]);
     expect(results).toHaveLength(3);
-    expect(results.every((row) => row.vectorScore === 1 && (row.textScore ?? 0) > 0)).toBe(true);
+    expect(results.every((row) => row.vectorScore === (lexicalOnly ? undefined : 1) && (row.textScore ?? 0) > 0)).toBe(true);
     expect(new Set(results.map((row) => row.textScore)).size).toBe(1);
     console.log(`NFC_RUNTIME_TRACE ${JSON.stringify({ phase, name, results })}`);
     expect(new Set(results.map((row) => row.score)).size).toBe(1);
     const expected =
-      enabled && phase === "green"
+      !lexicalOnly && phase === "green"
         ? ["memory/a-primary.md", "memory/c-diverse.md", "memory/b-duplicate.md"]
         : ["memory/a-primary.md", "memory/b-duplicate.md", "memory/c-diverse.md"];
     expect(results.map((row) => row.path)).toEqual(expected);
