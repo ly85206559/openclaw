@@ -134,20 +134,25 @@ it("preserves an ordinary relative reference through persistence and projection"
     payloadFor(applyAssistantDeliveryDirectives({ role: "assistant", content }))?.message,
   ).toMatchObject({ content });
 });
-it("withholds only relative directives from a mixed legacy batch", () => {
-  const visible = [
+it.each([
+  ["CR", "\r"],
+  ["LF", "\n"],
+  ["CRLF", "\r\n"],
+])("withholds only relative directives from a mixed legacy batch with %s lines", (_name, separator) => {
+  const visibleLines = [
     "Prepared the mixed batch.",
     "MEDIA:https://cdn.example.test/legacy.jpg",
     "MEDIA:/media/legacy-audio.mp3",
-  ].join("\n");
-  const payload = payloadFor(
-    assistant({
-      openclawDelivery: delivery,
-      content: [text(`${visible}\nMEDIA:${managedUrl}`)],
-    }),
-  );
-  expect(payload?.message).toMatchObject({ content: [text(visible)] });
+  ];
+  const source = assistant({
+    openclawDelivery: delivery,
+    content: [text([...visibleLines, `MEDIA:${managedUrl}`].join(separator))],
+  });
+  const before = structuredClone(source);
+  const payload = payloadFor(source);
+  expect(payload?.message).toMatchObject({ content: [text(visibleLines.join("\n"))] });
   expect(JSON.stringify(payload)).not.toContain("attachment-catalog-tiny");
+  expect(source).toEqual(before);
 });
 
 describe("correlated channel mirrors in Gateway history", () => {
