@@ -65,7 +65,7 @@ jobs:
         with:
           node-version: 26.8.2
       - name: Install the source-declared pnpm version
-        uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
       - name: Verify source toolchain pins
         run: |
           set -euo pipefail
@@ -86,8 +86,18 @@ jobs:
           cat > "$proof_dir/runtime-errors-reporter.mjs" <<'REPORTER'
           import fs from "node:fs";
           export default class RuntimeErrorsReporter {
-            onTestRunEnd(_modules, errors, reason) {
-              fs.writeFileSync(process.env.PROOF_ERRORS_FILE, JSON.stringify({ errors, reason }));
+            onTestRunEnd(modules, errors, reason) {
+              const suiteErrors = [];
+              const visit = (task) => {
+                if (task.type === "suite") {
+                  for (const error of task.result?.errors ?? []) {
+                    suiteErrors.push({ name: task.name, message: error.message });
+                  }
+                  for (const child of task.tasks ?? []) visit(child);
+                }
+              };
+              for (const module of modules) visit(module.task);
+              fs.writeFileSync(process.env.PROOF_ERRORS_FILE, JSON.stringify({ errors, reason, suiteErrors }));
             }
           }
           REPORTER
@@ -146,6 +156,7 @@ jobs:
             // Vitest 5's built-in JSON omits unhandled errors; collect them through its reporter API.
             const runtime = JSON.parse(fs.readFileSync(`${reportPath}.errors.json`, "utf8"));
             assert.deepEqual(runtime.errors, [], `${file}: unhandled runtime errors`);
+            assert.deepEqual(runtime.suiteErrors, [], `${file}: suite or hook errors`);
             assert(runtime.reason === "passed" || runtime.reason === "failed", `${file}: interrupted run`);
             assert.equal(report.numPendingTests, 0, `${file}: skipped tests are not proof`);
             assert.equal(report.numTodoTests, 0, `${file}: todo tests are not proof`);
