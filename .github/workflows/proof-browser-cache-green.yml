@@ -20,7 +20,9 @@ jobs:
           - lane: browser
             source: aab42d5998a47ff02dfddba4919408d0c5449bd1
           - lane: media
-            source: 38e0b46b3ed13578d6dd6b8dafcddf1e4b3cfced
+            source: 42d957d7be1c3df53692d2a8512fec00c9c6083c
+          - lane: nfc
+            source: 87991a5a7c3fa2c16e5316ba7642ec4bca74e812
     defaults:
       run:
         shell: bash
@@ -30,15 +32,15 @@ jobs:
       - name: Prepare isolated container tooling
         run: |
           apt-get update -qq
-          apt-get install -y ca-certificates git ripgrep curl xz-utils libatomic1
+          apt-get install -y ca-certificates git ripgrep curl xz-utils libatomic1 python3 python3-venv
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
           ref: ${{ env.SOURCE_SHA }}
           persist-credentials: false
-          fetch-depth: 1
+          fetch-depth: 3
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
-          ref: c905ce34ec3646706a1f8ff8112e6a78eafb4f62
+          ref: 26a238427f47ea938f8b2022853ffd26ae643ac2
           path: proof-assets
           persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
@@ -73,10 +75,25 @@ jobs:
         run: |
           if [ "$LANE" = browser ]; then
             paths=(extensions/browser/src/browser/chrome.executables.ts extensions/browser/src/browser/chrome.default-browser.test.ts docs/tools/browser/isolation.md)
-          else
+          elif [ "$LANE" = media ]; then
             paths=(src/gateway/chat-display-projection.helpers.ts src/gateway/chat-display-projection.media.test.ts)
+          else
+            paths=(extensions/memory-core/src/memory/tokenize.ts extensions/memory-core/src/memory/mmr.test.ts)
           fi
           pnpm exec oxfmt --check "${paths[@]}"
           git diff --check
-          node scripts/check-changed.mjs --dry-run -- "${paths[@]}"
-          node scripts/check-changed.mjs -- "${paths[@]}"
+          node scripts/check-changed.mjs --base da9cb6dfaa748c125e49f736e51300d0ea57caab --dry-run -- "${paths[@]}"
+          node scripts/check-changed.mjs --base da9cb6dfaa748c125e49f736e51300d0ea57caab -- "${paths[@]}"
+      - name: Fetch proof workflows for static validation
+        if: matrix.lane == 'media'
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ github.sha }}
+          path: proof-workflows
+          persist-credentials: false
+      - name: Validate proof workflow definitions
+        if: matrix.lane == 'media'
+        run: |
+          cp proof-workflows/.github/workflows/proof-browser-cache-contract.yml .github/workflows/
+          cp proof-workflows/.github/workflows/proof-browser-cache-green.yml .github/workflows/
+          pnpm check:workflows
