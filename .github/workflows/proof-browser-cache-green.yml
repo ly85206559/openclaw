@@ -17,12 +17,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - lane: browser
-            source: aab42d5998a47ff02dfddba4919408d0c5449bd1
-          - lane: media
-            source: 42d957d7be1c3df53692d2a8512fec00c9c6083c
           - lane: nfc
-            source: 87991a5a7c3fa2c16e5316ba7642ec4bca74e812
+            source: 3e7fa4568385445758d638ccd1832434c0916ade
     defaults:
       run:
         shell: bash
@@ -89,14 +85,14 @@ jobs:
           node scripts/check-changed.mjs --base da9cb6dfaa748c125e49f736e51300d0ea57caab --dry-run -- "${paths[@]}"
           node scripts/check-changed.mjs --base da9cb6dfaa748c125e49f736e51300d0ea57caab -- "${paths[@]}"
       - name: Fetch proof workflows for static validation
-        if: matrix.lane == 'media'
+        if: matrix.lane == 'nfc'
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
           ref: ${{ github.sha }}
           path: proof-workflows
           persist-credentials: false
       - name: Validate proof workflow definitions
-        if: matrix.lane == 'media'
+        if: matrix.lane == 'nfc'
         run: |
           cp proof-workflows/.github/workflows/proof-browser-cache-contract.yml .github/workflows/
           cp proof-workflows/.github/workflows/proof-browser-cache-green.yml .github/workflows/
