@@ -1,4 +1,4 @@
 [
-  "diversifies canonically equivalent Hangul snippets",
-  "diversifies canonically equivalent kana snippets"
+  "diversifies NFC-equivalent Hangul",
+  "diversifies NFC-equivalent kana"
 ]

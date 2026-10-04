@@ -1,0 +1,82 @@
+name: Exact-head small contract GREEN
+
+on:
+  push:
+    branches: [codex/proof-browser-cache-contract-20261003]
+    paths: [".github/workflows/proof-browser-cache-green.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  green:
+    runs-on: ubuntu-latest
+    container: ubuntu:24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - lane: browser
+            source: aab42d5998a47ff02dfddba4919408d0c5449bd1
+          - lane: media
+            source: 38e0b46b3ed13578d6dd6b8dafcddf1e4b3cfced
+    defaults:
+      run:
+        shell: bash
+    env:
+      SOURCE_SHA: ${{ matrix.source }}
+    steps:
+      - name: Prepare isolated container tooling
+        run: |
+          apt-get update -qq
+          apt-get install -y ca-certificates git ripgrep curl xz-utils libatomic1
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          persist-credentials: false
+          fetch-depth: 1
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: c905ce34ec3646706a1f8ff8112e6a78eafb4f62
+          path: proof-assets
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 26.8.2
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa
+      - name: Install frozen dependencies without secrets
+        run: pnpm install --frozen-lockfile
+      - name: Verify candidate and run focused regression
+        env:
+          LANE: ${{ matrix.lane }}
+        run: |
+          git config --global --add safe.directory "$PWD"
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          mkdir -p .proof
+          cp proof-assets/.proof/browser-cache-* .proof/
+          node .proof/browser-cache-check-unit.mjs GREEN "$LANE"
+      - name: Run actual candidate flow
+        env:
+          LANE: ${{ matrix.lane }}
+        run: |
+          if [ "$LANE" = browser ]; then
+            node extensions/browser/node_modules/playwright-core/cli.js install-deps chromium
+            pnpm build
+            node .proof/browser-cache-browser-runtime.mjs green "$SOURCE_SHA" .proof/browser-runtime-green.json
+          else
+            node .proof/browser-cache-check-runtime.mjs green "$LANE"
+          fi
+      - name: Proportional changed gates
+        env:
+          LANE: ${{ matrix.lane }}
+        run: |
+          if [ "$LANE" = browser ]; then
+            paths=(extensions/browser/src/browser/chrome.executables.ts extensions/browser/src/browser/chrome.default-browser.test.ts docs/tools/browser/isolation.md)
+          else
+            paths=(src/gateway/chat-display-projection.helpers.ts src/gateway/chat-display-projection.media.test.ts)
+          fi
+          pnpm exec oxfmt --check "${paths[@]}"
+          git diff --check
+          node scripts/check-changed.mjs --dry-run -- "${paths[@]}"
+          node scripts/check-changed.mjs -- "${paths[@]}"

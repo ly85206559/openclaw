@@ -21,9 +21,13 @@ console.error(result.stderr);
 assert.equal(result.error, undefined);
 assert.equal(result.signal, null);
 const redFailure = phase === "red" && lane === "media";
-assert.equal(result.status, redFailure ? 1 : 0);
 const report = JSON.parse(fs.readFileSync(output, "utf8"));
 const runtime = JSON.parse(fs.readFileSync(runtimeOutput, "utf8"));
+console.log(JSON.stringify({ source: process.env.SOURCE_SHA, phase, lane,
+  observedAssertions: report.testResults.flatMap(suite => suite.assertionResults.map(test => ({
+    fullName: test.fullName, status: test.status, messages: test.failureMessages,
+  }))), runtime }));
+assert.equal(result.status, redFailure ? 1 : 0);
 assert.deepEqual(runtime, { unhandledErrors: 0, suiteErrors: 0, hookErrors: 0,
   reason: redFailure ? "failed" : "passed" });
 assert.doesNotMatch(`${result.stdout}\n${result.stderr}`, /Unhandled Errors|unhandled rejection|unhandled exception/iu);

@@ -61,7 +61,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        lane: [browser, media, nfc]
+        lane: [browser, nfc]
     defaults:
       run:
         shell: bash
@@ -98,6 +98,7 @@ jobs:
           cp proof-assets/.proof/browser-cache-* .proof/
           if [ "$LANE" = browser ]; then
             node extensions/browser/node_modules/playwright-core/cli.js install-deps chromium
+            pnpm build
             node .proof/browser-cache-browser-runtime.mjs red "$SOURCE_SHA" .proof/browser-runtime-red.json
           else
             node .proof/browser-cache-check-runtime.mjs red "$LANE"

@@ -1,5 +1,5 @@
 diff --git a/extensions/memory-core/src/memory/mmr.test.ts b/extensions/memory-core/src/memory/mmr.test.ts
-index 31620e0cb51..be012f49dc8 100644
+index 31620e0cb51..453c1beff1c 100644
 --- a/extensions/memory-core/src/memory/mmr.test.ts
 +++ b/extensions/memory-core/src/memory/mmr.test.ts
 @@ -59,6 +59,26 @@ describe("memory MMR", () => {
@@ -7,7 +7,7 @@ index 31620e0cb51..be012f49dc8 100644
        expected: ["/primary.md", "/diverse.md", "/duplicate.md", "/tail.md"],
      },
 +    {
-+      name: "diversifies canonically equivalent Hangul snippets",
++      name: "diversifies NFC-equivalent Hangul",
 +      results: [
 +        ["/primary.md", 1, "각"],
 +        ["/duplicate.md", 0.98, "\u1100\u1161\u11a8"],
@@ -17,7 +17,7 @@ index 31620e0cb51..be012f49dc8 100644
 +      expected: ["/primary.md", "/diverse.md", "/duplicate.md", "/tail.md"],
 +    },
 +    {
-+      name: "diversifies canonically equivalent kana snippets",
++      name: "diversifies NFC-equivalent kana",
 +      results: [
 +        ["/primary.md", 1, "が"],
 +        ["/duplicate.md", 0.98, "\u304b\u3099"],
