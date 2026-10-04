@@ -18,14 +18,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - pr: "151008"
-            source: fd5ae84214ad170ebc112d1dd645196e8334076e
-          - pr: "152393"
-            source: fafd2646bb155b5636ceda91fd62fb334ca2deaf
           - pr: "142784"
-            source: c751a5c8012529b4c3a02812fa1b6f33d8d1f62c
-          - pr: "151009"
-            source: d2efd0713ff5cfd0ee8e3076f24924b33c1e02f4
+            source: af8b8bb247199186ae98320b63184ed09bbc5898
     defaults:
       run:
         shell: bash
@@ -63,7 +57,7 @@ jobs:
         with:
           node-version: 26.8.2
       - name: Install the source-declared pnpm version
-        uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
       - name: Verify source toolchain pins
         run: |
           set -euo pipefail
@@ -101,6 +95,16 @@ jobs:
             /usr/bin/time -f "PROOF_TIMING source=$SOURCE_SHA file=$test_file wall_seconds=%e user_seconds=%U system_seconds=%S exit=%x" \
               pnpm test "$test_file" --maxWorkers=1 --retry=0
           done
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          git diff --exit-code
+      - name: Exercise the two Unicode boundaries in Chromium
+        if: matrix.pr == '142784'
+        run: |
+          set -euo pipefail
+          pnpm exec playwright install --with-deps chromium
+          node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner \
+            ui/src/e2e/update-overlay-unicode-boundary.e2e.test.ts \
+            ui/src/e2e/native-plugin-ui-unicode-boundary.e2e.test.ts --maxWorkers=1 --retry=0
           test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
           git diff --exit-code
       - name: Check the complete repaired product diff
