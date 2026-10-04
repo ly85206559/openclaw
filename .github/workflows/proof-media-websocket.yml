@@ -1,0 +1,77 @@
+name: Real subscribed Gateway MEDIA proof
+
+on:
+  push:
+    branches: [codex/proof-browser-cache-contract-20261003]
+    paths: [".github/workflows/proof-media-websocket.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  proof:
+    runs-on: ubuntu-latest
+    container: ubuntu:24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - phase: red
+            source: da9cb6dfaa748c125e49f736e51300d0ea57caab
+          - phase: green
+            source: 42d957d7be1c3df53692d2a8512fec00c9c6083c
+    defaults:
+      run:
+        shell: bash
+    env:
+      SOURCE_SHA: ${{ matrix.source }}
+    steps:
+      - name: Prepare isolated tooling
+        run: |
+          apt-get update -qq
+          apt-get install -y ca-certificates git ripgrep curl xz-utils libatomic1 python3 python3-venv
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          persist-credentials: false
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: 8a9c36abb06624f9a7119c7a34f24a072a407bec
+          path: proof-assets
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 26.8.2
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa
+      - name: Prepare pinned package manager and dependencies
+        run: |
+          npm install --global corepack@0.36.0
+          test "$(corepack pnpm --version)" = 12.5.1
+          pnpm install --frozen-lockfile
+      - name: Build normal CI runtime artifacts
+        run: pnpm build:ci-artifacts
+      - name: Verify pinned source and actual subscribed client flow
+        env:
+          PHASE: ${{ matrix.phase }}
+        run: |
+          git config --global --add safe.directory "$PWD"
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          mkdir -p .proof
+          cp proof-assets/.proof/browser-cache-media-websocket.test.ts .proof/
+          cp proof-assets/.proof/browser-cache-media-websocket.vitest.config.ts .proof/
+          cp proof-assets/.proof/browser-cache-check-media-websocket.mjs .proof/
+          cp proof-assets/.proof/browser-cache-error-reporter.mjs .proof/
+          node .proof/browser-cache-check-media-websocket.mjs "$PHASE"
+      - name: Fetch exact executed workflow for static validation
+        if: matrix.phase == 'green'
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ github.sha }}
+          path: proof-workflows
+          persist-credentials: false
+      - name: Validate the new workflow
+        if: matrix.phase == 'green'
+        run: |
+          cp proof-workflows/.github/workflows/proof-media-websocket.yml .github/workflows/
+          pnpm check:workflows
