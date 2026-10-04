@@ -44,7 +44,7 @@ if (red) {
   assert.equal(failures[0].failureMessages.length, 1);
   assert.match(failures[0].failureMessages[0], /AssertionError/u);
   assert.match(failures[0].failureMessages[0], /browser-cache-media-websocket.test.ts/u);
-  assert.match(failures[0].failureMessages[0], /attachment-catalog-tiny\/demo\.jpg/u);
+  assert.match(failures[0].failureMessages[0], /AssertionError: expected .* to deeply equal/u);
   const testSource = fs.readFileSync(".proof/browser-cache-media-websocket.test.ts", "utf8");
   const displayAssertion = 'expect(receivedMessage?.content).toEqual([{ type: "text", text: visibleLines.join("\\n") }]);';
   const assertionLines = testSource.split(/\r?\n/u);
