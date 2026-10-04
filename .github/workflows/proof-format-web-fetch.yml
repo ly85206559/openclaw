@@ -1,0 +1,79 @@
+name: Web fetch pinned format diagnostic
+
+on:
+  push:
+    branches: [codex/proof-web-fetch-code-20261004]
+    paths: [".github/workflows/proof-format-web-fetch.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  format-diagnostic:
+    if: github.repository == 'ly85206559/openclaw'
+    runs-on: ubuntu-latest
+    container: ubuntu:24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    env:
+      CI: "true"
+      SOURCE_SHA: 8381b08a6987daf02f69342f8813b5208e23852f
+      BASE_SHA: 4d2617d425ab247a2f55a18523da8cc6a483746c
+    steps:
+      - name: Prepare isolated container tooling
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          apt-get update -qq
+          apt-get install -y ca-certificates git ripgrep curl xz-utils libatomic1 python3 python3-venv time
+      - name: Check out the pinned candidate
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          persist-credentials: false
+          fetch-depth: 8
+      - name: Verify source identity
+        run: |
+          set -euo pipefail
+          git config --global --add safe.directory "$PWD"
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test "$(git merge-base "$BASE_SHA" HEAD)" = "$BASE_SHA"
+          git diff --exit-code
+      - name: Install the selected Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 26.8.2
+      - name: Install the source-declared pnpm version
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
+      - name: Verify source toolchain pins
+        run: |
+          set -euo pipefail
+          npm install --global corepack@0.36.0
+          expected_pnpm="$(node -p 'JSON.parse(require("node:fs").readFileSync("package.json", "utf8")).packageManager.match(/^pnpm@([^+]+)/)[1]')"
+          test "$(pnpm --version)" = "$expected_pnpm"
+          test "$(corepack pnpm --version)" = "$expected_pnpm"
+          node -p 'JSON.stringify({node:process.version,platform:process.platform,packageManager:JSON.parse(require("node:fs").readFileSync("package.json", "utf8")).packageManager,oxfmt:JSON.parse(require("node:fs").readFileSync("package.json", "utf8")).devDependencies.oxfmt})'
+      - name: Install frozen dependencies without secrets
+        run: pnpm install --frozen-lockfile
+      - name: Format the complete product diff and print the canonical patch
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test "$(git merge-base "$BASE_SHA" HEAD)" = "$BASE_SHA"
+          mapfile -d '' -t changed_paths < <(git diff --name-only -z "$BASE_SHA"...HEAD)
+          expected_paths=(src/agents/tools/web-fetch-utils.test.ts src/agents/tools/web-fetch-utils.ts src/agents/tools/web-fetch-visibility.tool-extraction.test.ts)
+          test "${#changed_paths[@]}" -eq "${#expected_paths[@]}"
+          for i in "${!expected_paths[@]}"; do
+            test "${changed_paths[$i]}" = "${expected_paths[$i]}"
+          done
+          git diff --exit-code
+          pnpm exec oxfmt --version
+          pnpm exec oxfmt --write "${changed_paths[@]}"
+          pnpm exec oxfmt --check "${changed_paths[@]}"
+          git diff --check
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          printf 'FORMAT_PATCH_BEGIN source=%s base=%s\n' "$SOURCE_SHA" "$BASE_SHA"
+          git --no-pager diff --no-ext-diff --no-color -- "${changed_paths[@]}"
+          printf 'FORMAT_PATCH_END\n'
