@@ -1,0 +1,194 @@
+name: Google Meet talkback paired diagnostic
+
+on:
+  push:
+    branches: [codex/proof-meet-talkback-20261004]
+    paths: [.github/workflows/proof-meet-talkback-diagnostic.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  original-suite:
+    if: github.repository == 'ly85206559/openclaw'
+    runs-on: ubuntu-24.04
+    container:
+      image: ubuntu:24.04
+      options: --cpus 2 --memory 8g
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - cell: tested-main
+            source: 9da00b0b92eadc6a31a8fa418b1f9ca9bbce7e7a
+            tree: cd3a41879f9c38caeb8242ce20a72e8f77b30c09
+            parents: edae0298da2332cecac7913f90e59f2052361db1
+          - cell: tested-pr-merge
+            source: 6b2d735ceae32cb74d2e41ac51800d0925d4f36e
+            tree: bbbcab0eb4289c57c81cef977483be78999466fb
+            parents: 9da00b0b92eadc6a31a8fa418b1f9ca9bbce7e7a 4b19c5456d35bea91936f2ec591b941bcc25b15b
+    defaults:
+      run:
+        shell: bash
+    env:
+      CI: "true"
+      SOURCE_SHA: ${{ matrix.source }}
+      SOURCE_TREE: ${{ matrix.tree }}
+      SOURCE_PARENTS: ${{ matrix.parents }}
+      CELL: ${{ matrix.cell }}
+      NODE_OPTIONS: --max-old-space-size=8192
+      OPENCLAW_CI_TEST_RUNTIME_POLICY: bun-compatible
+      FROZEN_TARGET: "false"
+      OPENCLAW_VITEST_WORKER_CACHE: "1"
+      OPENCLAW_VITEST_MAX_WORKERS: "2"
+      OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "300000"
+      OPENCLAW_NODE_TEST_PLAN_CONCURRENCY: "1"
+      OPENCLAW_NODE_TEST_PLAN_CONTINUE_ON_FAILURE: "1"
+      OPENCLAW_NODE_TEST_GROUPS_JSON: >-
+        [{"configs":["test/vitest/vitest.extension-database-workers.config.ts"],"includePatterns":["extensions/google-meet/index.test.ts"],"shard_name":"changed-extensions-config-3"}]
+      OPENCLAW_VITEST_SHARD_NAME: changed-extensions-bundle-1
+      OPENCLAW_VITEST_FS_MODULE_CACHE_WRITER: "0"
+      OPENCLAW_NODE_COMPILE_CACHE_WRITER: "0"
+      NODE_COMPILE_CACHE_PORTABLE: "1"
+    steps:
+      - name: Prepare secretless container tooling
+        run: |
+          set -euo pipefail
+          apt-get update -qq
+          apt-get install -y ca-certificates git curl xz-utils libatomic1 python3 make g++ time
+          mkdir -p "$RUNNER_TEMP/meet-diagnostic"
+      - name: Check out the exact upstream source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          repository: openclaw/openclaw
+          ref: ${{ matrix.source }}
+          persist-credentials: false
+          fetch-depth: 2
+      - name: Verify original source, test, and toolchain identities
+        run: |
+          set -euo pipefail
+          git config --global --add safe.directory "$PWD"
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test "$(git rev-parse HEAD^{tree})" = "$SOURCE_TREE"
+          test "$(git show -s --format=%P HEAD)" = "$SOURCE_PARENTS"
+          test "$(git hash-object extensions/google-meet/index.test.ts)" = 901cf54ead68c8111318903d1921b30c91763e57
+          test "$(git hash-object scripts/ci-run-node-test-shard.mts)" = bb755f0f2827e8b48be8eb412c01ade721c90476
+          test "$(git hash-object test/vitest/vitest.extension-database-workers.config.ts)" = cf5fbcd66256f9fae1ce30027b4661789c9ab1eb
+          test "$(git hash-object package.json)" = b904a4753cce2cb162cf1775cb08eaddeac1ee5d
+          test "$(git hash-object pnpm-lock.yaml)" = 626a40b303e387b6872fbc5b6cb3ae639db97da7
+          git diff --exit-code
+          git diff --cached --exit-code
+          test -z "$(git ls-files --others --exclude-standard)"
+          git show --no-patch --format='%H %P %T %s' HEAD | tee "$RUNNER_TEMP/meet-diagnostic/source.txt"
+      - name: Install the actual failed-job Node version
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.19.0
+      - name: Install the source-declared pnpm version
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
+      - name: Verify observed runtime and install frozen dependencies
+        run: |
+          set -euo pipefail
+          npm install --global npm@11.17.0 corepack@0.36.0
+          test "$(node --version)" = v24.19.0
+          test "$(npm --version)" = 11.17.0
+          test "$(pnpm --version)" = 12.5.1
+          test "$(corepack pnpm --version)" = 12.5.1
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { readFileSync } from 'node:fs';
+          const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
+          assert.ok(pkg.packageManager.startsWith('pnpm@12.5.1+sha512.'));
+          assert.equal(pkg.devDependencies.vitest, '5.0.1');
+          console.log(JSON.stringify({node:process.version, packageManager:pkg.packageManager, vitest:pkg.devDependencies.vitest}));
+          NODE
+          pnpm install --frozen-lockfile
+          test "$(node -p 'require("vitest/package.json").version')" = 5.0.1
+          git diff --exit-code
+          git diff --cached --exit-code
+      - name: Run the unchanged complete Google Meet suite once
+        id: suite
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          git diff --exit-code
+          git diff --cached --exit-code
+          export OPENCLAW_VITEST_FS_MODULE_CACHE_ROOT="$RUNNER_TEMP/meet-vitest-cache"
+          export NODE_COMPILE_CACHE="$RUNNER_TEMP/meet-node-cache"
+          export OPENCLAW_NODE_TEST_VITEST_ARGS_JSON="$(node -e 'console.log(JSON.stringify(["--retry=0","--reporter=verbose","--reporter=json",`--outputFile=${process.env.RUNNER_TEMP}/meet-diagnostic/tests.json`]))')"
+          printf 'cell=%s source=%s command=time -p node --import tsx scripts/ci-run-node-test-shard.mts\n' "$CELL" "$SOURCE_SHA"
+          printf 'plan=%s\nargs=%s\n' "$OPENCLAW_NODE_TEST_GROUPS_JSON" "$OPENCLAW_NODE_TEST_VITEST_ARGS_JSON"
+          set +e
+          { time -p node --import tsx scripts/ci-run-node-test-shard.mts; } 2>&1 | tee "$RUNNER_TEMP/meet-diagnostic/suite.log"
+          result=${PIPESTATUS[0]}
+          set -e
+          printf '%s\n' "$result" > "$RUNNER_TEMP/meet-diagnostic/exit-code.txt"
+          exit "$result"
+      - name: Preserve real outcomes and require complete test collection
+        if: always() && steps.suite.outcome != 'skipped'
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { readFileSync, writeFileSync } from 'node:fs';
+          import { join } from 'node:path';
+          const dir = join(process.env.RUNNER_TEMP, 'meet-diagnostic');
+          const report = JSON.parse(readFileSync(join(dir, 'tests.json'), 'utf8'));
+          const exitCode = Number(readFileSync(join(dir, 'exit-code.txt'), 'utf8').trim());
+          const log = readFileSync(join(dir, 'suite.log'), 'utf8');
+          const assertions = report.testResults.flatMap(file => file.assertionResults);
+          const failed = assertions.filter(test => test.status === 'failed');
+          const receipt = {
+            cell: process.env.CELL, source: process.env.SOURCE_SHA,
+            workflowCommit: process.env.GITHUB_SHA, node: process.version, exitCode,
+            total: report.numTotalTests, passed: report.numPassedTests, failed: report.numFailedTests,
+            pending: report.numPendingTests, todo: report.numTodoTests,
+            runtimeErrors: report.numRuntimeErrorTestSuites,
+            failures: failed.map(test => ({ancestors:test.ancestorTitles, title:test.title, messages:test.failureMessages})),
+            upstreamJob: 'https://github.com/openclaw/openclaw/actions/runs/37213240774/job/111468723368',
+            history: [
+              'https://github.com/openclaw/openclaw/commit/71772d690c4cfa6535a339d13a823108e02aae41',
+              'https://github.com/openclaw/openclaw/commit/b56ae70a5e7e302dc2165c96b60214e84e19c7b1',
+            ],
+            scope: 'Original first database-worker plan and full unchanged index.test.ts, not all three upstream shard invocations. No retries or expected-failure conversion.',
+            environmentDifference: 'GitHub-hosted Ubuntu 24.04 container with two CPUs/eight GiB limit and fresh isolated caches, not the Blacksmith VM or its restored protected cache.',
+          };
+          writeFileSync(join(dir, 'receipt.json'), JSON.stringify(receipt, null, 2));
+          console.log(JSON.stringify(receipt));
+          assert.equal(report.numTotalTests, 81);
+          assert.equal(assertions.length, 81);
+          assert.equal(report.testResults.length, 1);
+          assert.ok(report.testResults[0].name.endsWith('/extensions/google-meet/index.test.ts'));
+          assert.equal(report.numPendingTests ?? 0, 0);
+          assert.equal(report.numTodoTests ?? 0, 0);
+          assert.equal(report.numRuntimeErrorTestSuites ?? 0, 0);
+          assert.ok(assertions.every(test => ['passed', 'failed'].includes(test.status)));
+          assert.equal(report.numPassedTests + report.numFailedTests, 81);
+          const completionLines = log.split('\n').filter(line => line.startsWith('[shard:completion] '));
+          assert.equal(completionLines.length, 1);
+          const completion = JSON.parse(completionLines[0].slice('[shard:completion] '.length));
+          assert.deepEqual(completion, {version:1, planned:1, completed:1, invocations:1, failedInvocations:exitCode === 0 ? 0 : 1});
+          assert.equal(report.success, exitCode === 0);
+          if (exitCode === 0) assert.equal(report.numFailedTests, 0);
+          else assert.ok(report.numFailedTests > 0, 'non-test or infrastructure failure is not a reproduced assertion failure');
+          NODE
+      - name: Verify final source stayed unmodified
+        if: always()
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test "$(git rev-parse HEAD^{tree})" = "$SOURCE_TREE"
+          test "$(git show -s --format=%P HEAD)" = "$SOURCE_PARENTS"
+          git diff --exit-code
+          git diff --cached --exit-code
+          test -z "$(git ls-files --others --exclude-standard)"
+          printf 'source=%s tree=%s tracked_clean=true\n' "$SOURCE_SHA" "$SOURCE_TREE" | tee "$RUNNER_TEMP/meet-diagnostic/final-identity.txt"
+      - name: Retain both cells' diagnostic reports and logs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: meet-talkback-${{ matrix.cell }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/meet-diagnostic/
+          if-no-files-found: error
+          retention-days: 7
