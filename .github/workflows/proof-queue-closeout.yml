@@ -1,0 +1,121 @@
+name: Queue closeout focused proof
+
+on:
+  push:
+    branches: [codex/proof-queue-closeout-20261004]
+    paths: [".github/workflows/proof-queue-closeout.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  focused-proof:
+    if: github.repository == 'ly85206559/openclaw'
+    runs-on: ubuntu-latest
+    container: ubuntu:24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - pr: "151008"
+            source: fd5ae84214ad170ebc112d1dd645196e8334076e
+          - pr: "152393"
+            source: fafd2646bb155b5636ceda91fd62fb334ca2deaf
+          - pr: "142784"
+            source: c751a5c8012529b4c3a02812fa1b6f33d8d1f62c
+          - pr: "151009"
+            source: d2efd0713ff5cfd0ee8e3076f24924b33c1e02f4
+    defaults:
+      run:
+        shell: bash
+    env:
+      CI: "true"
+      PR_NUMBER: ${{ matrix.pr }}
+      SOURCE_SHA: ${{ matrix.source }}
+      BASE_SHA: 4d2617d425ab247a2f55a18523da8cc6a483746c
+      OPENCLAW_VITEST_MAX_WORKERS: "1"
+      OPENCLAW_TEST_PROJECTS_PARALLEL: "1"
+    steps:
+      - name: Prepare isolated container tooling
+        run: |
+          apt-get update -qq
+          apt-get install -y ca-certificates git ripgrep curl xz-utils libatomic1 python3 python3-venv time
+      - name: Check out the pinned product source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ matrix.source }}
+          persist-credentials: false
+          fetch-depth: 3
+      - name: Assert source identity
+        run: |
+          set -euo pipefail
+          git config --global --add safe.directory "$PWD"
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          printf 'PR=%s SOURCE_SHA=%s PLATFORM=ubuntu:24.04\n' "$PR_NUMBER" "$SOURCE_SHA"
+          git show --no-patch --format='%H %P %s' HEAD
+          if [ "$PR_NUMBER" != 151009 ]; then
+            git merge-base --is-ancestor "$BASE_SHA" HEAD
+            git diff --stat "$BASE_SHA"...HEAD
+          fi
+      - name: Install the selected Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 26.8.2
+      - name: Install the source-declared pnpm version
+        uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa
+      - name: Verify source toolchain pins
+        run: |
+          set -euo pipefail
+          npm install --global corepack@0.36.0
+          expected_pnpm="$(node -p 'JSON.parse(require("node:fs").readFileSync("package.json", "utf8")).packageManager.match(/^pnpm@([^+]+)/)[1]')"
+          test "$(pnpm --version)" = "$expected_pnpm"
+          test "$(corepack pnpm --version)" = "$expected_pnpm"
+          node -p 'JSON.stringify({node:process.version,platform:process.platform,packageManager:JSON.parse(require("node:fs").readFileSync("package.json", "utf8")).packageManager,engines:JSON.parse(require("node:fs").readFileSync("package.json", "utf8")).engines})'
+          printf 'This Linux measurement does not replace real Windows PTY or browser behavior proof.\n'
+      - name: Install frozen dependencies without secrets
+        run: pnpm install --frozen-lockfile
+      - name: Measure each focused file with one worker
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          case "$PR_NUMBER" in
+            151008)
+              tests=(src/daemon/schtasks-state-probe.test.ts)
+              ;;
+            152393)
+              tests=(src/gateway/server-methods/chat-send-command-replies.test.ts src/auto-reply/reply-payload.test.ts)
+              ;;
+            142784)
+              tests=(ui/src/app/update-overlay-helpers.test.ts ui/src/plugins/control-ui-runtime.test.ts)
+              ;;
+            151009)
+              tests=(src/process/terminal-pty.test.ts)
+              ;;
+            *) exit 1 ;;
+          esac
+          for test_file in "${tests[@]}"; do
+            test -f "$test_file"
+            printf '\nSOURCE_SHA=%s TEST_FILE=%s MAX_WORKERS=1 PROJECTS_PARALLEL=1\n' "$SOURCE_SHA" "$test_file"
+            printf 'COMMAND: pnpm test %q --maxWorkers=1 --retry=0\n' "$test_file"
+            /usr/bin/time -f "PROOF_TIMING source=$SOURCE_SHA file=$test_file wall_seconds=%e user_seconds=%U system_seconds=%S exit=%x" \
+              pnpm test "$test_file" --maxWorkers=1 --retry=0
+          done
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          git diff --exit-code
+      - name: Check the complete repaired product diff
+        if: matrix.pr != '151009'
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test "$(git merge-base "$BASE_SHA" HEAD)" = "$BASE_SHA"
+          mapfile -d '' -t changed_paths < <(git diff --name-only -z "$BASE_SHA"...HEAD)
+          test "${#changed_paths[@]}" -gt 0
+          printf 'FULL_DIFF_BASE=%s SOURCE_SHA=%s\n' "$BASE_SHA" "$SOURCE_SHA"
+          printf 'CHANGED_FILE=%s\n' "${changed_paths[@]}"
+          pnpm exec oxfmt --check "${changed_paths[@]}"
+          git diff --check "$BASE_SHA"...HEAD
+          node scripts/check-changed.mjs --base "$BASE_SHA" --dry-run -- "${changed_paths[@]}"
+          node scripts/check-changed.mjs --base "$BASE_SHA" -- "${changed_paths[@]}"
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          git diff --exit-code
