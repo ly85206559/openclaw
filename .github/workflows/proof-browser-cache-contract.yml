@@ -16,7 +16,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        lane: [browser, media, nfc]
+        lane: [nfc]
     defaults:
       run:
         shell: bash
@@ -53,3 +53,52 @@ jobs:
           cp proof-assets/.proof/browser-cache-* .proof/
           git apply ".proof/browser-cache-${LANE}-regression.patch"
           node .proof/browser-cache-check-unit.mjs RED "$LANE"
+
+  runtime-red:
+    runs-on: ubuntu-latest
+    container: ubuntu:24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        lane: [browser, media, nfc]
+    defaults:
+      run:
+        shell: bash
+    env:
+      SOURCE_SHA: da9cb6dfaa748c125e49f736e51300d0ea57caab
+    steps:
+      - name: Prepare isolated container tooling
+        run: |
+          apt-get update -qq
+          apt-get install -y ca-certificates git ripgrep curl xz-utils libatomic1
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          persist-credentials: false
+          fetch-depth: 1
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ github.sha }}
+          path: proof-assets
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 26.8.2
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa
+      - name: Install frozen dependencies without secrets
+        run: pnpm install --frozen-lockfile
+      - name: Run actual baseline flow
+        env:
+          LANE: ${{ matrix.lane }}
+        run: |
+          git config --global --add safe.directory "$PWD"
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          mkdir -p .proof
+          cp proof-assets/.proof/browser-cache-* .proof/
+          if [ "$LANE" = browser ]; then
+            node extensions/browser/node_modules/playwright-core/cli.js install-deps chromium
+            node .proof/browser-cache-browser-runtime.mjs red "$SOURCE_SHA" .proof/browser-runtime-red.json
+          else
+            node .proof/browser-cache-check-runtime.mjs red "$LANE"
+          fi

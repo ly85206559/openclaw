@@ -40,6 +40,10 @@ const assertions = suite.assertionResults;
 assert.ok(assertions.length > 0);
 assert.ok(assertions.every(test => test.status === "passed" || test.status === "failed"));
 const failures = assertions.filter(test => test.status === "failed");
+console.log(JSON.stringify({ source: process.env.SOURCE_SHA, phase, lane,
+  assertions: assertions.length, observedFailures: failures.map(test => ({
+    fullName: test.fullName, title: test.title, messages: test.failureMessages,
+  })), runtime }));
 assert.equal(report.numFailedTests, failures.length);
 assert.equal(report.numPassedTests, assertions.length - failures.length);
 if (phase === "RED") {
