@@ -11,12 +11,14 @@ import {
   worktreePathExists,
   commandError,
   listGitWorktrees,
+  lstatIfExists,
   runGit,
   WORKTREE_CHECKOUT_TIMEOUT_MS,
 } from "./git.js";
-import { restoreProvisionedFiles, SNAPSHOT_CHUNK_BYTES } from "./provisioned-files.js";
+import { restoreProvisionedFiles } from "./provisioned-files.js";
+import { SNAPSHOT_CHUNK_BYTES } from "./provisioned-snapshot.js";
 import {
-  assertWorktreeRemovalClaim,
+  createWorktreeRemovalClaimsGuard,
   getRegistryWorktree,
   getRegistryWorktreeProvisionedState,
   updateRegistryWorktree,
@@ -32,7 +34,11 @@ import {
   claimWorktreeRemoval,
   finalizeWorktreeRemoval,
 } from "./run-lease.js";
-import { resolveRepository, type ResolvedRepository } from "./service-preparation.js";
+import {
+  removeFailedWorktree,
+  resolveRepository,
+  type ResolvedRepository,
+} from "./service-preparation.js";
 import {
   exactStateRetirementSchema,
   type ExactStateRetirement,
@@ -62,9 +68,26 @@ type RestoreContext = {
   env: NodeJS.ProcessEnv;
   now: () => number;
   getConfig?: () => OpenClawConfig;
+  admitCapacity: (
+    requiredPaths: readonly string[],
+    repository: Pick<ResolvedRepository, "sourceRoot" | "commonDir">,
+  ) => Promise<void>;
   requireSpace: (target: string, repository: ResolvedRepository, bytes?: number) => void;
   recoveryClaim?: string;
 };
+
+async function restoreSnapshotProjection(
+  worktree: ManagedWorktreeRecord,
+  env: NodeJS.ProcessEnv,
+  assertCurrent: WorktreeAllocationGuard["commitGuard"],
+) {
+  const { withSettledLocalWorkspace } =
+    await import("../../gateway/worker-environments/local-workspace-projection.js");
+  await withSettledLocalWorkspace(
+    { worktree, env, assertCurrent, restoreSnapshot: true },
+    async () => {},
+  );
+}
 
 /** An unfinished retirement still has a live row: reuse removal custody until recovery settles. */
 export async function restoreManagedWorktreeSnapshot(
@@ -82,6 +105,7 @@ export async function restoreManagedWorktreeSnapshot(
     assertExactStateOwner(requireLiveSnapshotRecord(context.env, record.id), expected);
   };
   const token = randomUUID();
+  const assertClaim = createWorktreeRemovalClaimsGuard(context.env, [record.id], token);
   claimWorktreeRemoval(context.env, { worktreeId: record.id, token, assertCurrent: assertOwner });
   try {
     return await restoreSnapshot(
@@ -89,7 +113,7 @@ export async function restoreManagedWorktreeSnapshot(
         ...input,
         commitGuard: () => {
           input.commitGuard?.();
-          assertWorktreeRemovalClaim(context.env, record.id, token);
+          assertClaim();
         },
       },
       { ...context, recoveryClaim: token },
@@ -113,6 +137,7 @@ async function restoreSnapshot(
   params.signal?.throwIfAborted();
   params.commitGuard?.();
   let record = getRegistryWorktree(env, params.id);
+  let capacityAdmitted = record?.removedAt === undefined;
   if (record?.snapshotRef?.startsWith("refs/openclaw/snapshots/exact-")) {
     const original = record;
     const callerGuard = params.commitGuard;
@@ -231,8 +256,18 @@ async function restoreSnapshot(
     throw new Error(`source repository no longer exists: ${record.repoRoot}`);
   }
   const repository = await resolveRepository(record.repoRoot);
+  const admitCapacity = async (requiredPaths: readonly string[]) => {
+    // Incomplete retirement recovery can still own a live row already counted
+    // by admission. Only removed records need another fleet slot.
+    if (!capacityAdmitted) {
+      await context.admitCapacity([...requiredPaths, repository.commonDir], repository);
+      params.commitGuard?.();
+      capacityAdmitted = true;
+    }
+  };
   requireSpace(record.path, repository);
-  const provisionedState = getRegistryWorktreeProvisionedState(env, record.id);
+  const provisionedState = await getRegistryWorktreeProvisionedState(env, record.id);
+  params.commitGuard?.();
   if (provisionedState === undefined) {
     throw new Error(`worktree ${record.id} snapshot lacks provisioned file metadata`);
   }
@@ -278,17 +313,7 @@ async function restoreSnapshot(
           assertExactStateSourceIdentity(restoreRecord.path, identity);
         },
       };
-      const { withSettledLocalWorkspace } =
-        await import("../../gateway/worker-environments/local-workspace-projection.js");
-      await withSettledLocalWorkspace(
-        {
-          worktree: restoreRecord,
-          env,
-          assertCurrent: params.commitGuard,
-          restoreSnapshot: true,
-        },
-        async () => {},
-      );
+      await restoreSnapshotProjection(restoreRecord, env, params.commitGuard);
       return await finishRestoredSnapshot(
         params,
         context,
@@ -304,6 +329,7 @@ async function restoreSnapshot(
         metadata: exact,
         options: gitOptions,
         assertCurrent: () => params.commitGuard?.(),
+        admitCapacity,
         finalize: () => finalize(exact),
       });
       if (restored) {
@@ -327,6 +353,7 @@ async function restoreSnapshot(
       states: provisionedState,
       options: gitOptions,
       assertCurrent: () => params.commitGuard?.(),
+      admitCapacity,
       finalize,
       add: async (assertCurrent) => {
         const added = await addManagedWorktree({
@@ -375,10 +402,48 @@ async function restoreSnapshot(
       signal: params.signal,
       assertCurrent: params.commitGuard,
     });
+  const target = await lstatIfExists(record.path);
+  const registrations = await listGitWorktrees(record.repoRoot, gitOptions);
+  if (
+    (target && (!target.isDirectory() || (await fs.readdir(record.path)).length > 0)) ||
+    registrations.some(
+      (entry) => entry.path === record.path || entry.branch === `refs/heads/${record.branch}`,
+    )
+  ) {
+    throw new Error(
+      "Worktree restore destination or branch is occupied; existing checkouts preserved",
+    );
+  }
+  let branch: Parameters<typeof addManagedWorktree>[0]["branch"] = record.branch || undefined;
+  if (record.branch) {
+    const ref = `refs/heads/${record.branch}`;
+    const retained = await runGit(
+      record.repoRoot,
+      ["show-ref", "--quiet", "--verify", ref],
+      gitOptions,
+    );
+    if (retained.code === 0) {
+      if (
+        (await requireGit(
+          record.repoRoot,
+          ["rev-parse", "--verify", `${ref}^{commit}`],
+          gitOptions,
+        )) !== parent
+      ) {
+        throw new Error(
+          "Recorded branch moved after worktree removal; branch and existing checkouts preserved",
+        );
+      }
+      branch = { mode: "existing", name: record.branch };
+    } else if (retained.code !== 1) {
+      throw commandError("git show-ref retained worktree branch", retained);
+    }
+  }
+  const sourceOnly = await usesSourceOnlyWorktreeGit(record, env, getConfig ?? getRuntimeConfig);
+  await admitCapacity([record.repoRoot, record.path]);
   params.commitGuard?.();
   await fs.mkdir(path.dirname(record.path), { recursive: true });
   params.commitGuard?.();
-  const sourceOnly = await usesSourceOnlyWorktreeGit(record, env, getConfig ?? getRuntimeConfig);
   const added = await addManagedWorktree({
     env,
     sourceOnly,
@@ -389,7 +454,7 @@ async function restoreSnapshot(
     worktreeRoot: path.dirname(path.dirname(record.path)),
     destination: record.path,
     base: parent,
-    branch: record.branch || undefined,
+    branch,
     deferGitCheckout: true,
     requireSpace: (cloneBytes) =>
       requireSpace(
@@ -444,36 +509,17 @@ async function restoreSnapshot(
       params.commitGuard,
     );
     params.commitGuard?.();
-    const { withSettledLocalWorkspace } =
-      await import("../../gateway/worker-environments/local-workspace-projection.js");
-    await withSettledLocalWorkspace(
-      {
-        worktree: record,
-        env,
-        assertCurrent: params.commitGuard,
-        restoreSnapshot: true,
-      },
-      async () => {},
-    );
+    await restoreSnapshotProjection(record, env, params.commitGuard);
     requireSpace(record.path, repository);
     restoredProvisionedPaths = provisionedState.map((state) => state.path);
   } catch (error) {
-    const rollbackOptions = { beforeRun: params.rollbackGuard, killProcessTree: true };
-    const removed = await runGit(
+    const failure = await removeFailedWorktree(
       record.repoRoot,
-      ["worktree", "remove", "--force", record.path],
-      rollbackOptions,
+      record.path,
+      typeof branch === "string" ? branch : undefined,
+      params.rollbackGuard,
     );
-    const branchDeleted = await runGit(
-      record.repoRoot,
-      ["branch", "-D", record.branch],
-      rollbackOptions,
-    );
-    if (removed.code !== 0 || branchDeleted.code !== 0) {
-      const failure =
-        removed.code === 0
-          ? commandError("git branch -D", branchDeleted)
-          : commandError("git worktree remove", removed);
+    if (failure) {
       throw new Error(`${String(error)}\nrestore cleanup failed: ${failure.message}`, {
         cause: error,
       });

@@ -35,10 +35,7 @@ import { resolveChatRunOwnerAgentId } from "../chat-run-owner.js";
 import type { GatewayRecoveryRuntime } from "../server-instance-runtime.types.js";
 import { deriveGatewaySessionLifecycleSnapshot } from "../session-lifecycle-state.js";
 import { boundedWorkerError } from "../worker-environments/worker-error.js";
-import { resolveChatSendActiveScopeKey } from "./chat-origin-routing.js";
 import type { GatewayRequestContext } from "./types.js";
-
-export { hasRestartRecoveryTerminalRun };
 
 const RESTART_SAFE_CHAT_REQUEST_VERIFIER_DOMAIN = "openclaw.chat.restart-retry.v1";
 const log = createSubsystemLogger("gateway/restart-recovery");
@@ -55,6 +52,7 @@ type RestartSafeChatAdmission = {
 
 export type RestartSafeChatTerminalState = {
   error?: string;
+  errorKind?: "state_contention";
   retryable: boolean;
   status: "failed" | "killed";
 };
@@ -236,6 +234,7 @@ export async function resolveDurableChatClaim(params: {
 
 function isRestartSafeChatSession(params: {
   entry?: SessionEntry;
+  acpMeta: SessionEntry["acp"] | null;
   requestedSessionId?: string;
   sessionKey: string;
 }): boolean {
@@ -253,7 +252,7 @@ function isRestartSafeChatSession(params: {
     entry.spawnedBy === undefined &&
     entry.subagentRole === undefined &&
     (entry.spawnDepth ?? 0) === 0 &&
-    entry.acp === undefined &&
+    params.acpMeta == null &&
     entry.cronRunContinuation === undefined &&
     !isSubagentSessionKey(params.sessionKey) &&
     !isCronSessionKey(params.sessionKey) &&
@@ -264,6 +263,7 @@ function isRestartSafeChatSession(params: {
 }
 
 function hasRestartUnsafeChatWork(params: {
+  activeRunScopeKey: string;
   context: Pick<GatewayRequestContext, "chatAbortControllers"> &
     Partial<Pick<GatewayRequestContext, "chatQueuedTurns">>;
   sessionId: string;
@@ -276,43 +276,29 @@ function hasRestartUnsafeChatWork(params: {
       resolveSessionDispatchKind(params.sessionKey, params.entry),
     ) !== undefined ||
     listActiveEmbeddedRunSessionIds().includes(params.sessionId) ||
-    replyRunRegistry.isActive(
-      resolveChatSendActiveScopeKey({
-        sessionKey: params.sessionKey,
-        agentId: params.agentId,
-      }),
-    )
+    replyRunRegistry.isActive(params.activeRunScopeKey)
   ) {
     return true;
   }
-  for (const active of params.context.chatAbortControllers.values()) {
-    if (
-      (active.sessionKey === params.sessionKey || active.sessionId === params.sessionId) &&
-      resolveChatRunOwnerAgentId({
-        agentId: active.agentId,
-        sessionKey: active.sessionKey,
-        defaultAgentId: params.agentId,
-      }) === params.agentId
-    ) {
-      return true;
-    }
-  }
-  for (const queued of params.context.chatQueuedTurns?.values() ?? []) {
-    if (
-      (queued.sessionKey === params.sessionKey || queued.sessionId === params.sessionId) &&
-      resolveChatRunOwnerAgentId({
-        agentId: queued.agentId,
-        sessionKey: queued.sessionKey,
-        defaultAgentId: params.agentId,
-      }) === params.agentId
-    ) {
-      return true;
+  for (const runs of [params.context.chatAbortControllers, params.context.chatQueuedTurns]) {
+    for (const active of runs?.values() ?? []) {
+      if (
+        (active.sessionKey === params.sessionKey || active.sessionId === params.sessionId) &&
+        resolveChatRunOwnerAgentId({
+          agentId: active.agentId,
+          sessionKey: active.sessionKey,
+          defaultAgentId: params.agentId,
+        }) === params.agentId
+      ) {
+        return true;
+      }
     }
   }
   return false;
 }
 
 export function resolveRestartSafeChatAdmission(params: {
+  activeRunScopeKey: string;
   agentId: string;
   cfg: OpenClawConfig;
   clientRunId: string;
@@ -321,6 +307,7 @@ export function resolveRestartSafeChatAdmission(params: {
     "chatAbortControllers" | "chatQueuedTurns" | "workerSessionPlacementService"
   >;
   entry?: SessionEntry;
+  acpMeta: SessionEntry["acp"] | null;
   initialSessionEntry?: SessionEntry;
   now: number;
   request?: RestartSafeChatRequest;
@@ -449,6 +436,7 @@ export async function terminalizeRestartSafeChatAdmission(
               endedAt,
               aborted: params.status === "killed",
               error: params.error,
+              errorKind: params.errorKind,
             },
           },
         }),
@@ -476,6 +464,7 @@ export async function terminalizeRestartSafeChatAdmission(
       },
       runId: params.clientRunId,
       error: params.error,
+      errorKind: params.errorKind,
     }).catch((error: unknown) => {
       // The claim is already settled; report failure must not trigger a competing terminal write.
       log.warn(`Failed to record restart-safe chat failure notice: ${boundedWorkerError(error)}`);

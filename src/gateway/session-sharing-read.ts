@@ -1,8 +1,10 @@
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
+import { operatorScopeSatisfied } from "../shared/operator-scope-compat.js";
 import { prepareGatewayRecipientProfile } from "./expected-profile.js";
 import {
+  authorizeCurrentOperatorRoleScopes,
   operatorSessionCap,
   resolveGatewayOperatorRoleActor,
   resolveOperatorRolePolicyForAssignment,
@@ -20,7 +22,24 @@ import {
   type SessionSharingRoleParams,
   type SessionSharingTarget,
 } from "./session-sharing-policy.js";
-import { loadCachedSessionSharingSnapshot } from "./session-sharing-snapshot-cache.js";
+import {
+  loadCachedSessionSharingSnapshot,
+  type SessionSharingSnapshot,
+} from "./session-sharing-snapshot-cache.js";
+
+function sharingSnapshot(
+  target: SessionSharingTarget | null,
+  sessionKey: string,
+): SessionSharingSnapshot {
+  // Deleted rows fail closed; their unscoped catalog invalidation still refreshes readers.
+  return {
+    visibility: target ? resolveSessionVisibility(target.entry) : "draft",
+    incognito: target
+      ? target.entry.incognito === true || isIncognitoSessionKey(target.canonicalKey)
+      : isIncognitoSessionKey(sessionKey),
+    ...(target ? { createdActor: target.entry.createdActor } : {}),
+  };
+}
 
 function loadSharingSnapshot(params: Parameters<typeof resolveSessionSharingTarget>[0]) {
   const { sessionKey, agentId } = params;
@@ -32,15 +51,7 @@ function loadSharingSnapshot(params: Parameters<typeof resolveSessionSharingTarg
       return {
         canonicalKey: target?.canonicalKey ?? sessionKey,
         canonicalAgentId: target?.agentId ?? agentId,
-        snapshot: {
-          // Missing rows occur after deletion. Fail closed here; the delete path also
-          // emits an unscoped catalog invalidation so identified readers still refresh.
-          visibility: target ? resolveSessionVisibility(target.entry) : "draft",
-          incognito: target
-            ? target.entry.incognito === true || isIncognitoSessionKey(target.canonicalKey)
-            : isIncognitoSessionKey(sessionKey),
-          ...(target ? { createdActor: target.entry.createdActor } : {}),
-        },
+        snapshot: sharingSnapshot(target, sessionKey),
       };
     },
   });
@@ -48,6 +59,7 @@ function loadSharingSnapshot(params: Parameters<typeof resolveSessionSharingTarg
 
 export function canReceiveSessionEvent(params: {
   cfg: OpenClawConfig;
+  policyConfig?: OpenClawConfig;
   client: GatewayClient;
   sessionKeys: readonly string[];
   agentId?: string;
@@ -58,45 +70,48 @@ export function canReceiveSessionEvent(params: {
     target: (sessionKey: string, agentId?: string) => SessionSharingTarget | null;
   };
 }): boolean {
-  const { cfg, client, sessionKeys, event } = params;
+  const { cfg, policyConfig = cfg, client, sessionKeys, event } = params;
+  const operatorActor = resolveGatewayOperatorRoleActor(client);
+  if (
+    operatorActor?.kind === "operator" &&
+    authorizeCurrentOperatorRoleScopes(client, policyConfig)
+  ) {
+    return false;
+  }
   if (isGatewayAdmin(client)) {
     return true;
   }
-  const operatorActor = resolveGatewayOperatorRoleActor(client);
   const identity = sharingIdentity(client, operatorActor);
   if (!identity) {
     return (
-      (!cfg.gateway?.roles || operatorActor?.kind === "system") &&
+      (!operatorScopeSatisfied("operator.sessions.read", client.connect.scopes ?? []) ||
+        operatorActor?.kind === "system" ||
+        operatorScopeSatisfied("operator.read", client.connect.scopes ?? [])) &&
+      (!policyConfig.gateway?.roles || operatorActor?.kind === "system") &&
       event !== "session.suggestion" &&
       event !== "session.typing"
     );
   }
-  const sharing = params.prepared?.sharing ?? prepareSessionSharing({ cfg, client });
+  const sharing = params.prepared?.sharing ?? prepareSessionSharing({ cfg: policyConfig, client });
   const hidesForeignSessions =
-    (params.prepared ? sharing.sessionCap : operatorSessionCap(client, cfg)) === "none";
+    (params.prepared ? sharing.sessionCap : operatorSessionCap(client, policyConfig)) === "none";
   // Discovery remains lazy; these facts belong only to this recipient check, never a socket send.
-  const lookup: Omit<Parameters<typeof resolveSessionSharingTarget>[0], "sessionKey"> = {
-    cfg,
-    agentId: params.agentId,
-    exactRead: sessionKeys.length === 1,
-    storeCache: new Map(),
-    targetDiscoveryCache: new Map(),
-  };
+  const lookup = params.prepared
+    ? undefined
+    : {
+        agentId: params.agentId,
+        exactRead: sessionKeys.length === 1,
+        storeCache: new Map(),
+        targetDiscoveryCache: new Map(),
+      };
   const resolveTarget = (sessionKey: string) =>
     params.prepared
       ? params.prepared.target(sessionKey, params.agentId)
-      : resolveSessionSharingTarget({ ...lookup, sessionKey });
+      : resolveSessionSharingTarget({ cfg, ...lookup, sessionKey });
   const visible = sessionKeys.every((sessionKey) => {
-    const target = params.prepared ? resolveTarget(sessionKey) : undefined;
     const snapshot = params.prepared
-      ? {
-          visibility: target ? resolveSessionVisibility(target.entry) : "draft",
-          incognito: target
-            ? target.entry.incognito === true || isIncognitoSessionKey(target.canonicalKey)
-            : isIncognitoSessionKey(sessionKey),
-          createdActor: target?.entry.createdActor,
-        }
-      : loadSharingSnapshot({ ...lookup, sessionKey });
+      ? sharingSnapshot(resolveTarget(sessionKey), sessionKey)
+      : loadSharingSnapshot({ cfg, ...lookup, sessionKey });
     const isCreator = sharing.isCreator(snapshot.createdActor);
     if (snapshot.incognito || (hidesForeignSessions && !isCreator)) {
       return false;
@@ -176,19 +191,23 @@ export function prepareProjectedSessionSharing(params: {
   const profile = identity && retained?.aliases.has(identity.id) ? retained : undefined;
   const roleProfile =
     actor?.kind === "operator" && retained?.aliases.has(actor.profileId) ? retained : undefined;
-  const sessionCap =
+  const policy =
     actor?.kind === "system"
       ? undefined
       : resolveOperatorRolePolicyForAssignment(
           roleProfile?.profileId,
           roleProfile?.role ?? null,
           cfg,
-        )?.sessions.others;
-  return prepareSessionSharing(params, {
-    aliases: profile?.aliases ?? new Set(),
-    sessionCap,
-    isMember,
-  });
+          roleProfile?.githubLogin ?? null,
+        );
+  return {
+    ...prepareSessionSharing(params, {
+      aliases: profile?.aliases ?? new Set(),
+      sessionCap: policy?.sessions.others,
+      isMember,
+    }),
+    policy,
+  };
 }
 
 export function createSessionListEntryFilter(
