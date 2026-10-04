@@ -1,0 +1,180 @@
+name: Browser capture exact-head refresh proof
+
+on:
+  push:
+    branches: [codex/proof-queue-closeout-20261004]
+    paths:
+      - .github/workflows/proof-browser-capture-refresh.yml
+      - .github/proof/pr-155848-browser-runtime.mts
+
+permissions:
+  contents: read
+
+jobs:
+  browser-capture-proof:
+    if: github.repository == 'ly85206559/openclaw'
+    runs-on: ubuntu-latest
+    container: ubuntu:24.04
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    env:
+      CI: "true"
+      SOURCE_SHA: e4212bc11be2dfe8a55a73cb32388b43b7db5395
+      BASE_SHA: 4d2617d425ab247a2f55a18523da8cc6a483746c
+      FIRST_PARENT: 55573dbadfb237957165e00827f811692d5ef9fb
+      SOURCE_TREE: 7a47fe67e608d8990b0324ace99b0ef219850001
+      HARNESS_BLOB: 396ec3f36dafb46ce450b20ca51471c6c540340e
+      OPENCLAW_VITEST_MAX_WORKERS: "1"
+      OPENCLAW_TEST_PROJECTS_PARALLEL: "1"
+    steps:
+      - name: Prepare isolated container tooling
+        run: |
+          set -euo pipefail
+          apt-get update -qq
+          apt-get install -y ca-certificates git ripgrep curl xz-utils libatomic1 python3 python3-venv time
+      - name: Check out the pinned product source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          persist-credentials: false
+          fetch-depth: 3
+      - name: Check out the same workflow commit's proof harness
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ github.sha }}
+          path: .artifacts/proof-input
+          sparse-checkout: /.github/proof/pr-155848-browser-runtime.mts
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Assert source, merge, diff, and original harness identity
+        run: |
+          set -euo pipefail
+          git config --global --add safe.directory "$PWD"
+          git config --global --add safe.directory "$PWD/.artifacts/proof-input"
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test "$(git show -s --format=%P HEAD)" = "$FIRST_PARENT $BASE_SHA"
+          test "$(git rev-parse HEAD^{tree})" = "$SOURCE_TREE"
+          git merge-base --is-ancestor "$BASE_SHA" HEAD
+          test "$(git merge-base "$BASE_SHA" HEAD)" = "$BASE_SHA"
+          printf '%s\n' src/meeting-bot/browser-audio-capture-source.test.ts src/meeting-bot/browser-audio-capture-source.ts > "$RUNNER_TEMP/expected-paths"
+          git diff --name-only "$BASE_SHA"...HEAD > "$RUNNER_TEMP/actual-paths"
+          diff -u "$RUNNER_TEMP/expected-paths" "$RUNNER_TEMP/actual-paths"
+          git diff --quiet
+          git diff --cached --quiet
+          git check-ignore -q .artifacts/proof-input
+          test "$(git -C .artifacts/proof-input rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git -C .artifacts/proof-input rev-parse HEAD:.github/proof/pr-155848-browser-runtime.mts)" = "$HARNESS_BLOB"
+          test "$(git hash-object .artifacts/proof-input/.github/proof/pr-155848-browser-runtime.mts)" = "$HARNESS_BLOB"
+          git -C .artifacts/proof-input diff --exit-code
+          git show --no-patch --format='%H %P %T %s' HEAD
+          git diff --stat "$BASE_SHA"...HEAD
+      - name: Install the selected Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 26.8.2
+      - name: Install the source-declared pnpm version
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
+      - name: Verify source toolchain pins
+        run: |
+          set -euo pipefail
+          npm install --global corepack@0.36.0
+          expected_pnpm="$(node -p 'JSON.parse(require("node:fs").readFileSync("package.json", "utf8")).packageManager.match(/^pnpm@([^+]+)/)[1]')"
+          test "$(pnpm --version)" = "$expected_pnpm"
+          test "$(corepack pnpm --version)" = "$expected_pnpm"
+          node -p 'JSON.stringify({node:process.version,platform:process.platform,packageManager:JSON.parse(require("node:fs").readFileSync("package.json", "utf8")).packageManager,engines:JSON.parse(require("node:fs").readFileSync("package.json", "utf8")).engines})'
+      - name: Install frozen dependencies without secrets
+        run: pnpm install --frozen-lockfile
+      - name: Check formatting and lint on the two changed files
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          changed_paths=(src/meeting-bot/browser-audio-capture-source.test.ts src/meeting-bot/browser-audio-capture-source.ts)
+          pnpm exec oxfmt --check "${changed_paths[@]}"
+          node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.core.json "${changed_paths[@]}"
+          git diff --check "$BASE_SHA"...HEAD
+      - name: Run five focused source and merge-neighbor suites without retries
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          tests=(
+            src/meeting-bot/browser-audio-capture-source.test.ts
+            src/meeting-bot/realtime-browser-audio-transport.test.ts
+            src/meeting-bot/browser-act-lock.test.ts
+            src/gateway/server-methods/sessions-mutations.catalog-queue.test.ts
+            src/gateway/server-methods/sessions-patch-diagnostics.test.ts
+          )
+          for test_file in "${tests[@]}"; do
+            report="$RUNNER_TEMP/$(basename "$test_file").json"
+            /usr/bin/time -f 'focused_suite wall_seconds=%e max_rss_kb=%M' node scripts/run-vitest.mjs "$test_file" --maxWorkers=1 --retry=0 --reporter=default --reporter=json --outputFile="$report"
+            node --input-type=module - "$report" "$test_file" <<'NODE'
+          import assert from 'node:assert/strict';
+          import { readFileSync } from 'node:fs';
+          const report = JSON.parse(readFileSync(process.argv[2], 'utf8'));
+          assert.equal(report.success, true);
+          assert.ok(report.numTotalTests > 0, 'focused suite must collect tests');
+          assert.equal(report.numFailedTests, 0);
+          assert.equal(report.numPassedTests, report.numTotalTests);
+          assert.equal(report.numPendingTests ?? 0, 0);
+          assert.equal(report.numTodoTests ?? 0, 0);
+          assert.equal(report.numRuntimeErrorTestSuites ?? 0, 0);
+          assert.ok(report.testResults.length > 0);
+          for (const file of report.testResults) {
+            assert.equal(file.status, 'passed');
+            assert.ok(file.assertionResults.length > 0);
+            for (const test of file.assertionResults) assert.equal(test.status, 'passed');
+          }
+          console.log(JSON.stringify({file: process.argv[3], total: report.numTotalTests, passed: report.numPassedTests, failed: report.numFailedTests, skipped: report.numPendingTests ?? 0}));
+          NODE
+          done
+      - name: Install the source-pinned Chromium browser and system libraries
+        run: pnpm exec playwright install --with-deps chromium
+      - name: Prove the unchanged baseline defect and candidate behavior in real Chromium
+        run: |
+          set -euo pipefail
+          harness="$PWD/.artifacts/proof-input/.github/proof/pr-155848-browser-runtime.mts"
+          test "$(git hash-object "$harness")" = "$HARNESS_BLOB"
+          trap 'git checkout --detach "$SOURCE_SHA"' EXIT
+          for case_name in baseline candidate; do
+            if [ "$case_name" = baseline ]; then
+              selected_sha="$BASE_SHA"
+              expect_fixed=0
+            else
+              selected_sha="$SOURCE_SHA"
+              expect_fixed=1
+            fi
+            git diff --quiet
+            git diff --cached --quiet
+            git checkout --detach "$selected_sha"
+            test "$(git rev-parse HEAD)" = "$selected_sha"
+            test "$(git hash-object "$harness")" = "$HARNESS_BLOB"
+            PROOF_EXACT_SHA="$selected_sha" PROOF_EXPECT_FIXED="$expect_fixed" PROOF_OUTPUT="$RUNNER_TEMP/browser-capture-$case_name.json" \
+              /usr/bin/time -f 'chromium_proof wall_seconds=%e max_rss_kb=%M' node --import ./scripts/tsx.mjs "$harness"
+            git diff --quiet
+            git diff --cached --quiet
+          done
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          trap - EXIT
+      - name: Run the complete changed-surface gate at the exact candidate
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test "$(git merge-base "$BASE_SHA" HEAD)" = "$BASE_SHA"
+          node scripts/check-changed.mjs --base "$BASE_SHA" --dry-run
+          /usr/bin/time -f 'changed_gate wall_seconds=%e max_rss_kb=%M' node scripts/check-changed.mjs --base "$BASE_SHA"
+          git diff --check "$BASE_SHA"...HEAD
+      - name: Verify final source and proof identity
+        if: always()
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test "$(git show -s --format=%P HEAD)" = "$FIRST_PARENT $BASE_SHA"
+          test "$(git rev-parse HEAD^{tree})" = "$SOURCE_TREE"
+          git diff --exit-code
+          git diff --cached --exit-code
+          test "$(git -C .artifacts/proof-input rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git hash-object .artifacts/proof-input/.github/proof/pr-155848-browser-runtime.mts)" = "$HARNESS_BLOB"
+          git -C .artifacts/proof-input diff --exit-code
+          printf 'SOURCE_SHA=%s BASE_SHA=%s HARNESS_BLOB=%s tracked_source_clean=true\n' "$SOURCE_SHA" "$BASE_SHA" "$HARNESS_BLOB"
