@@ -18,14 +18,14 @@ jobs:
       matrix:
         include:
           - cell: stepfun
-            source: fbc107892f828932b691465effe1b2bb0fdca828
-            tree: 4ffd59a84cb9ccd2f2945fd68eda1e8078ba1857
-            parents: e78e965a55e2d2b121c61d0a93e571c26f6f50f8 58df32d34a41859aa77e44bda767ab535f9b8034
+            source: 3393bc04a8e0e6c103e4d815ac6f7ccc2af0af13
+            tree: 0cd831285ca4fb6671a6b7a95a5e02714da6f6f5
+            parents: e78e965a55e2d2b121c61d0a93e571c26f6f50f8 41cb731e50e94a0514b59b04f8ff07b016e1086a
             original: c66be11ce7bec220309f9e7e44591ff35190e55b
             base: e78e965a55e2d2b121c61d0a93e571c26f6f50f8
             node: 26.8.2
             test_file: test/plugins/fireworks-model-alias.test.ts
-            test_blob: 6afdab8ca03c2df4937edff4ec8b581a899d3aa4
+            test_blob: c485bfa4b654083e71fb375b43d1a024ecdb1c2c
             total: 8
           - cell: together
             source: 3a41b796c359496ccc4fb485fa981d344ca5d901
