@@ -1,0 +1,120 @@
+name: StepFun exact-source formatter diagnostic
+
+on:
+  push:
+    branches: [codex/proof-stepfun-format-20261005]
+    paths: [.github/workflows/proof-stepfun-format.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  formatter-diagnostic:
+    if: github.repository == 'ly85206559/openclaw'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    env:
+      CI: "true"
+      SOURCE_SHA: 3393bc04a8e0e6c103e4d815ac6f7ccc2af0af13
+      SOURCE_TREE: 0cd831285ca4fb6671a6b7a95a5e02714da6f6f5
+      SOURCE_PARENTS: e78e965a55e2d2b121c61d0a93e571c26f6f50f8 41cb731e50e94a0514b59b04f8ff07b016e1086a
+      TEST_FILE: test/plugins/fireworks-model-alias.test.ts
+      TEST_BLOB: c485bfa4b654083e71fb375b43d1a024ecdb1c2c
+    steps:
+      - name: Check out exact secretless source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          persist-credentials: false
+          fetch-depth: 2
+      - name: Verify immutable source and retain original bytes
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test "$(git rev-parse HEAD^{tree})" = "$SOURCE_TREE"
+          test "$(git show -s --format=%P HEAD)" = "$SOURCE_PARENTS"
+          test "$(git hash-object "$TEST_FILE")" = "$TEST_BLOB"
+          git diff --exit-code
+          git diff --cached --exit-code
+          test -z "$(git ls-files --others --exclude-standard)"
+          mkdir -p "$RUNNER_TEMP/stepfun-format"
+          cp "$TEST_FILE" "$RUNNER_TEMP/stepfun-format/original.test.ts"
+          git show --no-patch --format='%H %P %T %s' HEAD | tee "$RUNNER_TEMP/stepfun-format/source.txt"
+      - name: Install pinned Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 26.8.2
+      - name: Install source-declared pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
+      - name: Verify declared toolchain and install frozen dependencies
+        run: |
+          set -euo pipefail
+          test "$(node --version)" = v26.8.2
+          test "$(pnpm --version)" = 12.5.1
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { readFileSync } from 'node:fs';
+          const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
+          assert.ok(pkg.packageManager.startsWith('pnpm@12.5.1+sha512.'));
+          assert.equal(typeof pkg.devDependencies.oxfmt, 'string');
+          console.log(JSON.stringify({node:process.version,packageManager:pkg.packageManager,engines:pkg.engines,declaredOxfmt:pkg.devDependencies.oxfmt}));
+          NODE
+          pnpm install --frozen-lockfile
+          git diff --exit-code
+          git diff --cached --exit-code
+          pnpm exec oxfmt --version | tee "$RUNNER_TEMP/stepfun-format/formatter-version.txt"
+      - name: Format only the pinned test and capture the complete diff
+        run: |
+          set -euo pipefail
+          test "$(git hash-object "$TEST_FILE")" = "$TEST_BLOB"
+          { time -p pnpm exec oxfmt "$TEST_FILE"; } 2>&1 | tee "$RUNNER_TEMP/stepfun-format/formatter.log"
+          { time -p pnpm exec oxfmt --check "$TEST_FILE"; } 2>&1 | tee "$RUNNER_TEMP/stepfun-format/check.log"
+          git diff --check
+          git diff --no-ext-diff --binary -- "$TEST_FILE" | tee "$RUNNER_TEMP/stepfun-format/formatter.diff"
+          cp "$TEST_FILE" "$RUNNER_TEMP/stepfun-format/formatted.test.ts"
+      - name: Verify the sole allowed diagnostic delta and record provenance
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test "$(git rev-parse HEAD^{tree})" = "$SOURCE_TREE"
+          test "$(git show -s --format=%P HEAD)" = "$SOURCE_PARENTS"
+          git diff --cached --exit-code
+          test -z "$(git ls-files --others --exclude-standard)"
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { execFileSync } from 'node:child_process';
+          import { createHash } from 'node:crypto';
+          import { readFileSync, writeFileSync } from 'node:fs';
+          const git = (...args) => execFileSync('git', args, {encoding:'utf8'}).trim();
+          const path = process.env.TEST_FILE;
+          const dir = `${process.env.RUNNER_TEMP}/stepfun-format`;
+          const changed = git('diff', '--name-only').split('\n').filter(Boolean);
+          assert.deepEqual(changed, [path], 'diagnosis must change only the named test');
+          const original = readFileSync(`${dir}/original.test.ts`);
+          const formatted = readFileSync(`${dir}/formatted.test.ts`);
+          assert.notDeepEqual(formatted, original, 'formatter diagnosis requires an observed delta');
+          assert.equal(git('hash-object', `${dir}/original.test.ts`), process.env.TEST_BLOB);
+          assert.equal(git('hash-object', `${dir}/formatted.test.ts`), git('hash-object', path));
+          const configPaths = git('ls-files').split('\n').filter(value => /(^|\/)\.editorconfig$|(^|\/)\.gitattributes$|(^|\/)[^/]*oxfmt[^/]*\.jsonc?$/.test(value));
+          const configs = configPaths.map(value => {
+            const bytes = readFileSync(value);
+            return {path:value,blob:git('rev-parse', `HEAD:${value}`),checkoutBlob:git('hash-object', value),sha256:createHash('sha256').update(bytes).digest('hex'),text:bytes.toString('utf8')};
+          });
+          assert.ok(configs.every(value => value.blob === value.checkoutBlob));
+          const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
+          const receipt = {source:process.env.SOURCE_SHA,tree:process.env.SOURCE_TREE,parents:process.env.SOURCE_PARENTS,workflow:process.env.GITHUB_SHA,node:process.version,packageManager:pkg.packageManager,declaredOxfmt:pkg.devDependencies.oxfmt,observedOxfmt:readFileSync(`${dir}/formatter-version.txt`,'utf8').trim(),testFile:path,originalBlob:process.env.TEST_BLOB,formattedBlob:git('hash-object', path),originalSha256:createHash('sha256').update(original).digest('hex'),formattedSha256:createHash('sha256').update(formatted).digest('hex'),allowedChangedPaths:changed,configs,
+            scope:'Formatter diagnostic only: the isolated working copy intentionally permits the sole named test-file formatting delta. No tests, product change, complete changed gate, native flow, or upstream CI green is claimed.'};
+          writeFileSync(`${dir}/receipt.json`, JSON.stringify(receipt, null, 2));
+          console.log(JSON.stringify(receipt));
+          NODE
+      - name: Upload complete formatter diagnostic evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: stepfun-format-${{ github.run_id }}
+          path: ${{ runner.temp }}/stepfun-format/
+          if-no-files-found: error
+          retention-days: 7
