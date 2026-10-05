@@ -218,6 +218,12 @@ jobs:
           const fixed = report('fixed');
           assert.equal(fixed.code, 0);
           assert.equal(fixed.passed, total);
+          if (process.env.CELL === 'meet') {
+            const file = JSON.parse(readFileSync(`${dir}/fixed.json`, 'utf8')).testResults[0];
+            const target = file.assertionResults.filter(test => test.title === 'defaults Chrome command-pair realtime to agent-driven talk-back');
+            assert.equal(target.length, 1);
+            assert.equal(target[0].status, 'passed');
+          }
           const observations = [fixed];
           if (process.env.CELL !== 'meet') {
             const original = report('original');
@@ -254,7 +260,7 @@ jobs:
             assert.deepEqual(JSON.parse(lines[0].slice('[shard:completion] '.length)), {version:1,planned:1,completed:1,invocations:1,failedInvocations:0});
           }
           const receipt = {cell:process.env.CELL,source:process.env.SOURCE_SHA,tree:process.env.SOURCE_TREE,base:process.env.BASE_SHA,original:process.env.ORIGINAL_HEAD,workflow:process.env.GITHUB_SHA,node:process.version,observations,
-            scope:'Alias sources are immutable current-main integrations; original cells restore only introduced alias assertions while retaining main Fireworks coverage. Together missing-manifest-owner is an independent negative control. Meet runs the original full database-worker file. No secrets, retries, native/hardware/live-provider claims, or substitute upstream CI green.'};
+            scope:'Alias sources are immutable current-main integrations; original cells restore only introduced alias assertions while retaining main Fireworks coverage. Together missing-manifest-owner is an independent negative control. Meet runs the complete pinned database-worker file: source inventory is 72 ordinary it cases plus four tables of 2+2+2+3 rows = 81, and the target talk-back case must pass exactly once. No secrets, retries, native/hardware/live-provider claims, or substitute upstream CI green.'};
           writeFileSync(`${dir}/receipt.json`, JSON.stringify(receipt, null, 2));
           console.log(JSON.stringify(receipt));
           NODE
