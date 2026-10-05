@@ -18,35 +18,15 @@ jobs:
       matrix:
         include:
           - cell: stepfun
-            source: 3393bc04a8e0e6c103e4d815ac6f7ccc2af0af13
-            tree: 0cd831285ca4fb6671a6b7a95a5e02714da6f6f5
-            parents: e78e965a55e2d2b121c61d0a93e571c26f6f50f8 41cb731e50e94a0514b59b04f8ff07b016e1086a
+            source: bbf9c7a4bc956a696fec460dae1435ff0605050f
+            tree: 3c12a8de80f00950e15ff0092d1b0d460b923de9
+            parents: e78e965a55e2d2b121c61d0a93e571c26f6f50f8 5f31ef468d4357f8f0f134e9cf821a2dbcf26448
             original: c66be11ce7bec220309f9e7e44591ff35190e55b
             base: e78e965a55e2d2b121c61d0a93e571c26f6f50f8
             node: 26.8.2
             test_file: test/plugins/fireworks-model-alias.test.ts
-            test_blob: c485bfa4b654083e71fb375b43d1a024ecdb1c2c
+            test_blob: 0601b1f6bb2e2b5fa92589a3e94f47e8993db52b
             total: 8
-          - cell: together
-            source: 3a41b796c359496ccc4fb485fa981d344ca5d901
-            tree: d8ae5bc396d14e521fdac7bd4725c8053a97000c
-            parents: e78e965a55e2d2b121c61d0a93e571c26f6f50f8 48cb2eda28352d8f58b3e5380b95724376c148f9
-            original: c5d541fd98e39bed0c3eb130e502d83fd8496b81
-            base: e78e965a55e2d2b121c61d0a93e571c26f6f50f8
-            node: 26.8.2
-            test_file: test/plugins/fireworks-model-alias.test.ts
-            test_blob: 2a05ead35696f75f9b0aba41b912e903bab76394
-            total: 5
-          - cell: meet
-            source: f7b4549ac97bb4b1ff395a4716c29f2f6c924815
-            tree: f7d36d79835fc067b53548a0007404bde13eee94
-            parents: 4b19c5456d35bea91936f2ec591b941bcc25b15b
-            original: 4b19c5456d35bea91936f2ec591b941bcc25b15b
-            base: 4b19c5456d35bea91936f2ec591b941bcc25b15b
-            node: 24.19.0
-            test_file: extensions/google-meet/index.test.ts
-            test_blob: 2f563c3ff88aaccc9279d3b2a3fc328bf1cb0cb9
-            total: 81
     defaults:
       run:
         shell: bash
