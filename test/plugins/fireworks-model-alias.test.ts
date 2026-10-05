@@ -172,7 +172,7 @@ describe("Together manifest provider alias", () => {
     manifestMocks.loadPluginManifestRegistryCore.mockReturnValue(snapshot.manifestRegistry);
   });
 
-  it("owns togetherai before runtime load and resolves the canonical catalog model", () => {
+  it("owns togetherai before runtime load and resolves the canonical catalog model", async () => {
     expect(resolveOwningPluginIdsForProviderRef({ provider: "togetherai" })).toEqual(["together"]);
     const catalogModel = resolveBundledStaticCatalogModel({
       provider: "together",
@@ -201,6 +201,6 @@ describe("Together manifest provider alias", () => {
         runtimeHooks: resolveRuntimeHooks({ skipProviderRuntimeHooks: true }),
         authProfileMode: "api_key",
       });
-    expect(resolve("togetherai")).toEqual(resolve("together"));
+    expect(await resolve("togetherai")).toEqual(await resolve("together"));
   });
 });
