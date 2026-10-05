@@ -18,14 +18,14 @@ jobs:
       matrix:
         include:
           - cell: stepfun
-            source: bd5d5502c3c6876554b5a626a1267c21035b9f7f
-            tree: 163dc2551e3ef1ad4ce4b2b119f6deb4a619a6d3
-            parents: e78e965a55e2d2b121c61d0a93e571c26f6f50f8 2cdc6f2e5e6c5d24f33f8466931b725f87d06e20
+            source: fbc107892f828932b691465effe1b2bb0fdca828
+            tree: 4ffd59a84cb9ccd2f2945fd68eda1e8078ba1857
+            parents: e78e965a55e2d2b121c61d0a93e571c26f6f50f8 58df32d34a41859aa77e44bda767ab535f9b8034
             original: c66be11ce7bec220309f9e7e44591ff35190e55b
             base: e78e965a55e2d2b121c61d0a93e571c26f6f50f8
             node: 26.8.2
             test_file: test/plugins/fireworks-model-alias.test.ts
-            test_blob: c98c6309708183bb2d8dde9019da2f86776d1987
+            test_blob: 6afdab8ca03c2df4937edff4ec8b581a899d3aa4
             total: 8
           - cell: together
             source: 3a41b796c359496ccc4fb485fa981d344ca5d901
@@ -107,6 +107,11 @@ jobs:
       - name: Verify toolchain and install frozen dependencies
         run: |
           set -euo pipefail
+          if ! command -v rg >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install --no-install-recommends -y ripgrep
+          fi
+          rg --version
           test "$(node --version)" = "v$EXPECTED_NODE"
           test "$(pnpm --version)" = 12.5.1
           test "$(node -p 'require("./package.json").devDependencies.vitest')" = 5.0.1
@@ -250,7 +255,7 @@ jobs:
               assert.equal(negative.failures[0].title, 'owns togetherai before runtime load and resolves the canonical catalog model');
               assert.ok(negative.failures[0].ancestors.includes('Together manifest provider alias'));
               const negativeMessage = negative.failures[0].messages.join('\n').replace(/\u001b\[[0-9;]*m/g, '');
-              assert.ok(negativeMessage.includes('expected [] to deeply equal'));
+              assert.ok(negativeMessage.includes('expected undefined to deeply equal'));
               assert.ok(negativeMessage.includes('together'));
             }
           } else {
