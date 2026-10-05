@@ -205,49 +205,46 @@ describe("StepFun manifest provider aliases", () => {
     });
   }
 
-  it(
-    "finds models.dev alias owners before runtime loading and resolves canonical catalog models",
-    async () => {
-      expect(resolveOwningPluginIdsForProviderRef({ provider: "stepfun-ai" })).toEqual(["stepfun"]);
-      expect(resolveOwningPluginIdsForProviderRef({ provider: "stepfun-ai-step-plan" })).toEqual([
-        "stepfun",
-      ]);
+  it("finds models.dev alias owners before runtime loading and resolves canonical catalog models", async () => {
+    expect(resolveOwningPluginIdsForProviderRef({ provider: "stepfun-ai" })).toEqual(["stepfun"]);
+    expect(resolveOwningPluginIdsForProviderRef({ provider: "stepfun-ai-step-plan" })).toEqual([
+      "stepfun",
+    ]);
 
-      const standard = await resolveStepfunModel({
+    const standard = await resolveStepfunModel({
+      catalogProvider: "stepfun",
+      provider: "stepfun",
+    });
+    expect(standard).toMatchObject({
+      provider: "stepfun",
+      id: modelId,
+      api: "openai-completions",
+      baseUrl: "https://api.stepfun.ai/v1",
+    });
+    expect(
+      await resolveStepfunModel({
         catalogProvider: "stepfun",
-        provider: "stepfun",
-      });
-      expect(standard).toMatchObject({
-        provider: "stepfun",
-        id: modelId,
-        api: "openai-completions",
-        baseUrl: "https://api.stepfun.ai/v1",
-      });
-      expect(
-        await resolveStepfunModel({
-          catalogProvider: "stepfun",
-          provider: "stepfun-ai",
-        }),
-      ).toEqual(standard);
+        provider: "stepfun-ai",
+      }),
+    ).toEqual(standard);
 
-      const plan = await resolveStepfunModel({
+    const plan = await resolveStepfunModel({
+      catalogProvider: "stepfun-plan",
+      provider: "stepfun-plan",
+    });
+    expect(plan).toMatchObject({
+      provider: "stepfun-plan",
+      id: modelId,
+      api: "openai-completions",
+      baseUrl: "https://api.stepfun.ai/step_plan/v1",
+    });
+    expect(
+      await resolveStepfunModel({
         catalogProvider: "stepfun-plan",
-        provider: "stepfun-plan",
-      });
-      expect(plan).toMatchObject({
-        provider: "stepfun-plan",
-        id: modelId,
-        api: "openai-completions",
-        baseUrl: "https://api.stepfun.ai/step_plan/v1",
-      });
-      expect(
-        await resolveStepfunModel({
-          catalogProvider: "stepfun-plan",
-          provider: "stepfun-ai-step-plan",
-        }),
-      ).toEqual(plan);
-    },
-  );
+        provider: "stepfun-ai-step-plan",
+      }),
+    ).toEqual(plan);
+  });
 
   it.each([
     ["omitted API", undefined, undefined, undefined, "openai-completions"],
