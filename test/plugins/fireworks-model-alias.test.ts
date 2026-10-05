@@ -213,16 +213,22 @@ describe("StepFun manifest provider aliases", () => {
         "stepfun",
       ]);
 
-      const standard = await resolveStepfunModel({ catalogProvider: "stepfun", provider: "stepfun" });
+      const standard = await resolveStepfunModel({
+        catalogProvider: "stepfun",
+        provider: "stepfun",
+      });
       expect(standard).toMatchObject({
         provider: "stepfun",
         id: modelId,
         api: "openai-completions",
         baseUrl: "https://api.stepfun.ai/v1",
       });
-      expect(await resolveStepfunModel({ catalogProvider: "stepfun", provider: "stepfun-ai" })).toEqual(
-        standard,
-      );
+      expect(
+        await resolveStepfunModel({
+          catalogProvider: "stepfun",
+          provider: "stepfun-ai",
+        }),
+      ).toEqual(standard);
 
       const plan = await resolveStepfunModel({
         catalogProvider: "stepfun-plan",
