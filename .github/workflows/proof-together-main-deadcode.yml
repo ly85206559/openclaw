@@ -1,0 +1,149 @@
+name: Frozen main dead-export diagnostic
+
+on:
+  push:
+    branches: [codex/proof-together-main-deadcode-20261005]
+    paths: [.github/workflows/proof-together-main-deadcode.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  original-three-scans:
+    if: github.repository == 'ly85206559/openclaw'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    defaults:
+      run:
+        shell: bash
+    env:
+      CI: "true"
+      SOURCE_SHA: e78e965a55e2d2b121c61d0a93e571c26f6f50f8
+      SOURCE_TREE: a00f34c482fbc6dca80ce77ccfa8de692793a192
+      SOURCE_PARENTS: 56bdfc723e0d609fdfe387ea91c47d17bb5fcb48
+      NODE_OPTIONS: --max-old-space-size=8192
+    steps:
+      - name: Check out exact frozen upstream main
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          repository: openclaw/openclaw
+          ref: ${{ env.SOURCE_SHA }}
+          persist-credentials: false
+          fetch-depth: 2
+      - name: Verify source and canonical scanner identity
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test "$(git rev-parse HEAD^{tree})" = "$SOURCE_TREE"
+          test "$(git show -s --format=%P HEAD)" = "$SOURCE_PARENTS"
+          test "$(git hash-object scripts/check-deadcode-exports.mts)" = d776a0c900a0bbde90772e66d485d053713922a9
+          test "$(git hash-object scripts/deadcode-knip-runner.mts)" = 96e571902a6d86e54c02311a59feb0f1af077e23
+          test "$(git hash-object package.json)" = b904a4753cce2cb162cf1775cb08eaddeac1ee5d
+          test "$(git hash-object pnpm-lock.yaml)" = b2573236be1aeb15879819000055d73f0b1077cd
+          git diff --exit-code
+          git diff --cached --exit-code
+          test -z "$(git ls-files --others --exclude-standard)"
+          mkdir -p "$RUNNER_TEMP/main-deadcode"
+          git show --no-patch --format='%H %P %T %s' HEAD | tee "$RUNNER_TEMP/main-deadcode/source.txt"
+      - name: Install pinned Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 26.8.2
+      - name: Install source-declared pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
+      - name: Verify declared toolchain and install frozen dependencies
+        run: |
+          set -euo pipefail
+          test "$(node --version)" = v26.8.2
+          test "$(pnpm --version)" = 12.5.1
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { readFileSync } from 'node:fs';
+          const pkg = JSON.parse(readFileSync('package.json','utf8'));
+          assert.ok(pkg.packageManager.startsWith('pnpm@12.5.1+sha512.'));
+          assert.ok(readFileSync('scripts/deadcode-knip-runner.mts','utf8').includes('const KNIP_VERSION = "6.32.2";'));
+          console.log(JSON.stringify({node:process.version,packageManager:pkg.packageManager,engines:pkg.engines,declaredKnip:'6.32.2'}));
+          NODE
+          pnpm install --frozen-lockfile
+          git diff --exit-code
+          git diff --cached --exit-code
+          {
+            node --version
+            npm --version
+            pnpm --version
+            pnpm dlx --package knip@6.32.2 knip --version
+          } | tee "$RUNNER_TEMP/main-deadcode/tool-versions.txt"
+      - name: Run the original production, full-tree, and script scanner owner
+        id: scans
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          git diff --exit-code
+          git diff --cached --exit-code
+          printf '%s\n' 'time -p node --import tsx scripts/check-deadcode-exports.mts' | tee "$RUNNER_TEMP/main-deadcode/command.txt"
+          set +e
+          { time -p node --import tsx scripts/check-deadcode-exports.mts; } 2>&1 | tee "$RUNNER_TEMP/main-deadcode/scans.log"
+          result=${PIPESTATUS[0]}
+          set -e
+          printf '%s\n' "$result" > "$RUNNER_TEMP/main-deadcode/scans.exit"
+          exit "$result"
+      - name: Preserve exact findings and require the inherited-failure signature
+        if: always() && steps.scans.outcome != 'skipped'
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { execFileSync } from 'node:child_process';
+          import { createHash } from 'node:crypto';
+          import { readFileSync, writeFileSync } from 'node:fs';
+          const dir = `${process.env.RUNNER_TEMP}/main-deadcode`;
+          const log = readFileSync(`${dir}/scans.log`,'utf8');
+          const code = Number(readFileSync(`${dir}/scans.exit`,'utf8').trim());
+          const git = (...args) => execFileSync('git',args,{encoding:'utf8',maxBuffer:64*1024*1024}).trim();
+          const pkg = JSON.parse(readFileSync('package.json','utf8'));
+          const configPaths = ['config/knip.config.ts','config/knip.all-exports.config.ts','config/knip.scripts-exports.config.ts'];
+          const configs = configPaths.map(path => {
+            const bytes = readFileSync(path);
+            return {path,blob:git('rev-parse',`HEAD:${path}`),checkoutBlob:git('hash-object',path),sha256:createHash('sha256').update(bytes).digest('hex')};
+          });
+          const observedEntries = log.split('\n').filter(line => /^\s{2}\S.*:\s\S/.test(line));
+          const signature = {
+            productionFailed:log.includes('production unused-export scan:\nUnused exports are not allowed:'),
+            fullTreeFailed:log.includes('full-tree unused-export scan:\nUnused exports are not allowed:'),
+            googleMeetJoinResult:observedEntries.filter(line => line.includes(': GoogleMeetJoinResult')),
+            meetingRuntimeOwner:observedEntries.filter(line => line.includes(': MeetingRuntimeOwner')),
+            scriptClean:log.includes('[deadcode] Knip script unused-export scan passed with 0 entries.'),
+          };
+          const receipt = {source:process.env.SOURCE_SHA,tree:process.env.SOURCE_TREE,parents:process.env.SOURCE_PARENTS,workflow:process.env.GITHUB_SHA,node:process.version,packageManager:pkg.packageManager,toolVersions:readFileSync(`${dir}/tool-versions.txt`,'utf8'),exitCode:code,command:readFileSync(`${dir}/command.txt`,'utf8').trim(),configs,observedEntries,signature,
+            scope:'Original three-scanner owner on frozen main, unchanged flags/configuration/timeouts. This is an inherited-dead-export diagnostic, not product proof or upstream CI green. The original nonzero scanner exit intentionally keeps this workflow job red; receipt validation does not convert the scan to success.'};
+          writeFileSync(`${dir}/receipt.json`, JSON.stringify(receipt,null,2));
+          console.log(JSON.stringify(receipt));
+          assert.equal(code,1);
+          assert.ok(configs.every(config => config.blob === config.checkoutBlob));
+          assert.ok(signature.productionFailed);
+          assert.ok(signature.fullTreeFailed);
+          assert.ok(signature.googleMeetJoinResult.length > 0);
+          assert.ok(signature.meetingRuntimeOwner.length > 0);
+          assert.ok(signature.scriptClean);
+          assert.ok(!log.includes('ERROR: Error loading '),'module loading failure is not named inherited-export evidence');
+          assert.ok(!log.includes(' timed out after '),'scanner timeout is not named inherited-export evidence');
+          NODE
+      - name: Verify final frozen source remains clean
+        if: always()
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test "$(git rev-parse HEAD^{tree})" = "$SOURCE_TREE"
+          test "$(git show -s --format=%P HEAD)" = "$SOURCE_PARENTS"
+          git diff --exit-code
+          git diff --cached --exit-code
+          test -z "$(git ls-files --others --exclude-standard)"
+          printf 'source=%s tree=%s tracked_clean=true\n' "$SOURCE_SHA" "$SOURCE_TREE" | tee "$RUNNER_TEMP/main-deadcode/final-identity.txt"
+      - name: Upload full diagnostic logs, original exit, and receipts
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: together-main-deadcode-${{ github.run_id }}
+          path: ${{ runner.temp }}/main-deadcode/
+          if-no-files-found: error
+          retention-days: 7
