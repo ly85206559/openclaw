@@ -1,0 +1,289 @@
+name: Exact author review closeout proof
+
+on:
+  push:
+    branches: [codex/proof-author-review-closeout-20261005]
+    paths: [.github/workflows/proof-author-review-closeout.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  exact-source:
+    if: github.repository == 'ly85206559/openclaw'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - cell: stepfun
+            source: bd5d5502c3c6876554b5a626a1267c21035b9f7f
+            tree: 163dc2551e3ef1ad4ce4b2b119f6deb4a619a6d3
+            parents: e78e965a55e2d2b121c61d0a93e571c26f6f50f8 2cdc6f2e5e6c5d24f33f8466931b725f87d06e20
+            original: c66be11ce7bec220309f9e7e44591ff35190e55b
+            base: e78e965a55e2d2b121c61d0a93e571c26f6f50f8
+            node: 26.8.2
+            test_file: test/plugins/fireworks-model-alias.test.ts
+            test_blob: c98c6309708183bb2d8dde9019da2f86776d1987
+            total: 8
+          - cell: together
+            source: 3a41b796c359496ccc4fb485fa981d344ca5d901
+            tree: d8ae5bc396d14e521fdac7bd4725c8053a97000c
+            parents: e78e965a55e2d2b121c61d0a93e571c26f6f50f8 48cb2eda28352d8f58b3e5380b95724376c148f9
+            original: c5d541fd98e39bed0c3eb130e502d83fd8496b81
+            base: e78e965a55e2d2b121c61d0a93e571c26f6f50f8
+            node: 26.8.2
+            test_file: test/plugins/fireworks-model-alias.test.ts
+            test_blob: 2a05ead35696f75f9b0aba41b912e903bab76394
+            total: 5
+          - cell: meet
+            source: f7b4549ac97bb4b1ff395a4716c29f2f6c924815
+            tree: f7d36d79835fc067b53548a0007404bde13eee94
+            parents: 4b19c5456d35bea91936f2ec591b941bcc25b15b
+            original: 4b19c5456d35bea91936f2ec591b941bcc25b15b
+            base: 4b19c5456d35bea91936f2ec591b941bcc25b15b
+            node: 24.19.0
+            test_file: extensions/google-meet/index.test.ts
+            test_blob: 2f563c3ff88aaccc9279d3b2a3fc328bf1cb0cb9
+            total: 81
+    defaults:
+      run:
+        shell: bash
+    env:
+      CI: "true"
+      CELL: ${{ matrix.cell }}
+      SOURCE_SHA: ${{ matrix.source }}
+      SOURCE_TREE: ${{ matrix.tree }}
+      SOURCE_PARENTS: ${{ matrix.parents }}
+      ORIGINAL_HEAD: ${{ matrix.original }}
+      BASE_SHA: ${{ matrix.base }}
+      TEST_FILE: ${{ matrix.test_file }}
+      TEST_BLOB: ${{ matrix.test_blob }}
+      EXPECTED_TOTAL: ${{ matrix.total }}
+      EXPECTED_NODE: ${{ matrix.node }}
+      NODE_OPTIONS: --max-old-space-size=8192
+      OPENCLAW_VITEST_MAX_WORKERS: "1"
+      OPENCLAW_NODE_TEST_PLAN_CONCURRENCY: "1"
+      OPENCLAW_NODE_TEST_PLAN_CONTINUE_ON_FAILURE: "1"
+      OPENCLAW_VITEST_FS_MODULE_CACHE_WRITER: "0"
+      OPENCLAW_NODE_COMPILE_CACHE_WRITER: "0"
+    steps:
+      - name: Check out pinned secretless source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ matrix.source }}
+          persist-credentials: false
+          fetch-depth: 2
+      - name: Verify immutable source and complete introduced paths
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=1 origin "$ORIGINAL_HEAD" "$BASE_SHA"
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test "$(git rev-parse HEAD^{tree})" = "$SOURCE_TREE"
+          test "$(git show -s --format=%P HEAD)" = "$SOURCE_PARENTS"
+          test "$(git hash-object "$TEST_FILE")" = "$TEST_BLOB"
+          mkdir -p "$RUNNER_TEMP/closeout-proof"
+          if [[ "$CELL" = meet ]]; then
+            printf '%s\n' extensions/google-meet/index.test.ts > "$RUNNER_TEMP/expected-paths"
+          else
+            printf '%s\n' "docs/providers/$CELL.md" "extensions/$CELL/openclaw.plugin.json" test/plugins/fireworks-model-alias.test.ts > "$RUNNER_TEMP/expected-paths"
+            git show "$BASE_SHA:test/plugins/fireworks-model-alias.test.ts" > "$RUNNER_TEMP/closeout-proof/main-alias-test.ts"
+          fi
+          git diff --name-only "$BASE_SHA" HEAD > "$RUNNER_TEMP/actual-paths"
+          diff -u "$RUNNER_TEMP/expected-paths" "$RUNNER_TEMP/actual-paths"
+          git diff --check "$BASE_SHA" HEAD
+          git diff --exit-code
+          git diff --cached --exit-code
+          test -z "$(git ls-files --others --exclude-standard)"
+          git show --no-patch --format='%H %P %T %s' HEAD | tee "$RUNNER_TEMP/closeout-proof/source.txt"
+          git diff --stat "$BASE_SHA" HEAD | tee "$RUNNER_TEMP/closeout-proof/scope.txt"
+      - name: Install pinned Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Install source-declared pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
+      - name: Verify toolchain and install frozen dependencies
+        run: |
+          set -euo pipefail
+          test "$(node --version)" = "v$EXPECTED_NODE"
+          test "$(pnpm --version)" = 12.5.1
+          test "$(node -p 'require("./package.json").devDependencies.vitest')" = 5.0.1
+          pnpm install --frozen-lockfile
+          test "$(node -p 'require("vitest/package.json").version')" = 5.0.1
+          git diff --exit-code
+          git diff --cached --exit-code
+      - name: Observe original alias assertions and independent missing-owner control
+        if: matrix.cell != 'meet'
+        run: |
+          set -euo pipefail
+          export OPENCLAW_VITEST_FS_MODULE_CACHE_ROOT="$RUNNER_TEMP/alias-original-cache"
+          export NODE_COMPILE_CACHE="$RUNNER_TEMP/alias-original-node-cache"
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { execFileSync } from 'node:child_process';
+          import { readFileSync, writeFileSync } from 'node:fs';
+          const path = process.env.TEST_FILE;
+          const current = readFileSync(path, 'utf8');
+          const old = execFileSync('git', ['show', `${process.env.ORIGINAL_HEAD}:${path}`], {encoding:'utf8'});
+          const marker = process.env.CELL === 'stepfun' ? 'describe("StepFun manifest provider aliases",' : 'describe("Together manifest provider alias",';
+          assert.equal(current.split(marker).length, 2);
+          assert.equal(old.split(marker).length, 2);
+          const main = readFileSync(`${process.env.RUNNER_TEMP}/closeout-proof/main-alias-test.ts`, 'utf8');
+          assert.equal(current.slice(0, current.indexOf(marker)), `${main.trimEnd()}\n\n`);
+          writeFileSync(path, current.slice(0, current.indexOf(marker)) + old.slice(old.indexOf(marker)));
+          NODE
+          set +e
+          { time -p node scripts/run-vitest.mjs "$TEST_FILE" --maxWorkers=1 --retry=0 --reporter=verbose --reporter=json --outputFile="$RUNNER_TEMP/closeout-proof/original.json"; } 2>&1 | tee "$RUNNER_TEMP/closeout-proof/original.log"
+          original_result=${PIPESTATUS[0]}
+          set -e
+          printf '%s\n' "$original_result" > "$RUNNER_TEMP/closeout-proof/original.exit"
+          git restore --source="$SOURCE_SHA" --worktree -- "$TEST_FILE"
+          test "$(git hash-object "$TEST_FILE")" = "$TEST_BLOB"
+          if [[ "$CELL" = together ]]; then
+            node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { readFileSync, writeFileSync } from 'node:fs';
+          const path = 'extensions/together/openclaw.plugin.json';
+          const manifest = JSON.parse(readFileSync(path, 'utf8'));
+          assert.deepEqual(Object.keys(manifest.modelCatalog.aliases), ['togetherai']);
+          delete manifest.modelCatalog.aliases;
+          writeFileSync(path, `${JSON.stringify(manifest, null, 2)}\n`);
+          NODE
+            export OPENCLAW_VITEST_FS_MODULE_CACHE_ROOT="$RUNNER_TEMP/alias-negative-cache"
+            export NODE_COMPILE_CACHE="$RUNNER_TEMP/alias-negative-node-cache"
+            set +e
+            { time -p node scripts/run-vitest.mjs "$TEST_FILE" --maxWorkers=1 --retry=0 --reporter=verbose --reporter=json --outputFile="$RUNNER_TEMP/closeout-proof/negative.json"; } 2>&1 | tee "$RUNNER_TEMP/closeout-proof/negative.log"
+            negative_result=${PIPESTATUS[0]}
+            set -e
+            printf '%s\n' "$negative_result" > "$RUNNER_TEMP/closeout-proof/negative.exit"
+            git restore --source="$SOURCE_SHA" --worktree -- extensions/together/openclaw.plugin.json
+          fi
+          git diff --exit-code
+          git diff --cached --exit-code
+      - name: Run complete fixed focused file with strict collection
+        id: fixed
+        run: |
+          set -euo pipefail
+          git diff --exit-code
+          git diff --cached --exit-code
+          test "$(git hash-object "$TEST_FILE")" = "$TEST_BLOB"
+          export OPENCLAW_VITEST_FS_MODULE_CACHE_ROOT="$RUNNER_TEMP/fixed-cache"
+          export NODE_COMPILE_CACHE="$RUNNER_TEMP/fixed-node-cache"
+          args=(--retry=0 --reporter=verbose --reporter=json --outputFile="$RUNNER_TEMP/closeout-proof/fixed.json")
+          set +e
+          if [[ "$CELL" = meet ]]; then
+            export OPENCLAW_VITEST_MAX_WORKERS=2
+            export OPENCLAW_CI_TEST_RUNTIME_POLICY=bun-compatible
+            export FROZEN_TARGET=false
+            export OPENCLAW_NODE_TEST_GROUPS_JSON='[{"configs":["test/vitest/vitest.extension-database-workers.config.ts"],"includePatterns":["extensions/google-meet/index.test.ts"],"shard_name":"changed-extensions-config-3"}]'
+            export OPENCLAW_NODE_TEST_VITEST_ARGS_JSON="$(node -e 'console.log(JSON.stringify(["--retry=0","--reporter=verbose","--reporter=json",`--outputFile=${process.env.RUNNER_TEMP}/closeout-proof/fixed.json`]))')"
+            { time -p node --import tsx scripts/ci-run-node-test-shard.mts; } 2>&1 | tee "$RUNNER_TEMP/closeout-proof/fixed.log"
+            result=${PIPESTATUS[0]}
+          else
+            { time -p node scripts/run-vitest.mjs "$TEST_FILE" --maxWorkers=1 "${args[@]}"; } 2>&1 | tee "$RUNNER_TEMP/closeout-proof/fixed.log"
+            result=${PIPESTATUS[0]}
+          fi
+          set -e
+          printf '%s\n' "$result" > "$RUNNER_TEMP/closeout-proof/fixed.exit"
+          exit "$result"
+      - name: Verify exact named outcomes and report limitations
+        if: always() && steps.fixed.outcome != 'skipped'
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { readFileSync, writeFileSync } from 'node:fs';
+          const dir = `${process.env.RUNNER_TEMP}/closeout-proof`;
+          const total = Number(process.env.EXPECTED_TOTAL);
+          function report(mode) {
+            const value = JSON.parse(readFileSync(`${dir}/${mode}.json`, 'utf8'));
+            const code = Number(readFileSync(`${dir}/${mode}.exit`, 'utf8').trim());
+            const assertions = value.testResults.flatMap(file => file.assertionResults);
+            assert.equal(value.numTotalTests, total);
+            assert.equal(assertions.length, total);
+            assert.equal(value.testResults.length, 1);
+            assert.ok(value.testResults[0].name.endsWith(`/${process.env.TEST_FILE}`));
+            assert.equal(value.numPendingTests, 0);
+            assert.equal(value.numTodoTests, 0);
+            assert.ok(assertions.every(test => ['passed', 'failed'].includes(test.status)));
+            assert.equal(value.numPassedTests + value.numFailedTests, total);
+            assert.equal(value.success, code === 0);
+            if (code === 0) assert.equal(value.numFailedTests, 0);
+            else assert.ok(value.numFailedTests > 0, 'non-test failure is not assertion reproduction');
+            const failures = assertions.filter(test => test.status === 'failed');
+            return {mode, code, passed:value.numPassedTests, failed:value.numFailedTests, failures:failures.map(test => ({ancestors:test.ancestorTitles,title:test.title,messages:test.failureMessages}))};
+          }
+          const fixed = report('fixed');
+          assert.equal(fixed.code, 0);
+          assert.equal(fixed.passed, total);
+          const observations = [fixed];
+          if (process.env.CELL !== 'meet') {
+            const original = report('original');
+            observations.push(original);
+            if (process.env.CELL === 'stepfun') {
+              assert.equal(original.code, 1);
+              assert.equal(original.failed, 4);
+              const names = original.failures.map(test => test.title).sort();
+              assert.deepEqual(names, [
+                'finds models.dev alias owners before runtime loading and resolves canonical catalog models',
+                'preserves explicit stepfun-ai alias configuration with omitted API',
+                'preserves explicit stepfun-ai alias configuration with provider API',
+                'preserves explicit stepfun-ai alias configuration with model API and URL',
+              ].sort());
+              assert.ok(original.failures.every(test => test.ancestors.includes('StepFun manifest provider aliases')));
+            } else {
+              assert.ok(original.code === 0 || original.code === 1);
+              assert.ok(original.failed <= 1);
+              assert.ok(original.failures.every(test => test.title === 'owns togetherai before runtime load and resolves the canonical catalog model'));
+              const negative = report('negative');
+              observations.push(negative);
+              assert.equal(negative.code, 1);
+              assert.equal(negative.failed, 1);
+              assert.equal(negative.failures[0].title, 'owns togetherai before runtime load and resolves the canonical catalog model');
+              assert.ok(negative.failures[0].ancestors.includes('Together manifest provider alias'));
+              const negativeMessage = negative.failures[0].messages.join('\n').replace(/\u001b\[[0-9;]*m/g, '');
+              assert.ok(negativeMessage.includes('expected [] to deeply equal'));
+              assert.ok(negativeMessage.includes('together'));
+            }
+          } else {
+            const log = readFileSync(`${dir}/fixed.log`, 'utf8');
+            const lines = log.split('\n').filter(line => line.startsWith('[shard:completion] '));
+            assert.equal(lines.length, 1);
+            assert.deepEqual(JSON.parse(lines[0].slice('[shard:completion] '.length)), {version:1,planned:1,completed:1,invocations:1,failedInvocations:0});
+          }
+          const receipt = {cell:process.env.CELL,source:process.env.SOURCE_SHA,tree:process.env.SOURCE_TREE,base:process.env.BASE_SHA,original:process.env.ORIGINAL_HEAD,workflow:process.env.GITHUB_SHA,node:process.version,observations,
+            scope:'Alias sources are immutable current-main integrations; original cells restore only introduced alias assertions while retaining main Fireworks coverage. Together missing-manifest-owner is an independent negative control. Meet runs the original full database-worker file. No secrets, retries, native/hardware/live-provider claims, or substitute upstream CI green.'};
+          writeFileSync(`${dir}/receipt.json`, JSON.stringify(receipt, null, 2));
+          console.log(JSON.stringify(receipt));
+          NODE
+      - name: Formatting and complete changed-surface gate
+        run: |
+          set -euo pipefail
+          mapfile -t changed_paths < <(git diff --name-only "$BASE_SHA" HEAD)
+          pnpm exec oxfmt --check "${changed_paths[@]}"
+          git diff --check "$BASE_SHA" HEAD
+          export OPENCLAW_VITEST_FS_MODULE_CACHE_ROOT="$RUNNER_TEMP/changed-gate-cache"
+          export NODE_COMPILE_CACHE="$RUNNER_TEMP/changed-gate-node-cache"
+          { time -p node scripts/check-changed.mjs --base "$BASE_SHA"; } 2>&1 | tee "$RUNNER_TEMP/closeout-proof/changed-gate.log"
+      - name: Verify final tracked identity
+        if: always()
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test "$(git rev-parse HEAD^{tree})" = "$SOURCE_TREE"
+          test "$(git show -s --format=%P HEAD)" = "$SOURCE_PARENTS"
+          test "$(git hash-object "$TEST_FILE")" = "$TEST_BLOB"
+          git diff --exit-code
+          git diff --cached --exit-code
+          test -z "$(git ls-files --others --exclude-standard)"
+          printf 'source=%s tree=%s tracked_clean=true\n' "$SOURCE_SHA" "$SOURCE_TREE" | tee "$RUNNER_TEMP/closeout-proof/final-identity.txt"
+      - name: Upload scoped receipts and original logs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: author-closeout-${{ matrix.cell }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/closeout-proof/
+          if-no-files-found: error
+          retention-days: 7
