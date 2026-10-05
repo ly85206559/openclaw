@@ -205,24 +205,24 @@ describe("StepFun manifest provider aliases", () => {
     });
   }
 
-  it("finds models.dev alias owners before runtime loading and resolves canonical catalog models", () => {
+  it("finds models.dev alias owners before runtime loading and resolves canonical catalog models", async () => {
     expect(resolveOwningPluginIdsForProviderRef({ provider: "stepfun-ai" })).toEqual(["stepfun"]);
     expect(resolveOwningPluginIdsForProviderRef({ provider: "stepfun-ai-step-plan" })).toEqual([
       "stepfun",
     ]);
 
-    const standard = resolveStepfunModel({ catalogProvider: "stepfun", provider: "stepfun" });
+    const standard = await resolveStepfunModel({ catalogProvider: "stepfun", provider: "stepfun" });
     expect(standard).toMatchObject({
       provider: "stepfun",
       id: modelId,
       api: "openai-completions",
       baseUrl: "https://api.stepfun.ai/v1",
     });
-    expect(resolveStepfunModel({ catalogProvider: "stepfun", provider: "stepfun-ai" })).toEqual(
+    expect(await resolveStepfunModel({ catalogProvider: "stepfun", provider: "stepfun-ai" })).toEqual(
       standard,
     );
 
-    const plan = resolveStepfunModel({
+    const plan = await resolveStepfunModel({
       catalogProvider: "stepfun-plan",
       provider: "stepfun-plan",
     });
@@ -233,7 +233,7 @@ describe("StepFun manifest provider aliases", () => {
       baseUrl: "https://api.stepfun.ai/step_plan/v1",
     });
     expect(
-      resolveStepfunModel({
+      await resolveStepfunModel({
         catalogProvider: "stepfun-plan",
         provider: "stepfun-ai-step-plan",
       }),
@@ -252,7 +252,7 @@ describe("StepFun manifest provider aliases", () => {
     ],
   ] as const)(
     "preserves explicit stepfun-ai alias configuration with %s",
-    (_name, providerApi, modelApi, configuredModelBaseUrl, expectedApi) => {
+    async (_name, providerApi, modelApi, configuredModelBaseUrl, expectedApi) => {
       const cfg: OpenClawConfig = {
         models: {
           providers: {
@@ -279,7 +279,7 @@ describe("StepFun manifest provider aliases", () => {
       };
 
       expect(
-        resolveStepfunModel({
+        await resolveStepfunModel({
           catalogProvider: "stepfun",
           provider: "stepfun-ai",
           cfg,
