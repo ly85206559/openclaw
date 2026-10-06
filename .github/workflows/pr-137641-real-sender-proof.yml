@@ -1,0 +1,78 @@
+name: PR 137641 Current Sender Proof
+
+on:
+  push:
+    branches:
+      - codex/proof-zalo-refresh-20261006
+
+permissions:
+  contents: read
+
+jobs:
+  proof:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      PRODUCT_SHA: aad1b283c21e70d88518c2f77a9d8ad2bbfac4b2
+      BASE_SHA: f986a7aaf15bf986e2dbef88d7fc95c1c26bc5ed
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 3
+          persist-credentials: false
+      - name: Verify immutable product and proof identities
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse "$PRODUCT_SHA^")" = "$BASE_SHA"
+          test "$(git rev-parse HEAD^)" = "$PRODUCT_SHA"
+          test "$(git diff --name-only "$PRODUCT_SHA" HEAD | sort | tr '\n' ' ')" = ".github/workflows/pr-137641-real-sender-proof.yml extensions/zalo/src/channel.pairing.real-sender-proof.test.ts "
+          mkdir -p .artifacts/pr-137641
+          git show -s --format='%H %T %P' HEAD "$PRODUCT_SHA" "$BASE_SHA" | tee .artifacts/pr-137641/identity.txt
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 26.8.2
+      - name: Install frozen source-declared dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          corepack enable
+          corepack prepare "$(node -p "require('./package.json').packageManager")" --activate
+          node --version
+          pnpm --version
+          pnpm install --frozen-lockfile
+      - name: Reproduce on unchanged main sender
+        shell: bash
+        run: |
+          set -euo pipefail
+          git restore --source "$BASE_SHA" --worktree -- extensions/zalo/src/send.ts
+          started=$(date +%s)
+          set +e
+          pnpm test extensions/zalo/src/channel.pairing.test.ts --maxWorkers=1 --retry=0 2>&1 | tee .artifacts/pr-137641/baseline.log
+          code=${PIPESTATUS[0]}
+          set -e
+          printf 'baseline_exit=%s wall_seconds=%s\n' "$code" "$(( $(date +%s)-started ))" | tee .artifacts/pr-137641/baseline-exit.txt
+          test "$code" = 1
+          grep -q "reports the selected account's token fields" .artifacts/pr-137641/baseline.log
+          grep -q "No Zalo bot token configured" .artifacts/pr-137641/baseline.log
+          grep -Eq '1 failed.*3 passed|3 passed.*1 failed' .artifacts/pr-137641/baseline.log
+          git restore --source "$PRODUCT_SHA" --worktree -- extensions/zalo/src/send.ts
+      - name: Validate exact product and real sender boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          started=$(date +%s)
+          pnpm test extensions/zalo/src/channel.pairing.test.ts extensions/zalo/src/channel.pairing.real-sender-proof.test.ts --maxWorkers=1 --retry=0 2>&1 | tee .artifacts/pr-137641/candidate.log
+          printf 'candidate_exit=0 wall_seconds=%s\n' "$(( $(date +%s)-started ))" | tee .artifacts/pr-137641/candidate-exit.txt
+          pnpm exec oxfmt --check extensions/zalo/src/send.ts extensions/zalo/src/channel.pairing.test.ts extensions/zalo/src/channel.pairing.real-sender-proof.test.ts
+          git diff --check "$BASE_SHA" "$PRODUCT_SHA"
+          test -z "$(git status --porcelain --untracked-files=no)"
+          git show -s --format='%H %T %P' HEAD "$PRODUCT_SHA" "$BASE_SHA" > .artifacts/pr-137641/final-identity.txt
+          cmp .artifacts/pr-137641/identity.txt .artifacts/pr-137641/final-identity.txt
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: always()
+        with:
+          name: pr-137641-current-sender-${{ github.run_id }}
+          path: .artifacts/pr-137641
+          if-no-files-found: error
+          retention-days: 14
