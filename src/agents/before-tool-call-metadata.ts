@@ -1,3 +1,4 @@
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { HookContext } from "./agent-tools.before-tool-call.types.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
@@ -7,18 +8,26 @@ export type BeforeToolCallDiagnosticOptions = {
   approvalMode?: "request" | "report" | "deny";
 };
 
-const BEFORE_TOOL_CALL_WRAPPED = Symbol("beforeToolCallWrapped");
-const BEFORE_TOOL_CALL_SOURCE_TOOL = Symbol("beforeToolCallSourceTool");
+const BEFORE_TOOL_CALL_WRAPPED = Symbol.for("openclaw.beforeToolCallWrapped");
+const BEFORE_TOOL_CALL_SOURCE_TOOL = Symbol.for("openclaw.beforeToolCallSourceTool");
+
+export type ToolExecutionWrapper = (tool: AnyAgentTool) => AnyAgentTool;
 
 type BeforeToolCallMetadata = {
-  diagnosticOptions: BeforeToolCallDiagnosticOptions;
+  options: BeforeToolCallDiagnosticOptions;
   hookContext?: HookContext;
+  executionWrappers?: readonly ToolExecutionWrapper[];
 };
 
-const metadataByMarker = new WeakMap<object, BeforeToolCallMetadata>();
+// Symbols survive spreads and plugin views without projecting host context.
+// Source-transformed SDK modules and compiled hosts must recognize the same marker.
+const metadataByMarker = resolveGlobalSingleton(
+  Symbol.for("openclaw.beforeToolCallMetadata"),
+  () => new WeakMap<symbol, BeforeToolCallMetadata>(),
+);
 
 type BeforeToolCallMetadataTool = AnyAgentTool & {
-  [BEFORE_TOOL_CALL_WRAPPED]?: object;
+  [BEFORE_TOOL_CALL_WRAPPED]?: symbol;
   [BEFORE_TOOL_CALL_SOURCE_TOOL]?: AnyAgentTool;
 };
 
@@ -31,23 +40,27 @@ function getBeforeToolCallMetadata(tool: AnyAgentTool): BeforeToolCallMetadata |
   return marker ? metadataByMarker.get(marker) : undefined;
 }
 
-export function setBeforeToolCallMetadata(
+export function bindBeforeToolCallMetadata(
   tool: AnyAgentTool,
-  sourceTool: AnyAgentTool,
-  metadata: BeforeToolCallMetadata,
+  { sourceTool, ...metadata }: BeforeToolCallMetadata & { sourceTool: AnyAgentTool },
 ): void {
-  // Empty frozen keys survive spreads and plugin views without projecting host context.
-  const marker = Object.freeze({});
+  const marker = Symbol("beforeToolCallMetadata");
   metadataByMarker.set(marker, metadata);
   Object.defineProperties(tool, {
     [BEFORE_TOOL_CALL_WRAPPED]: { value: marker, enumerable: true },
-    // Source execution must retain any outer plugin view's live admission.
+    // Reading through a plugin view retains every outer source-execution guard.
     [BEFORE_TOOL_CALL_SOURCE_TOOL]: { value: sourceTool, enumerable: false },
   });
 }
 
 export function getBeforeToolCallSourceTool(tool: AnyAgentTool): AnyAgentTool | undefined {
   return withBeforeToolCallMetadata(tool)[BEFORE_TOOL_CALL_SOURCE_TOOL];
+}
+
+export function getBeforeToolCallExecutionWrappers(
+  tool: AnyAgentTool,
+): readonly ToolExecutionWrapper[] {
+  return getBeforeToolCallMetadata(tool)?.executionWrappers ?? [];
 }
 
 export function getBeforeToolCallHookContext(tool: AnyAgentTool): HookContext | undefined {
@@ -58,14 +71,14 @@ export function clearBeforeToolCallWrappedMarker(tool: AnyAgentTool): void {
   delete withBeforeToolCallMetadata(tool)[BEFORE_TOOL_CALL_WRAPPED];
 }
 
-/** Return true when a tool already carries the before_tool_call wrapper marker. */
+/** Return true when a tool already carries the before_tool_call wrapper state. */
 export function isToolWrappedWithBeforeToolCallHook(tool: AnyAgentTool): boolean {
   return getBeforeToolCallMetadata(tool) !== undefined;
 }
 
 /** Toggle diagnostic event emission on an existing before_tool_call wrapper. */
 export function setBeforeToolCallDiagnosticsEnabled(tool: AnyAgentTool, enabled: boolean): void {
-  const options = getBeforeToolCallMetadata(tool)?.diagnosticOptions;
+  const options = getBeforeToolCallMetadata(tool)?.options;
   if (options) {
     options.emitDiagnostics = enabled;
   }
@@ -74,19 +87,28 @@ export function setBeforeToolCallDiagnosticsEnabled(tool: AnyAgentTool, enabled:
 export function getBeforeToolCallDiagnosticOptions(
   tool: AnyAgentTool,
 ): BeforeToolCallDiagnosticOptions | undefined {
-  return getBeforeToolCallMetadata(tool)?.diagnosticOptions;
+  return getBeforeToolCallMetadata(tool)?.options;
 }
 
-/** Copy before_tool_call marker metadata when another wrapper replaces a tool. */
-export function copyBeforeToolCallHookMarker(source: AnyAgentTool, target: AnyAgentTool): void {
-  const marker = withBeforeToolCallMetadata(source)[BEFORE_TOOL_CALL_WRAPPED];
-  if (!marker || !metadataByMarker.has(marker)) {
+/** Preserve exact hook state and the guarded source edge when another wrapper replaces a tool. */
+export function copyBeforeToolCallMetadata(
+  source: AnyAgentTool,
+  target: AnyAgentTool,
+  wrapExecution?: ToolExecutionWrapper,
+): void {
+  const sourceMarker = withBeforeToolCallMetadata(source)[BEFORE_TOOL_CALL_WRAPPED];
+  const metadata = getBeforeToolCallMetadata(source);
+  if (!sourceMarker || !metadata) {
     return;
   }
-  Object.defineProperty(target, BEFORE_TOOL_CALL_WRAPPED, {
-    value: marker,
-    enumerable: true,
-  });
+  const marker = wrapExecution ? Symbol("beforeToolCallMetadata") : sourceMarker;
+  if (wrapExecution) {
+    metadataByMarker.set(marker, {
+      ...metadata,
+      executionWrappers: Object.freeze([...(metadata.executionWrappers ?? []), wrapExecution]),
+    });
+  }
+  Object.defineProperty(target, BEFORE_TOOL_CALL_WRAPPED, { value: marker, enumerable: true });
   const sourceTool = getBeforeToolCallSourceTool(source);
   if (sourceTool) {
     Object.defineProperty(target, BEFORE_TOOL_CALL_SOURCE_TOOL, {
