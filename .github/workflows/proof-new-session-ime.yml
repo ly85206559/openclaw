@@ -3,7 +3,7 @@ name: New Session IME confirmation proof
 on:
   push:
     branches:
-      - codex/fix-new-session-ime-confirmation-20261006
+      - codex/proof-new-session-ime-screenshots-20261006
 
 permissions:
   contents: read
@@ -26,5 +26,6 @@ jobs:
         if: always()
         with:
           name: new-session-ime-screenshots
-          path: '**/new-session-transition/ime-*.png'
-          if-no-files-found: warn
+          path: '.artifacts/control-ui-e2e/**/new-session-transition/ime-*.png'
+          include-hidden-files: true
+          if-no-files-found: error
