@@ -1,0 +1,21 @@
+name: New Session IME confirmation proof
+
+on:
+  push:
+    branches:
+      - codex/fix-new-session-ime-confirmation-20261006
+
+permissions:
+  contents: read
+
+jobs:
+  focused:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+      - run: pnpm test ui/src/pages/new-session/composer.test.ts --maxWorkers=1
