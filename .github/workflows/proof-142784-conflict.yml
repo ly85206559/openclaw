@@ -1,0 +1,75 @@
+name: PR 142784 conflict repair proof
+
+on:
+  push:
+    branches: [codex/proof-142784-conflict-20261006]
+    paths: [".github/workflows/proof-142784-conflict.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  focused-proof:
+    if: github.repository == 'ly85206559/openclaw'
+    runs-on: ubuntu-latest
+    container: ubuntu:24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    env:
+      CI: "true"
+      SOURCE_SHA: bdcd79d194dca0346fbcb90f1504da1c99995fe4
+      BASE_SHA: 2983dfcfb319ea5b600d20ee94b68f28014e9d52
+      OPENCLAW_VITEST_MAX_WORKERS: "1"
+      OPENCLAW_TEST_PROJECTS_PARALLEL: "1"
+    steps:
+      - name: Prepare isolated container tooling
+        run: |
+          apt-get update -qq
+          apt-get install -y ca-certificates git ripgrep curl xz-utils libatomic1 python3 python3-venv time
+      - name: Check out exact product head without persisted credentials
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          persist-credentials: false
+          fetch-depth: 2
+      - name: Verify exact head and full six-file scope
+        run: |
+          set -euo pipefail
+          git config --global --add safe.directory "$PWD"
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          git merge-base --is-ancestor "$BASE_SHA" HEAD
+          test "$(git diff --name-only "$BASE_SHA"...HEAD | wc -l)" -eq 6
+          printf 'SOURCE_SHA=%s BASE_SHA=%s PLATFORM=ubuntu:24.04\n' "$SOURCE_SHA" "$BASE_SHA"
+          git diff --stat "$BASE_SHA"...HEAD
+      - name: Install Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 26.8.2
+      - name: Install source-declared pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
+      - name: Verify source toolchain pins
+        run: |
+          set -euo pipefail
+          npm install --global corepack@0.36.0
+          expected_pnpm="$(node -p 'JSON.parse(require("node:fs").readFileSync("package.json", "utf8")).packageManager.match(/^pnpm@([^+]+)/)[1]')"
+          test "$(pnpm --version)" = "$expected_pnpm"
+          node -p 'JSON.stringify({node:process.version,platform:process.platform,packageManager:JSON.parse(require("node:fs").readFileSync("package.json", "utf8")).packageManager})'
+      - name: Install frozen dependencies without secrets
+        run: pnpm install --frozen-lockfile
+      - name: Exercise both owners including new main reason matrix
+        run: |
+          set -euo pipefail
+          for test_file in ui/src/app/update-overlay-helpers.test.ts ui/src/plugins/control-ui-runtime.test.ts; do
+            printf 'SOURCE_SHA=%s COMMAND=pnpm test %s --maxWorkers=1 --retry=0\n' "$SOURCE_SHA" "$test_file"
+            /usr/bin/time -f 'PROOF_TIMING wall_seconds=%e exit=%x' pnpm test "$test_file" --maxWorkers=1 --retry=0
+          done
+      - name: Format and whitespace check full product diff
+        run: |
+          set -euo pipefail
+          mapfile -d '' -t changed_paths < <(git diff --name-only -z "$BASE_SHA"...HEAD)
+          pnpm exec oxfmt --check "${changed_paths[@]}"
+          git diff --check "$BASE_SHA"...HEAD
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          git diff --exit-code
