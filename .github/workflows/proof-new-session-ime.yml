@@ -19,3 +19,12 @@ jobs:
         with:
           install-bun: "false"
       - run: pnpm test ui/src/pages/new-session/composer.test.ts --maxWorkers=1
+      - run: pnpm test:ui:e2e ui/src/e2e/new-session-page.transition.e2e.test.ts --maxWorkers=1 -t 'creates and lists a session with the default mock Gateway'
+        env:
+          OPENCLAW_CAPTURE_UI_PROOF: "1"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: always()
+        with:
+          name: new-session-ime-screenshots
+          path: '**/new-session-transition/ime-*.png'
+          if-no-files-found: warn
