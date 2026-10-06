@@ -1,0 +1,210 @@
+name: Exact alias baseline proof
+
+on:
+  push:
+    branches: [codex/proof-alias-baseline-20261006]
+    paths: [.github/workflows/proof-alias-baseline.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  alias:
+    if: github.repository == 'ly85206559/openclaw'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - cell: stepfun
+            source: 31b8ddbe9ed601126e269bf4deca1c37b2e818f1
+            tree: 90ccaf4236c197946040a15183b9a42a6b381bcb
+            prior: 5f31ef468d4357f8f0f134e9cf821a2dbcf26448
+            manifest: f15f4f9299a6fad99b9b01c80edc5737ed78bef7
+            test_blob: 0601b1f6bb2e2b5fa92589a3e94f47e8993db52b
+            total: 8
+          - cell: together
+            source: fa6a678852c079c5b2f8dc36cfb6e6f96541853d
+            tree: f030ce22c1c3dcb70ec70c13c4d9c4bf16da03eb
+            prior: 48cb2eda28352d8f58b3e5380b95724376c148f9
+            manifest: f74ee28e5bc62a921c26534d58fa286a7bb14fb7
+            test_blob: 2a05ead35696f75f9b0aba41b912e903bab76394
+            total: 5
+    defaults:
+      run:
+        shell: bash
+    env:
+      CI: "true"
+      CELL: ${{ matrix.cell }}
+      SOURCE_SHA: ${{ matrix.source }}
+      SOURCE_TREE: ${{ matrix.tree }}
+      PRIOR_SHA: ${{ matrix.prior }}
+      MANIFEST_BLOB: ${{ matrix.manifest }}
+      TEST_BLOB: ${{ matrix.test_blob }}
+      EXPECTED_TOTAL: ${{ matrix.total }}
+      BASE_SHA: f986a7aaf15bf986e2dbef88d7fc95c1c26bc5ed
+      TEST_FILE: test/plugins/fireworks-model-alias.test.ts
+      NODE_OPTIONS: --max-old-space-size=8192
+      OPENCLAW_VITEST_FS_MODULE_CACHE_WRITER: "0"
+      OPENCLAW_NODE_COMPILE_CACHE_WRITER: "0"
+    steps:
+      - name: Check out exact secretless candidate
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ matrix.source }}
+          persist-credentials: false
+          fetch-depth: 2
+      - name: Verify reviewed source and ancestry
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test "$(git rev-parse HEAD^{tree})" = "$SOURCE_TREE"
+          test "$(git show -s --format=%P HEAD)" = "$PRIOR_SHA $BASE_SHA"
+          test "$(git hash-object "$TEST_FILE")" = "$TEST_BLOB"
+          test "$(git hash-object "extensions/$CELL/openclaw.plugin.json")" = "$MANIFEST_BLOB"
+          mkdir -p "$RUNNER_TEMP/alias-proof"
+          printf '%s\n' "docs/providers/$CELL.md" "extensions/$CELL/openclaw.plugin.json" "$TEST_FILE" > "$RUNNER_TEMP/expected-paths"
+          git diff --name-only "$BASE_SHA" HEAD > "$RUNNER_TEMP/actual-paths"
+          diff -u "$RUNNER_TEMP/expected-paths" "$RUNNER_TEMP/actual-paths"
+          git diff --check "$BASE_SHA" HEAD
+          git diff --exit-code
+          git diff --cached --exit-code
+          test -z "$(git ls-files --others --exclude-standard)"
+          git show --no-patch --format='%H %P %T %s' HEAD > "$RUNNER_TEMP/alias-proof/source.txt"
+          git diff --stat "$BASE_SHA" HEAD > "$RUNNER_TEMP/alias-proof/scope.txt"
+          git show "$BASE_SHA:$TEST_FILE" > "$RUNNER_TEMP/alias-proof/main-test.ts"
+      - name: Install pinned Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 26.8.2
+      - name: Install source-declared pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
+      - name: Install frozen secretless dependencies
+        run: |
+          set -euo pipefail
+          if ! command -v rg >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install --no-install-recommends -y ripgrep
+          fi
+          test "$(node --version)" = v26.8.2
+          test "$(pnpm --version)" = 12.5.1
+          test "$(node -p 'require("./package.json").devDependencies.vitest')" = 5.0.1
+          pnpm install --frozen-lockfile
+          test "$(node -p 'require("vitest/package.json").version')" = 5.0.1
+          git diff --exit-code
+          git diff --cached --exit-code
+      - name: Observe independent missing-alias-owner control
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { readFileSync, writeFileSync } from 'node:fs';
+          const path = `extensions/${process.env.CELL}/openclaw.plugin.json`;
+          const manifest = JSON.parse(readFileSync(path, 'utf8'));
+          const aliases = process.env.CELL === 'stepfun' ? ['stepfun-ai', 'stepfun-ai-step-plan'] : ['togetherai'];
+          assert.deepEqual(Object.keys(manifest.modelCatalog.aliases), aliases);
+          const current = readFileSync(process.env.TEST_FILE, 'utf8');
+          const main = readFileSync(`${process.env.RUNNER_TEMP}/alias-proof/main-test.ts`, 'utf8');
+          const marker = process.env.CELL === 'stepfun' ? 'describe("StepFun manifest provider aliases",' : 'describe("Together manifest provider alias",';
+          assert.equal(current.split(marker).length, 2);
+          assert.equal(current.slice(0, current.indexOf(marker)), `${main.trimEnd()}\n\n`);
+          delete manifest.modelCatalog.aliases;
+          writeFileSync(path, `${JSON.stringify(manifest, null, 2)}\n`);
+          NODE
+          export OPENCLAW_VITEST_FS_MODULE_CACHE_ROOT="$RUNNER_TEMP/negative-cache"
+          export NODE_COMPILE_CACHE="$RUNNER_TEMP/negative-node-cache"
+          set +e
+          { time -p node scripts/run-vitest.mjs "$TEST_FILE" --maxWorkers=1 --retry=0 --reporter=verbose --reporter=json --outputFile="$RUNNER_TEMP/alias-proof/negative.json"; } 2>&1 | tee "$RUNNER_TEMP/alias-proof/negative.log"
+          result=${PIPESTATUS[0]}
+          set -e
+          printf '%s\n' "$result" > "$RUNNER_TEMP/alias-proof/negative.exit"
+          git restore --source="$SOURCE_SHA" --worktree -- "extensions/$CELL/openclaw.plugin.json"
+          test "$(git hash-object "extensions/$CELL/openclaw.plugin.json")" = "$MANIFEST_BLOB"
+          git diff --exit-code
+      - name: Run complete fixed alias and sibling coverage
+        id: fixed
+        run: |
+          set -euo pipefail
+          export OPENCLAW_VITEST_FS_MODULE_CACHE_ROOT="$RUNNER_TEMP/fixed-cache"
+          export NODE_COMPILE_CACHE="$RUNNER_TEMP/fixed-node-cache"
+          set +e
+          { time -p node scripts/run-vitest.mjs "$TEST_FILE" --maxWorkers=1 --retry=0 --reporter=verbose --reporter=json --outputFile="$RUNNER_TEMP/alias-proof/fixed.json"; } 2>&1 | tee "$RUNNER_TEMP/alias-proof/fixed.log"
+          result=${PIPESTATUS[0]}
+          set -e
+          printf '%s\n' "$result" > "$RUNNER_TEMP/alias-proof/fixed.exit"
+          exit "$result"
+      - name: Verify collected behavioral outcomes
+        if: always() && steps.fixed.outcome != 'skipped'
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { readFileSync, writeFileSync } from 'node:fs';
+          const dir = `${process.env.RUNNER_TEMP}/alias-proof`;
+          const total = Number(process.env.EXPECTED_TOTAL);
+          function report(mode) {
+            const value = JSON.parse(readFileSync(`${dir}/${mode}.json`, 'utf8'));
+            const code = Number(readFileSync(`${dir}/${mode}.exit`, 'utf8').trim());
+            const assertions = value.testResults.flatMap(file => file.assertionResults);
+            assert.equal(value.numTotalTests, total);
+            assert.equal(assertions.length, total);
+            assert.equal(value.testResults.length, 1);
+            assert.ok(value.testResults[0].name.endsWith(`/${process.env.TEST_FILE}`));
+            assert.equal(value.numPendingTests, 0);
+            assert.equal(value.numTodoTests, 0);
+            assert.ok(assertions.every(test => ['passed', 'failed'].includes(test.status)));
+            assert.equal(value.numPassedTests + value.numFailedTests, total);
+            assert.equal(value.success, code === 0);
+            const controls = assertions.filter(test => test.ancestorTitles.includes('Fireworks manifest provider alias'));
+            assert.equal(controls.length, 4);
+            assert.ok(controls.every(test => test.status === 'passed'));
+            return {mode, code, passed:value.numPassedTests, failed:value.numFailedTests, assertions:assertions.map(test => ({ancestors:test.ancestorTitles,title:test.title,status:test.status,messages:test.failureMessages}))};
+          }
+          const negative = report('negative');
+          assert.equal(negative.code, 1);
+          const title = process.env.CELL === 'stepfun' ? 'finds models.dev alias owners before runtime loading and resolves canonical catalog models' : 'owns togetherai before runtime load and resolves the canonical catalog model';
+          const owner = negative.assertions.filter(test => test.title === title);
+          assert.equal(owner.length, 1);
+          assert.equal(owner[0].status, 'failed');
+          const failure = owner[0].messages.join('\n').replace(/\u001b\[[0-9;]*m/g, '');
+          assert.ok(failure.includes('expected undefined to deeply equal'));
+          assert.ok(failure.includes(process.env.CELL));
+          const fixed = report('fixed');
+          assert.equal(fixed.code, 0);
+          assert.equal(fixed.passed, total);
+          assert.equal(fixed.failed, 0);
+          const receipt = {source:process.env.SOURCE_SHA,tree:process.env.SOURCE_TREE,base:process.env.BASE_SHA,prior:process.env.PRIOR_SHA,workflow:process.env.GITHUB_SHA,node:process.version,negative,fixed,scope:'Current-main alias integration; preserved main Fireworks coverage; real manifest alias removal is independent negative control. No local candidate execution, secrets, live external API claim, retries, or substitution for upstream CI.'};
+          writeFileSync(`${dir}/receipt.json`, JSON.stringify(receipt, null, 2));
+          console.log(JSON.stringify(receipt));
+          NODE
+      - name: Formatting and complete changed-surface checks
+        run: |
+          set -euo pipefail
+          mapfile -t changed_paths < <(git diff --name-only "$BASE_SHA" HEAD)
+          pnpm exec oxfmt --check "${changed_paths[@]}"
+          git diff --check "$BASE_SHA" HEAD
+          export OPENCLAW_VITEST_FS_MODULE_CACHE_ROOT="$RUNNER_TEMP/check-cache"
+          export NODE_COMPILE_CACHE="$RUNNER_TEMP/check-node-cache"
+          { time -p node scripts/check-changed.mjs --base "$BASE_SHA"; } 2>&1 | tee "$RUNNER_TEMP/alias-proof/changed-gate.log"
+      - name: Verify final source identity
+        if: always()
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test "$(git rev-parse HEAD^{tree})" = "$SOURCE_TREE"
+          test "$(git show -s --format=%P HEAD)" = "$PRIOR_SHA $BASE_SHA"
+          test "$(git hash-object "$TEST_FILE")" = "$TEST_BLOB"
+          test "$(git hash-object "extensions/$CELL/openclaw.plugin.json")" = "$MANIFEST_BLOB"
+          git diff --exit-code
+          git diff --cached --exit-code
+          test -z "$(git ls-files --others --exclude-standard)"
+          printf 'source=%s tree=%s tracked_clean=true\n' "$SOURCE_SHA" "$SOURCE_TREE" > "$RUNNER_TEMP/alias-proof/final-identity.txt"
+      - name: Upload exact source proof and logs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: alias-baseline-${{ matrix.cell }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/alias-proof/
+          if-no-files-found: error
+          retention-days: 7
