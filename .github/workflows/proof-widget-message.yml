@@ -1,0 +1,100 @@
+name: Widget error message boundary proof
+
+on:
+  push:
+    branches: [codex/proof-widget-message-20261007]
+
+permissions:
+  contents: read
+
+jobs:
+  boundary-proof:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Retain frozen regression and browser fixtures
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rev-parse HEAD
+          for fixture in wrap.test.ts canvas-widget-view.test.ts wrap.stored-proof.ts chat-widget-sandbox.e2e.test.ts proof-widget-message-validator.mjs; do
+            sha256sum "$fixture"
+            cp "$fixture" "$RUNNER_TEMP/$fixture"
+          done
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: 5dcf668765dea9dfc8101e163804c77ca52bdb53
+          persist-credentials: false
+      - uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+      - name: Verify pinned baseline and intended owner regressions
+        shell: bash
+        env:
+          FORCE_COLOR: "0"
+          EXPECTED_HEAD: 5dcf668765dea9dfc8101e163804c77ca52bdb53
+        run: |
+          set -euo pipefail
+          node --version
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          git rev-parse HEAD
+          sha256sum src/canvas/wrap.ts ui/src/components/canvas-widget-view.ts
+          cmp src/canvas/wrap.ts "$RUNNER_TEMP/wrap.stored-proof.ts"
+          cp "$RUNNER_TEMP/wrap.test.ts" src/canvas/wrap.test.ts
+          cp "$RUNNER_TEMP/canvas-widget-view.test.ts" ui/src/components/canvas-widget-view.test.ts
+          sha256sum src/canvas/wrap.test.ts ui/src/components/canvas-widget-view.test.ts
+          started=$(date +%s)
+          set +e
+          WIDGET_MESSAGE_AUDIT_PATH="$RUNNER_TEMP/widget-message-baseline-wrapper-audit.json" pnpm test src/canvas/wrap.test.ts --maxWorkers=1 -t 'reports bounded runtime errors' --reporter=verbose --reporter=json --reporter="$RUNNER_TEMP/proof-widget-message-validator.mjs" --outputFile="$RUNNER_TEMP/widget-message-baseline-wrapper.json" 2>&1 | tee "$RUNNER_TEMP/widget-message-baseline-wrapper.log"
+          result=${PIPESTATUS[0]}
+          set -e
+          echo "wrapper_test_exit=$result wall_seconds=$(($(date +%s)-started))"
+          test "$result" = "1"
+          node "$RUNNER_TEMP/proof-widget-message-validator.mjs" wrapper "$RUNNER_TEMP/widget-message-baseline-wrapper.json" "$RUNNER_TEMP/widget-message-baseline-wrapper-audit.json"
+          started=$(date +%s)
+          set +e
+          WIDGET_MESSAGE_AUDIT_PATH="$RUNNER_TEMP/widget-message-baseline-component-audit.json" pnpm test ui/src/components/canvas-widget-view.test.ts --maxWorkers=1 --reporter=verbose --reporter=json --reporter="$RUNNER_TEMP/proof-widget-message-validator.mjs" --outputFile="$RUNNER_TEMP/widget-message-baseline-component.json" 2>&1 | tee "$RUNNER_TEMP/widget-message-baseline-component.log"
+          result=${PIPESTATUS[0]}
+          set -e
+          echo "component_test_exit=$result wall_seconds=$(($(date +%s)-started))"
+          test "$result" = "1"
+          node "$RUNNER_TEMP/proof-widget-message-validator.mjs" component "$RUNNER_TEMP/widget-message-baseline-component.json" "$RUNNER_TEMP/widget-message-baseline-component-audit.json"
+      - name: Real Chromium current and stored wrapper baseline
+        shell: bash
+        env:
+          FORCE_COLOR: "0"
+          OPENCLAW_UI_E2E_ARTIFACT_DIR: ${{ runner.temp }}/widget-message-baseline-captures
+        run: |
+          set -euo pipefail
+          cp "$RUNNER_TEMP/wrap.stored-proof.ts" src/canvas/wrap.stored-proof.ts
+          cp "$RUNNER_TEMP/chat-widget-sandbox.e2e.test.ts" ui/src/e2e/chat-widget-sandbox.e2e.test.ts
+          sha256sum src/canvas/wrap{,.stored-proof}.ts ui/src/e2e/chat-widget-sandbox.e2e.test.ts
+          pnpm exec playwright install --with-deps chromium
+          started=$(date +%s)
+          set +e
+          WIDGET_MESSAGE_AUDIT_PATH="$RUNNER_TEMP/widget-message-baseline-browser-audit.json" pnpm test:ui:e2e ui/src/e2e/chat-widget-sandbox.e2e.test.ts --maxWorkers=1 -t 'preserves bounded widget error messages in current and stored wrappers' --reporter=verbose --reporter=json --reporter="$RUNNER_TEMP/proof-widget-message-validator.mjs" --outputFile="$RUNNER_TEMP/widget-message-baseline-browser.json" 2>&1 | tee "$RUNNER_TEMP/widget-message-baseline-browser.log"
+          result=${PIPESTATUS[0]}
+          set -e
+          echo "browser_test_exit=$result wall_seconds=$(($(date +%s)-started))"
+          test "$result" = "1"
+          node "$RUNNER_TEMP/proof-widget-message-validator.mjs" browser "$RUNNER_TEMP/widget-message-baseline-browser.json" "$RUNNER_TEMP/widget-message-baseline-browser-audit.json"
+          test "$(grep -c '"case":"' "$RUNNER_TEMP/widget-message-baseline-browser.log")" = "6"
+          for wrapper in current stored; do
+            for control in short ascii; do
+              grep -E "\"case\":\"$wrapper-$control\".*\"rawBridgeWellFormed\":true.*\"wakeWellFormed\":true.*\"documentReads\":1.*\"wakeCount\":1" "$RUNNER_TEMP/widget-message-baseline-browser.log"
+            done
+            grep -E "\"case\":\"$wrapper-boundary\".*\"rawBridgeWellFormed\":false.*\"wakeWellFormed\":false.*\"documentReads\":1.*\"wakeCount\":1" "$RUNNER_TEMP/widget-message-baseline-browser.log"
+          done
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: always()
+        with:
+          name: widget-message-baseline
+          path: |
+            ${{ runner.temp }}/widget-message-baseline-*.log
+            ${{ runner.temp }}/widget-message-baseline-*.json
+            ${{ runner.temp }}/widget-message-baseline-captures
+            ${{ runner.temp }}/proof-widget-message-validator.mjs
+          if-no-files-found: error
