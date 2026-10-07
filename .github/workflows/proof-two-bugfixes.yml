@@ -94,12 +94,16 @@ jobs:
           set -euo pipefail
           cp "${RUNNER_TEMP}/proof/fixture.test.ts" "${PROOF_FILE}"
           if test "${LANE}" = table; then
+            /usr/bin/time -f '%e' -o "${RUNNER_TEMP}/proof/before-controls-wall.txt" node scripts/run-vitest.mjs "${PROOF_FILE}" -t 'single-line source control|complete metadata|single-line width control' --reporter=verbose > "${RUNNER_TEMP}/proof/before-controls.log" 2>&1
+            cat "${RUNNER_TEMP}/proof/before-controls.log"
+            grep -q '5 passed' "${RUNNER_TEMP}/proof/before-controls.log"
             set +e
-            /usr/bin/time -f '%e' -o "${RUNNER_TEMP}/proof/before-wall.txt" node scripts/run-vitest.mjs "${PROOF_FILE}" --reporter=verbose > "${RUNNER_TEMP}/proof/before.log" 2>&1
+            /usr/bin/time -f '%e' -o "${RUNNER_TEMP}/proof/before-wall.txt" node scripts/run-vitest.mjs "${PROOF_FILE}" -t 'keeps the plugin name intact with multiline source' --reporter=verbose > "${RUNNER_TEMP}/proof/before.log" 2>&1
             result=$?
             set -e
             test "${result}" = 1
             grep -q '1 failed' "${RUNNER_TEMP}/proof/before.log"
+            grep -q 'AssertionError' "${RUNNER_TEMP}/proof/before.log"
             grep -q 'TABLE_MULTILINE_PROOF' "${RUNNER_TEMP}/proof/before.log"
           else
             MOCK_CALL_PROOF_EXPECT_ADMISSION=0 /usr/bin/time -f '%e' -o "${RUNNER_TEMP}/proof/before-wall.txt" node scripts/run-vitest.mjs "${PROOF_FILE}" --reporter=verbose > "${RUNNER_TEMP}/proof/before.log" 2>&1
