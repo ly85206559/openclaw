@@ -1,0 +1,44 @@
+name: Widget error title boundary proof
+
+on:
+  push:
+    branches: [codex/proof-widget-title-20261007]
+
+permissions:
+  contents: read
+
+jobs:
+  baseline-red:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+      - name: Observe actual registered component baseline
+        shell: bash
+        env:
+          FORCE_COLOR: "0"
+        run: |
+          set -euo pipefail
+          node --version
+          git rev-parse HEAD
+          sha256sum ui/src/components/canvas-widget-view{,.test}.ts
+          started=$(date +%s)
+          set +e
+          pnpm test ui/src/components/canvas-widget-view.test.ts --maxWorkers=1 --reporter=verbose 2>&1 | tee "$RUNNER_TEMP/widget-title-red.log"
+          result=${PIPESTATUS[0]}
+          set -e
+          echo "baseline_test_exit=$result wall_seconds=$(($(date +%s)-started))"
+          test "$result" -ne 0
+          rg 'surrogate title boundary' "$RUNNER_TEMP/widget-title-red.log"
+          rg 'Tests.*1 failed' "$RUNNER_TEMP/widget-title-red.log"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: always()
+        with:
+          name: widget-title-baseline-red
+          path: ${{ runner.temp }}/widget-title-red.log
+          if-no-files-found: error
