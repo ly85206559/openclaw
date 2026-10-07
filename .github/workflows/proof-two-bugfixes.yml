@@ -1,0 +1,138 @@
+name: Two isolated bugfix red-green proofs
+
+on:
+  push:
+    branches: [codex/proof-two-bugfixes-20261007]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  proof:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - lane: table
+            head: 2f05478df41e8836156a6bcdb5d0fede7d70451b
+            owner: packages/terminal-core/src/table.ts
+            regression: packages/terminal-core/src/table.test.ts
+            filter: sizes multiline
+            red_count: 5
+            fixture: .github/proof/table-multiline.test.ts
+            destination: src/cli/plugins-list-command.multiline-proof.test.ts
+          - lane: voice
+            head: 373834a5d1aa47ba225a3bdeaa280d774b90f3db
+            owner: extensions/voice-call/src/providers/mock.ts
+            regression: extensions/voice-call/src/manager/events.inbound.test.ts
+            filter: admits mock
+            red_count: 4
+            fixture: .github/proof/mock-call-facts.test.ts
+            destination: extensions/voice-call/src/providers/mock.runtime-proof.test.ts
+    env:
+      BASE_SHA: fa420c6eb2752a78430cef1f2e3bf15cc17d8e9e
+      TARGET_SHA: ${{ matrix.head }}
+      LANE: ${{ matrix.lane }}
+      OWNER_FILE: ${{ matrix.owner }}
+      TEST_FILE: ${{ matrix.regression }}
+      TEST_FILTER: ${{ matrix.filter }}
+      RED_COUNT: ${{ matrix.red_count }}
+      FIXTURE: ${{ matrix.fixture }}
+      PROOF_FILE: ${{ matrix.destination }}
+      CI: "true"
+      FORCE_COLOR: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Freeze source and retain proof outside checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/proof"
+          cp "${FIXTURE}" "${RUNNER_TEMP}/proof/fixture.test.ts"
+          git fetch --depth=1 --no-tags https://github.com/openclaw/openclaw.git "${BASE_SHA}"
+          git fetch --depth=1 --no-tags https://github.com/ly85206559/openclaw.git "${TARGET_SHA}"
+          test "$(git cat-file -p "${TARGET_SHA}" | grep '^parent ')" = "parent ${BASE_SHA}"
+          test "$(git diff --name-only "${BASE_SHA}" "${TARGET_SHA}" | sort)" = "$(printf '%s\n' "${OWNER_FILE}" "${TEST_FILE}" | sort)"
+          git diff --check "${BASE_SHA}" "${TARGET_SHA}"
+          git show "${TARGET_SHA}:${TEST_FILE}" > "${RUNNER_TEMP}/proof/regression.test.ts"
+          git checkout --detach "${TARGET_SHA}"
+          test "$(git rev-parse HEAD)" = "${TARGET_SHA}"
+          printf 'base=%s\nhead=%s\ntree=%s\n' "${BASE_SHA}" "${TARGET_SHA}" "$(git rev-parse HEAD^{tree})" | tee "${RUNNER_TEMP}/proof/source.txt"
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 26.8.2
+      - name: Prepare frozen secretless dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          corepack enable
+          pnpm install --frozen-lockfile
+          test "$(pnpm --version)" = 12.5.1
+      - name: Genuine regression RED on baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          git checkout --detach "${BASE_SHA}"
+          cp "${RUNNER_TEMP}/proof/regression.test.ts" "${TEST_FILE}"
+          set +e
+          /usr/bin/time -f '%e' -o "${RUNNER_TEMP}/proof/red-wall.txt" node scripts/run-vitest.mjs "${TEST_FILE}" -t "${TEST_FILTER}" --reporter=verbose > "${RUNNER_TEMP}/proof/red.log" 2>&1
+          result=$?
+          set -e
+          cat "${RUNNER_TEMP}/proof/red.log"
+          test "${result}" = 1
+          grep -q "${RED_COUNT} failed" "${RUNNER_TEMP}/proof/red.log"
+          grep -q 'AssertionError' "${RUNNER_TEMP}/proof/red.log"
+          git restore --source="${BASE_SHA}" --worktree -- "${TEST_FILE}"
+      - name: Baseline real downstream behavior and controls
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp "${RUNNER_TEMP}/proof/fixture.test.ts" "${PROOF_FILE}"
+          if test "${LANE}" = table; then
+            set +e
+            /usr/bin/time -f '%e' -o "${RUNNER_TEMP}/proof/before-wall.txt" node scripts/run-vitest.mjs "${PROOF_FILE}" --reporter=verbose > "${RUNNER_TEMP}/proof/before.log" 2>&1
+            result=$?
+            set -e
+            test "${result}" = 1
+            grep -q '1 failed' "${RUNNER_TEMP}/proof/before.log"
+            grep -q 'TABLE_MULTILINE_PROOF' "${RUNNER_TEMP}/proof/before.log"
+          else
+            MOCK_CALL_PROOF_EXPECT_ADMISSION=0 /usr/bin/time -f '%e' -o "${RUNNER_TEMP}/proof/before-wall.txt" node scripts/run-vitest.mjs "${PROOF_FILE}" --reporter=verbose > "${RUNNER_TEMP}/proof/before.log" 2>&1
+            grep -q 'MOCK_CALL_HTTP_PROOF' "${RUNNER_TEMP}/proof/before.log"
+          fi
+          cat "${RUNNER_TEMP}/proof/before.log"
+          rm "${PROOF_FILE}"
+          git diff --exit-code
+      - name: Exact candidate GREEN and touched checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          git checkout --detach "${TARGET_SHA}"
+          test "$(git rev-parse HEAD)" = "${TARGET_SHA}"
+          pnpm exec oxfmt --check "${OWNER_FILE}" "${TEST_FILE}"
+          pnpm exec oxlint --config .oxlintrc.json "${OWNER_FILE}" "${TEST_FILE}"
+          /usr/bin/time -f '%e' -o "${RUNNER_TEMP}/proof/green-wall.txt" node scripts/run-vitest.mjs "${TEST_FILE}" --reporter=verbose > "${RUNNER_TEMP}/proof/green.log" 2>&1
+          cat "${RUNNER_TEMP}/proof/green.log"
+          if test "${LANE}" = voice; then
+            node scripts/run-vitest.mjs extensions/voice-call/src/providers/mock.test.ts --reporter=verbose | tee "${RUNNER_TEMP}/proof/siblings.log"
+          fi
+          cp "${RUNNER_TEMP}/proof/fixture.test.ts" "${PROOF_FILE}"
+          MOCK_CALL_PROOF_EXPECT_ADMISSION=1 /usr/bin/time -f '%e' -o "${RUNNER_TEMP}/proof/after-wall.txt" node scripts/run-vitest.mjs "${PROOF_FILE}" --reporter=verbose > "${RUNNER_TEMP}/proof/after.log" 2>&1
+          cat "${RUNNER_TEMP}/proof/after.log"
+          rm "${PROOF_FILE}"
+          git diff --check "${BASE_SHA}" "${TARGET_SHA}"
+          git diff --exit-code
+          git rev-parse HEAD HEAD^{tree} | tee "${RUNNER_TEMP}/proof/final-source.txt"
+      - name: Retain exact-source raw outcomes
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: bugfix-${{ matrix.lane }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/proof/
+          if-no-files-found: error
+          retention-days: 30
