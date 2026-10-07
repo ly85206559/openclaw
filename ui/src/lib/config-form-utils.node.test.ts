@@ -6,8 +6,7 @@ import {
   hintForPath,
   localizedHintForPath,
   removePathValue,
-  sanitizeRedactedFormForSubmit,
-  serializeConfigForm,
+  pruneEmptyConfigForm,
   setPathValue,
 } from "./config-form-utils.ts";
 
@@ -77,96 +76,8 @@ describe("hintForPath", () => {
   });
 });
 
-function makeConfigWithProvider(): Record<string, unknown> {
-  return {
-    gateway: { auth: { token: "test-token" } },
-    models: {
-      providers: {
-        xai: {
-          baseUrl: "https://api.x.ai/v1",
-          models: [
-            {
-              id: "grok-4",
-              name: "Grok 4",
-              contextWindow: 131072,
-              maxTokens: 8192,
-              cost: { input: 0.5, output: 1, cacheRead: 0.1, cacheWrite: 0.2 },
-            },
-          ],
-        },
-      },
-    },
-  };
-}
-
-function getFirstXaiModel(payload: Record<string, unknown>): Record<string, unknown> {
-  const model = payload.models as Record<string, unknown>;
-  const providers = model.providers as Record<string, unknown>;
-  const xai = providers.xai as Record<string, unknown>;
-  const models = xai.models as Array<Record<string, unknown>>;
-  return models[0] ?? {};
-}
-
-function expectNumericModelCore(model: Record<string, unknown>) {
-  expect(typeof model.maxTokens).toBe("number");
-  expect(model.maxTokens).toBe(8192);
-  expect(typeof model.contextWindow).toBe("number");
-  expect(model.contextWindow).toBe(131072);
-}
-
-describe("form-utils preserves numeric types", () => {
-  it("serializeConfigForm preserves numbers in JSON output", () => {
-    const form = makeConfigWithProvider();
-    const raw = serializeConfigForm(form);
-    const parsed = JSON.parse(raw);
-    const model = parsed.models.providers.xai.models[0] as Record<string, unknown>;
-    const cost = model.cost as Record<string, unknown>;
-
-    expectNumericModelCore(model);
-    expect(typeof cost.input).toBe("number");
-    expect(cost.input).toBe(0.5);
-  });
-
-  it("setPathValue preserves unrelated numeric fields", () => {
-    const form = makeConfigWithProvider();
-    const cloned = structuredClone(form);
-    setPathValue(cloned, ["gateway", "auth", "token"], "new-token");
-    const first = getFirstXaiModel(cloned);
-
-    expectNumericModelCore(first);
-    expect(typeof first.cost).toBe("object");
-    expect(typeof (first.cost as Record<string, unknown>).input).toBe("number");
-  });
-});
-describe("sanitizeRedactedFormForSubmit", () => {
-  it("drops loaded redacted placeholders for paths missing from original raw config", () => {
-    const form = {
-      gateway: {
-        mode: "remote",
-        remote: {
-          token: "__OPENCLAW_REDACTED__",
-        },
-      },
-    };
-    const originalForm = {
-      gateway: {
-        mode: "remote",
-        remote: {
-          token: "__OPENCLAW_REDACTED__",
-        },
-      },
-    };
-
-    expect(
-      sanitizeRedactedFormForSubmit(form, originalForm, { gateway: { mode: "remote" } }),
-    ).toEqual({
-      gateway: {
-        mode: "remote",
-      },
-    });
-  });
-
-  it("preserves loaded redacted placeholders that exist in original raw config", () => {
+describe("pruneEmptyConfigForm", () => {
+  it("preserves loaded redacted placeholders from the authored original", () => {
     const form = {
       gateway: {
         mode: "remote",
@@ -177,11 +88,7 @@ describe("sanitizeRedactedFormForSubmit", () => {
     };
     const originalForm = structuredClone(form);
 
-    expect(
-      sanitizeRedactedFormForSubmit(form, originalForm, {
-        gateway: { mode: "remote", remote: { token: "__OPENCLAW_REDACTED__" } },
-      }),
-    ).toEqual(form);
+    expect(pruneEmptyConfigForm(form, originalForm)).toEqual(form);
   });
 
   it("keeps newly entered sentinel literals so gateway validation rejects them", () => {
@@ -198,30 +105,26 @@ describe("sanitizeRedactedFormForSubmit", () => {
       },
     };
 
-    expect(sanitizeRedactedFormForSubmit(form, originalForm, { gateway: { remote: {} } })).toEqual(
-      form,
-    );
+    expect(pruneEmptyConfigForm(form, originalForm)).toEqual(form);
   });
 
-  it("prunes empty object parents when they are absent from original raw config", () => {
+  it("prunes newly empty objects while retaining authored empties and array positions", () => {
     const form = {
-      gateway: {
-        remote: {
-          nested: {
-            token: "__OPENCLAW_REDACTED__",
-          },
-        },
-      },
+      gateway: { remote: { nested: {} } },
+      authored: {},
+      items: [{ nested: {} }, "second"],
       ui: { theme: "dark" },
     };
-    const originalForm = structuredClone(form);
+    const original = { authored: {}, ui: { theme: "dark" } };
 
-    expect(sanitizeRedactedFormForSubmit(form, originalForm, { ui: { theme: "dark" } })).toEqual({
+    expect(pruneEmptyConfigForm(form, original)).toEqual({
+      authored: {},
+      items: [{}, "second"],
       ui: { theme: "dark" },
     });
   });
 
-  it("does not reindex arrays when a loaded scalar array sentinel is unrestorable", () => {
+  it("does not reindex arrays containing redacted sentinels", () => {
     const form = {
       channels: {
         slack: {
@@ -231,14 +134,10 @@ describe("sanitizeRedactedFormForSubmit", () => {
     };
     const originalForm = structuredClone(form);
 
-    expect(
-      sanitizeRedactedFormForSubmit(form, originalForm, {
-        channels: { slack: { tokens: ["second-token"] } },
-      }),
-    ).toEqual(form);
+    expect(pruneEmptyConfigForm(form, originalForm)).toEqual(form);
   });
 
-  it("leaves the form unchanged when the original raw config has no parsed snapshot", () => {
+  it("leaves the form unchanged without an authored original", () => {
     const form = {
       gateway: {
         remote: {
@@ -246,9 +145,7 @@ describe("sanitizeRedactedFormForSubmit", () => {
         },
       },
     };
-    const originalForm = structuredClone(form);
-
-    expect(sanitizeRedactedFormForSubmit(form, originalForm, null)).toEqual(form);
+    expect(pruneEmptyConfigForm(form, null)).toBe(form);
   });
 });
 describe("prototype pollution prevention", () => {

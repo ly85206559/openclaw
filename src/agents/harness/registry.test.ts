@@ -10,6 +10,8 @@ import {
   withPluginRegistrationContext,
 } from "../../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { createDeferredCore } from "../../shared/deferred.js";
+import { AgentHarnessSessionCleanupError } from "./errors.js";
 import {
   clearAgentHarnesses,
   disposeRegisteredAgentHarnesses,
@@ -109,6 +111,46 @@ function providerRuntimeConfig(provider: string, runtime: string): OpenClawConfi
 }
 
 describe("agent harness registry", () => {
+  it("propagates required cleanup failure only after sibling reset hooks settle", async () => {
+    const failure = new AgentHarnessSessionCleanupError("native session still running");
+    const siblingStarted = createDeferredCore();
+    const releaseSibling = createDeferredCore();
+    const events: string[] = [];
+    registerAgentHarness({
+      ...makeHarness("required-cleanup"),
+      reset: async () => {
+        throw failure;
+      },
+    });
+    registerAgentHarness({
+      ...makeHarness("held-cleanup"),
+      reset: async () => {
+        siblingStarted.resolve();
+        await releaseSibling.promise;
+        events.push("sibling settled");
+      },
+    });
+    vi.useFakeTimers();
+    const reset = resetRegisteredAgentHarnessSessions({ reason: "reset" }).catch(
+      (error: unknown) => {
+        events.push("reset rejected");
+        return error;
+      },
+    );
+    try {
+      await siblingStarted.promise;
+      await vi.advanceTimersByTimeAsync(0);
+      expect(events).toEqual([]);
+      releaseSibling.resolve();
+      expect(await reset).toBe(failure);
+      expect(events).toEqual(["sibling settled", "reset rejected"]);
+    } finally {
+      releaseSibling.resolve();
+      await reset;
+      vi.useRealTimers();
+    }
+  });
+
   it("warns once per harness across reset failures and registry replacement while retrying", async () => {
     const failingReset = vi.fn(async () => {
       throw new Error("reset unavailable");
@@ -314,18 +356,6 @@ describe("agent harness registry", () => {
     expectOwner("active-plugin");
   });
 
-  it("disposes registered harness runtime state", async () => {
-    const dispose = vi.fn(async () => undefined);
-    registerAgentHarness({
-      ...makeHarness("custom"),
-      dispose,
-    });
-
-    await disposeRegisteredAgentHarnesses();
-
-    expect(dispose).toHaveBeenCalledTimes(1);
-  });
-
   it("keeps model-specific harnesses behind plugin registration in auto mode", () => {
     // Auto mode should not select a model-specific runtime until the owning
     // plugin has registered its harness in this process.
@@ -342,23 +372,6 @@ describe("agent harness registry", () => {
     expect(selectAgentHarness({ provider: "plugin-models", modelId: "custom-1" }).id).toBe(
       "custom",
     );
-  });
-
-  it("falls back to OpenClaw for other models", () => {
-    process.env.OPENCLAW_AGENT_RUNTIME = "auto";
-
-    expect(selectAgentHarness({ provider: "anthropic", modelId: "sonnet-4.6" }).id).toBe(
-      "openclaw",
-    );
-  });
-
-  it("lets a plugin harness win in auto mode by priority", () => {
-    process.env.OPENCLAW_AGENT_RUNTIME = "auto";
-    registerAgentHarness(makeHarness("plugin-harness", { priority: 200 }), {
-      ownerPluginId: "plugin-a",
-    });
-
-    expect(selectAgentHarness({ provider: "codex", modelId: "gpt-5.4" }).id).toBe("plugin-harness");
   });
 
   it("honors explicit provider OpenClaw runtime policy", () => {

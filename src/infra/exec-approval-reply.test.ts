@@ -1,6 +1,7 @@
 // Tests execution approval reply text and decision formatting.
 import { describe, expect, it, vi } from "vitest";
 import type { ReplyPayload } from "../auto-reply/types.js";
+import { listNativeExecApprovalClientLabels } from "./exec-approval-surface.js";
 
 vi.mock("./exec-approval-surface.js", () => ({
   describeNativeExecApprovalClientSetup: vi.fn(
@@ -17,13 +18,13 @@ vi.mock("./exec-approval-surface.js", () => ({
           ? `channels.${channel}.accounts.${accountId}`
           : `channels.${channel}`;
       if (channel === "matrix") {
-        return `Approve it from the Web UI or terminal UI for now. ${label} supports native exec approvals for this account. Configure \`${accountPrefix}.execApprovals.approvers\` or \`${accountPrefix}.dm.allowFrom\`; leave \`${accountPrefix}.execApprovals.enabled\` unset/\`auto\` or set it to \`true\`.`;
+        return `Approve it from the Web UI for now. ${label} supports native exec approvals for this account. Configure \`${accountPrefix}.execApprovals.approvers\` or \`${accountPrefix}.dm.allowFrom\`; leave \`${accountPrefix}.execApprovals.enabled\` unset/\`auto\` or set it to \`true\`.`;
       }
       if (channel === "discord" || channel === "slack") {
-        return `Approve it from the Web UI or terminal UI for now. ${label} supports native exec approvals for this account. Configure \`${accountPrefix}.execApprovals.approvers\` or \`commands.ownerAllowFrom\`; set \`${accountPrefix}.execApprovals.enabled\` to \`auto\` or \`true\`.`;
+        return `Approve it from the Web UI for now. ${label} supports native exec approvals for this account. Configure \`${accountPrefix}.execApprovals.approvers\` or \`commands.ownerAllowFrom\`; set \`${accountPrefix}.execApprovals.enabled\` to \`auto\` or \`true\`.`;
       }
       if (channel === "telegram") {
-        return `Approve it from the Web UI or terminal UI for now. ${label} supports native exec approvals for this account. Configure \`${accountPrefix}.execApprovals.approvers\` or \`commands.ownerAllowFrom\`; leave \`${accountPrefix}.execApprovals.enabled\` unset/\`auto\` or set it to \`true\`.`;
+        return `Approve it from the Web UI for now. ${label} supports native exec approvals for this account. Configure \`${accountPrefix}.execApprovals.approvers\` or \`commands.ownerAllowFrom\`; leave \`${accountPrefix}.execApprovals.enabled\` unset/\`auto\` or set it to \`true\`.`;
       }
       return null;
     },
@@ -35,7 +36,6 @@ vi.mock("./exec-approval-surface.js", () => ({
 }));
 
 import {
-  buildExecApprovalCommandText,
   buildExecApprovalPendingReplyPayload,
   buildExecApprovalUnavailableReplyPayload,
   buildTypedApprovalActionDescriptors,
@@ -82,6 +82,17 @@ describe("exec approval reply helpers", () => {
         "Exec approval is required, but no interactive approval client is currently available.",
     },
   ] as const;
+
+  it.each([{ clients: [] }, { clients: ["Discord"] }])(
+    "only suggests exec-capable recovery surfaces with clients $clients",
+    ({ clients }) => {
+      vi.mocked(listNativeExecApprovalClientLabels).mockReturnValueOnce(clients);
+      const text = buildExecApprovalUnavailableReplyPayload({ reason: "no-approval-route" }).text;
+
+      expect(text).toContain("Approve it from the Web UI");
+      expect(text).not.toMatch(/terminal UI|\bTUI\b/i);
+    },
+  );
 
   it("mentions Matrix in the fallback native approval guidance", () => {
     const text = buildExecApprovalUnavailableReplyPayload({
@@ -488,14 +499,7 @@ describe("exec approval reply helpers", () => {
     ]);
   });
 
-  it("builds and parses shared exec approval command text", () => {
-    expect(
-      buildExecApprovalCommandText({
-        approvalCommandId: "req-1",
-        decision: "allow-always",
-      }),
-    ).toBe("/approve req-1 allow-always");
-
+  it("parses exec approval command text", () => {
     expect(parseExecApprovalCommandText("/approve req-1 deny")).toEqual({
       approvalId: "req-1",
       decision: "deny",

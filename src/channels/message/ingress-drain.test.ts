@@ -1,6 +1,6 @@
-// Durable ingress drain contract tests for lifecycle reliability invariants.
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import {
@@ -276,6 +276,34 @@ describe("channel ingress drain", () => {
     }
   });
 
+  it("releases a deferred lane when the handler defers before its first await", async () => {
+    await withTempState(async (stateDir) => {
+      const queue = createTestIngressQueue(stateDir);
+      await queue.enqueue("first", { text: "first" }, { laneKey: "shared" });
+      const drain = createChannelIngressDrain<Payload>({
+        queue,
+        deferredLaneOccupancy: "release",
+        dispatchClaimedEvent: async (_event, lifecycle) => {
+          // Ownership must already be registered when a handler defers
+          // synchronously, before its first await, or the release is undone by
+          // the post-dispatch registration and the lane stays blocked.
+          lifecycle.onDeferred();
+          return { kind: "deferred" };
+        },
+      });
+
+      expect(await drain.drainOnce()).toEqual({ started: 1 });
+      // Settle the dispatch task, then read the lane state through its
+      // completion signal instead of polling.
+      await drain.waitForIdle();
+      expect(drain.activeLaneKeys()).toEqual(new Set());
+
+      await queue.enqueue("second", { text: "second" }, { laneKey: "shared" });
+      expect(await drain.drainOnce()).toEqual({ started: 1 });
+      drain.dispose();
+    });
+  });
+
   it("keeps heartbeat and watchdog ownership after releasing a deferred lane", async () => {
     await withTempState(async (stateDir) => {
       let clock = 1_000;
@@ -422,10 +450,7 @@ describe("channel ingress drain", () => {
       const queue = createTestIngressQueue(stateDir);
       await queue.enqueue("evt-await-abandon", { text: "x" }, { laneKey: "l1" });
 
-      let finishRelease!: () => void;
-      const releaseGate = new Promise<void>((resolve) => {
-        finishRelease = resolve;
-      });
+      const { promise: releaseGate, resolve: finishRelease } = createDeferred();
       const release = vi.fn(async (...args: Parameters<typeof queue.release>) => {
         await releaseGate;
         return await queue.release(...args);
@@ -530,10 +555,7 @@ describe("channel ingress drain", () => {
       const firstLifecycles: ChannelIngressDispatchLifecycle[] = [];
       let firstAdopted = false;
       const dispatches: string[] = [];
-      let releaseFirst!: () => void;
-      const firstHold = new Promise<void>((resolve) => {
-        releaseFirst = resolve;
-      });
+      const { promise: firstHold, resolve: releaseFirst } = createDeferred();
 
       const drain = createChannelIngressDrain<Payload>({
         queue,
@@ -588,10 +610,7 @@ describe("channel ingress drain", () => {
       const queue = createTestIngressQueue(stateDir);
       await queue.enqueue("a1", { text: "a" }, { laneKey: "lane" });
 
-      let hold!: () => void;
-      const gate = new Promise<void>((resolve) => {
-        hold = resolve;
-      });
+      const { promise: gate, resolve: hold } = createDeferred();
       let aborted = false;
 
       const drain = createChannelIngressDrain<Payload>({
@@ -767,10 +786,7 @@ describe("channel ingress drain", () => {
       await queue.enqueue("old", { text: "old" }, { laneKey: "shared" });
 
       const lifecycles: ChannelIngressDispatchLifecycle[] = [];
-      let releaseOld!: () => void;
-      const oldHold = new Promise<void>((resolve) => {
-        releaseOld = resolve;
-      });
+      const { promise: oldHold, resolve: releaseOld } = createDeferred();
       let lateAdoptError: unknown;
 
       const drain = createChannelIngressDrain<Payload>({
@@ -882,10 +898,7 @@ describe("channel ingress drain", () => {
       const queue = createTestIngressQueue(stateDir);
       await queue.enqueue("evt-peer", { text: "x" }, { laneKey: "l1" });
 
-      let releaseFirst!: () => void;
-      const firstHold = new Promise<void>((resolve) => {
-        releaseFirst = resolve;
-      });
+      const { promise: firstHold, resolve: releaseFirst } = createDeferred();
       const firstDispatches: string[] = [];
       const secondDispatches: string[] = [];
       const firstAbort = new AbortController();
@@ -992,10 +1005,7 @@ describe("channel ingress drain", () => {
 
       let sawAbort = false;
       let lateAdoptError: unknown;
-      let releaseDispatch!: () => void;
-      const holdDispatch = new Promise<void>((resolve) => {
-        releaseDispatch = resolve;
-      });
+      const { promise: holdDispatch, resolve: releaseDispatch } = createDeferred();
 
       const claimLeaseMs = 3_000;
       const drain = createChannelIngressDrain<Payload>({
@@ -1041,14 +1051,8 @@ describe("channel ingress drain", () => {
       const queue = createTestIngressQueue(stateDir);
       await queue.enqueue("old", { text: "old" }, { laneKey: "shared" });
 
-      let releaseOld!: () => void;
-      const oldHold = new Promise<void>((resolve) => {
-        releaseOld = resolve;
-      });
-      let releasePredicate!: (value: boolean) => void;
-      const predicateHold = new Promise<boolean>((resolve) => {
-        releasePredicate = resolve;
-      });
+      const { promise: oldHold, resolve: releaseOld } = createDeferred();
+      const { promise: predicateHold, resolve: releasePredicate } = createDeferred<boolean>();
       let predicateStarted = false;
       let oldAdopted = false;
       let oldAborted = false;

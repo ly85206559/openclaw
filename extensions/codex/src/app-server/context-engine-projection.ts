@@ -9,6 +9,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { ImageContent } from "openclaw/plugin-sdk/llm";
 import { redactSensitiveFieldValue, redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
+import { asFiniteNumber } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sliceUtf16Safe, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 
 type CodexContextProjection = {
@@ -50,7 +51,6 @@ const APPROX_RENDERED_CHARS_PER_TOKEN = 4;
 // Codex app-server validates the summed v2 turn/start text input against
 // codex-rs/protocol/src/user_input.rs::MAX_USER_INPUT_TEXT_CHARS.
 export const CODEX_TURN_START_TEXT_INPUT_MAX_CHARS = 1 << 20;
-/** Default token reserve kept out of rendered context-engine prompt text. */
 const DEFAULT_CODEX_PROJECTION_RESERVE_TOKENS = 20_000;
 const MIN_PROMPT_BUDGET_RATIO = 0.5;
 const MIN_PROMPT_BUDGET_TOKENS = 8_000;
@@ -110,7 +110,6 @@ export function isCodexDurableCustomMessage(message: AgentMessage): boolean {
   );
 }
 
-/** Projects assembled OpenClaw context-engine messages into Codex prompt inputs. */
 export async function projectContextEngineAssemblyForCodex(params: {
   assembledMessages: AgentMessage[];
   prompt: string;
@@ -163,16 +162,12 @@ export async function projectContextEngineAssemblyForCodex(params: {
   };
 }
 
-/** Resolves rendered context size from a token budget and reserve. */
 export function resolveCodexContextEngineProjectionMaxChars(params: {
   contextTokenBudget?: number;
   reserveTokens?: number;
 }): number {
-  const contextTokenBudget =
-    typeof params.contextTokenBudget === "number" && Number.isFinite(params.contextTokenBudget)
-      ? Math.floor(params.contextTokenBudget)
-      : undefined;
-  if (!contextTokenBudget || contextTokenBudget <= 0) {
+  const contextTokenBudget = Math.floor(asFiniteNumber(params.contextTokenBudget) ?? 0);
+  if (contextTokenBudget <= 0) {
     return DEFAULT_RENDERED_CONTEXT_CHARS;
   }
   const scaledChars =
@@ -196,13 +191,11 @@ const CONTINUITY_MAX_CHARS_PER_TOKEN = CONTINUITY_EMPIRICAL_CHARS_PER_TOKEN;
 // dominated by developer-instruction and tool overhead in the token count.
 const CONTINUITY_CALIBRATION_MIN_PROMPT_CHARS = 50_000;
 
-/** Observed chars-vs-tokens sample from a completed Codex turn. */
 type CodexContinuityCalibration = {
   promptChars: number;
   inputTokens: number;
 };
 
-/** Builds a calibration sample from a completed turn, or undefined if unusable. */
 export function buildCodexContinuityCalibration(params: {
   promptChars: number;
   inputTokens: number;
@@ -239,16 +232,12 @@ function resolveContinuityCharsPerToken(
   );
 }
 
-/** Resolves rendered context size for no-engine continuity projections. */
 export function resolveCodexContinuityProjectionMaxChars(params: {
   contextTokenBudget?: number;
   calibration?: CodexContinuityCalibration;
 }): number {
-  const contextTokenBudget =
-    typeof params.contextTokenBudget === "number" && Number.isFinite(params.contextTokenBudget)
-      ? Math.floor(params.contextTokenBudget)
-      : undefined;
-  if (!contextTokenBudget || contextTokenBudget <= 0) {
+  const contextTokenBudget = Math.floor(asFiniteNumber(params.contextTokenBudget) ?? 0);
+  if (contextTokenBudget <= 0) {
     return DEFAULT_RENDERED_CONTEXT_CHARS;
   }
   const continuityBudgetTokens = resolveProjectionPromptBudgetTokens({
@@ -263,7 +252,6 @@ export function resolveCodexContinuityProjectionMaxChars(params: {
   );
 }
 
-/** Fits projected context prompts under Codex app-server turn/start text limits. */
 export function fitCodexProjectedContextForTurnStart(params: {
   promptText: string;
   contextRange?: CodexProjectedContextRange;
@@ -389,7 +377,7 @@ function normalizeProjectedContextRange(
   return { start, end };
 }
 
-function resolveProjectionPromptBudgetTokens(params: {
+export function resolveProjectionPromptBudgetTokens(params: {
   contextTokenBudget: number;
   reserveTokens?: number;
 }): number {
@@ -516,9 +504,9 @@ function renderMessageBody(
 ): string {
   // Canonical summaries carry `summary`, not `content`; keep them in the quoted history.
   if (message.role === "compactionSummary" || message.role === "branchSummary") {
-    return truncateText(message.summary.trim(), options.maxTextPartChars);
+    return message.summary.trim();
   }
-  if (!hasMessageContent(message)) {
+  if (!("content" in message)) {
     return "";
   }
   const toolResult = message.role === "toolResult";
@@ -527,9 +515,10 @@ function renderMessageBody(
   if (toolResult && options.toolPayloadMode === "elide") {
     return `${toolResultLabel} [content omitted]`;
   }
+  // The history window bounds conversation text; per-part caps apply only to payloads.
   const body =
     typeof message.content === "string"
-      ? truncateText(message.content.trim(), options.maxTextPartChars)
+      ? message.content.trim()
       : Array.isArray(message.content)
         ? message.content
             .map((part: unknown) => renderMessagePart(part, options, toolResult))
@@ -559,9 +548,8 @@ function renderMessagePart(
   const record = part as Record<string, unknown>;
   const type = typeof record.type === "string" ? record.type : undefined;
   if (type === "text") {
-    return typeof record.text === "string"
-      ? truncateText(record.text.trim(), options.maxTextPartChars)
-      : "";
+    const text = typeof record.text === "string" ? record.text.trim() : "";
+    return toolResultBody ? truncateText(text, options.maxTextPartChars) : text;
   }
   if (type === "image") {
     return options.mediaPrepared ? "" : "[image omitted]";
@@ -594,20 +582,20 @@ function renderToolCallPayload(record: Record<string, unknown>): Record<string, 
   const payload: Record<string, unknown> = pickToolPayloadMetadata(record);
   const input = record.input ?? record.arguments;
   if (input !== undefined) {
-    payload.inputShape = summarizeToolInputShape(input);
+    payload.inputShape = projectToolPayloadValue(input, "shape");
   }
   return payload;
 }
 
 function renderToolResultPayload(record: Record<string, unknown>): Record<string, unknown> {
-  const payload: Record<string, unknown> = pickToolPayloadMetadata(record);
-  for (const [key, value] of Object.entries(record)) {
-    if (TOOL_PAYLOAD_METADATA_KEYS.has(key)) {
-      continue;
-    }
-    payload[key] = redactPreservedToolValue(key, value);
-  }
-  return payload;
+  return {
+    ...pickToolPayloadMetadata(record),
+    ...Object.fromEntries(
+      Object.entries(record)
+        .filter(([key]) => !TOOL_PAYLOAD_METADATA_KEYS.has(key))
+        .map(([key, value]) => [key, projectToolPayloadValue(value, "content", key)]),
+    ),
+  };
 }
 
 const TOOL_PAYLOAD_METADATA_KEYS = new Set([
@@ -630,65 +618,39 @@ function pickToolPayloadMetadata(record: Record<string, unknown>): Record<string
   return payload;
 }
 
-// Tool-call inputs can contain shell commands and credentials. For bootstrap
-// continuity, retain object structure and primitive types instead of values.
-function summarizeToolInputShape(value: unknown, seen = new WeakSet<object>()): unknown {
-  if (value === null) {
-    return null;
-  }
-  if (Array.isArray(value)) {
-    if (seen.has(value)) {
-      return "[Circular]";
-    }
-    seen.add(value);
-    return value.map((entry) => summarizeToolInputShape(entry, seen));
-  }
-  if (value && typeof value === "object") {
-    if (seen.has(value)) {
-      return "[Circular]";
-    }
-    seen.add(value);
-    const out: Record<string, unknown> = {};
-    for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
-      out[key] = summarizeToolInputShape(child, seen);
-    }
-    return out;
-  }
-  return `[${typeof value}]`;
-}
-
-// Tool results are the useful carried context for a fresh Codex thread, so keep
-// their content while applying the same text/field redaction used for tool logs.
-function redactPreservedToolValue(
-  key: string,
+// Inputs retain shape only; results retain useful content with log redaction.
+// Both projections preserve the same object order and repeated-reference marker.
+function projectToolPayloadValue(
   value: unknown,
+  mode: "shape" | "content",
+  key = "",
   seen = new WeakSet<object>(),
 ): unknown {
-  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+  if (
+    mode === "content" &&
+    (typeof value === "string" || typeof value === "number" || typeof value === "boolean")
+  ) {
     const text = String(value);
     const redacted = redactSensitiveFieldValue(key, redactToolPayloadText(text));
     return redacted === text ? value : redacted;
   }
-  if (value === null || value === undefined) {
+  if (value === null || (mode === "content" && value === undefined)) {
     return value;
-  }
-  if (Array.isArray(value)) {
-    if (seen.has(value)) {
-      return "[Circular]";
-    }
-    seen.add(value);
-    return value.map((entry) => redactPreservedToolValue(key, entry, seen));
   }
   if (value && typeof value === "object") {
     if (seen.has(value)) {
       return "[Circular]";
     }
     seen.add(value);
-    const out: Record<string, unknown> = {};
-    for (const [childKey, child] of Object.entries(value as Record<string, unknown>)) {
-      out[childKey] = redactPreservedToolValue(childKey, child, seen);
+    if (Array.isArray(value)) {
+      return value.map((entry) => projectToolPayloadValue(entry, mode, key, seen));
     }
-    return out;
+    return Object.fromEntries(
+      Object.entries(value).map(([childKey, child]) => [
+        childKey,
+        projectToolPayloadValue(child, mode, childKey, seen),
+      ]),
+    );
   }
   return `[${typeof value}]`;
 }
@@ -699,10 +661,6 @@ function stableJson(value: unknown): string {
   } catch {
     return "[unserializable payload omitted]";
   }
-}
-
-function hasMessageContent(message: AgentMessage): message is AgentMessage & { content: unknown } {
-  return "content" in message;
 }
 
 function normalizeRenderedContextMaxChars(value: unknown): number {

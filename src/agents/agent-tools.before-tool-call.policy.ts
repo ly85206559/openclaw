@@ -50,6 +50,7 @@ import type {
 } from "./agent-tools.before-tool-call.types.js";
 import {
   getCodeModeExecBeforeHookMetadataForToolKind,
+  isCodeModeExecToolKind,
   reconcileCodeModeExecBeforeHookParams,
 } from "./code-mode-control-tools.js";
 import { admitSingleToolCallLoop } from "./tool-loop-admission.js";
@@ -75,7 +76,6 @@ export function getBeforeToolCallPolicyDiagnosticState(): BeforeToolCallPolicyDi
   };
 }
 
-/** Return true when any before_tool_call policy could affect tool execution. */
 export function hasBeforeToolCallPolicy(): boolean {
   const state = getBeforeToolCallPolicyDiagnosticState();
   return state.hasBeforeToolCallHook || state.trustedToolPolicies.length > 0;
@@ -84,10 +84,15 @@ export function hasBeforeToolCallPolicy(): boolean {
 /** Consume voice approval only after tool-owned finalization produces execution params. */
 export function consumeFinalClientVoiceToolConfirmation(args: {
   toolName: string;
+  toolKind?: PluginHookToolKind;
   toolCallId?: string;
   params: unknown;
   ctx?: HookContext;
 }) {
+  // Nested catalog calls are gated individually; the script wrapper is not itself an action.
+  if (isCodeModeExecToolKind(args.toolKind)) {
+    return { allowed: true as const };
+  }
   const voiceRun = resolveClientVoiceRunBinding(args.ctx?.runId);
   return consumeClientVoiceToolConfirmationPolicy({
     agentId: voiceRun?.agentId,
@@ -183,15 +188,18 @@ export async function runBeforeToolCallHook(args: {
           })
         : undefined;
     const voiceRun = resolveClientVoiceRunBinding(args.ctx?.runId);
-    const voiceConfirmation = checkClientVoiceToolConfirmationPolicy({
-      agentId: voiceRun?.agentId,
-      voiceSessionId: voiceRun?.voiceSessionId,
-      runId: args.ctx?.runId,
-      toolCallId: args.toolCallId,
-      toolName,
-      toolParams: normalizedParams,
-      ...(voiceRun ? { isConfirmable: () => isClientVoiceSessionConfirmable(voiceRun) } : {}),
-    });
+    // Nested catalog calls are gated individually; the script wrapper is not itself an action.
+    const voiceConfirmation = isCodeModeExecToolKind(args.toolKind)
+      ? { allowed: true as const }
+      : checkClientVoiceToolConfirmationPolicy({
+          agentId: voiceRun?.agentId,
+          voiceSessionId: voiceRun?.voiceSessionId,
+          runId: args.ctx?.runId,
+          toolCallId: args.toolCallId,
+          toolName,
+          toolParams: normalizedParams,
+          ...(voiceRun ? { isConfirmable: () => isClientVoiceSessionConfirmable(voiceRun) } : {}),
+        });
     if (!voiceConfirmation.allowed) {
       return {
         blocked: true,

@@ -21,12 +21,14 @@ import type { TelegramMessageContext } from "./bot-message-context.js";
 import type { TelegramBotOptions } from "./bot.types.js";
 import type { TelegramNativeQuoteCandidateByMessageId } from "./bot/native-quote.js";
 import type { TelegramStreamMode } from "./bot/types.js";
+import type { TelegramDraftStream } from "./draft-stream.js";
 import type { LaneDeliveryStateTracker } from "./lane-delivery-state.js";
 import type {
   DraftLaneState,
   LaneName,
   LaneTextDeliverer,
 } from "./lane-delivery-text-deliverer.js";
+import type { createTelegramReasoningStepState } from "./reasoning-lane-coordinator.js";
 
 export type DispatchTelegramMessageParams = {
   context: TelegramMessageContext;
@@ -61,7 +63,6 @@ export type CurrentTurnTranscriptFinal = Pick<
   NonNullable<Awaited<ReturnType<typeof readLatestAssistantTextByIdentity>>>,
   "text" | "openclawDelivery"
 > & { messageId?: string };
-export type TelegramScopedTranscriptSession = { sessionId: string; storePath: string };
 
 export type FreshTelegramSessionEntryLoader = ((
   agentId: string,
@@ -97,11 +98,11 @@ export type TelegramDispatchTurnConfig = Omit<
   replyQuotePosition?: number;
   replyQuoteText?: string;
   resolvedReasoningLevel: TelegramReasoningLevel;
+  /** Resolved once per turn by the rich-messages owner; never re-read from telegramCfg. */
+  richMessages: boolean;
   statusReactionController: TelegramMessageContext["statusReactionController"];
-  tableMode: Parameters<
-    NonNullable<import("./bot-deps.js").TelegramBotDeps["deliverReplies"]>
-  >[0]["tableMode"];
-  telegramDeps: import("./bot-deps.js").TelegramBotDeps;
+  tableMode: Parameters<NonNullable<TelegramBotDeps["deliverReplies"]>>[0]["tableMode"];
+  telegramDeps: TelegramBotDeps;
 };
 
 export type TelegramDraftPartialTextUpdate = {
@@ -130,19 +131,13 @@ type TelegramBufferedFinalSettlement = {
 
 type TelegramProgressCompositor = ReturnType<typeof createChannelProgressDraftCompositor>;
 
-export type TelegramReasoningStepState = {
-  noteReasoningHint: () => void;
-  noteReasoningDelivered: () => void;
-  shouldBufferFinalAnswer: () => boolean;
-  bufferFinalAnswer: (value: ReplyPayload) => void;
-  takeBufferedFinalAnswer: () => ReplyPayload | undefined;
-  resetForNextStep: () => void;
-};
+type TelegramReasoningStepState = ReturnType<typeof createTelegramReasoningStepState>;
 
 export type TelegramDraftStateSlice = {
   answerLane: DraftLaneState;
   reasoningLane: DraftLaneState;
   lanes: Record<LaneName, DraftLaneState>;
+  createAnswerStream: () => TelegramDraftStream;
   streamDeliveryEnabled: boolean;
   streamReasoningInProgressDraft: boolean;
   disableBlockStreaming: boolean | undefined;
@@ -159,7 +154,7 @@ export type TelegramDraftStateSlice = {
 };
 
 export type TelegramProgressStateSlice = {
-  verboseProgressActive: () => boolean;
+  verboseProgressActive: () => Promise<boolean>;
   previewLifecycle: LivePreviewLifecycle<ReplyPayload, number>;
   progressCompositor: TelegramProgressCompositor;
   commentaryProgressEnabled: boolean;

@@ -8,7 +8,7 @@ import { coerceConfigFormNumberString } from "../../components/config-form.numer
 import { t } from "../../i18n/index.ts";
 import {
   removePathValue,
-  sanitizeRedactedFormForSubmit,
+  pruneEmptyConfigForm,
   schemaMayAcceptString,
   schemaType,
   serializeConfigForm,
@@ -246,22 +246,12 @@ function coerceFormValues(value: unknown, schema: JsonSchema): unknown {
   }
 
   if (type === "number" || type === "integer") {
-    if (typeof value === "string") {
-      const coerced = coerceConfigFormNumberString(value, type === "integer");
-      if (coerced === undefined || typeof coerced === "number") {
-        return coerced;
-      }
-    }
-    return value;
+    return typeof value === "string"
+      ? coerceConfigFormNumberString(value, type === "integer")
+      : value;
   }
   if (type === "boolean") {
-    if (typeof value === "string") {
-      const coerced = coerceBooleanString(value);
-      if (typeof coerced === "boolean") {
-        return coerced;
-      }
-    }
-    return value;
+    return typeof value === "string" ? coerceBooleanString(value) : value;
   }
   if (type === "string") {
     return typeof value === "string" && value.length === 0 && schema.minLength ? undefined : value;
@@ -322,12 +312,8 @@ export function configFormForSubmit(state: RuntimeConfigState): Record<string, u
   const form = schema
     ? (coerceFormValues(state.configForm, schema) as Record<string, unknown>)
     : state.configForm;
-  return sanitizeRedactedFormForSubmit(
-    form,
-    state.configFormOriginal,
-    // The draft original is include-resolved source; raw only describes the root file.
-    state.configFormOriginal,
-  );
+  // The draft original is include-resolved source; raw only describes the root file.
+  return pruneEmptyConfigForm(form, state.configFormOriginal);
 }
 
 export type ConfigSubmittedDraft = {
@@ -549,12 +535,9 @@ function mutateConfigForm(
 }
 
 function trackAutoAllowlistedPluginId(state: RuntimeConfigState, pluginId: string) {
-  const pluginIds = autoAllowlistedPluginIdsByState.get(state);
-  if (pluginIds) {
-    pluginIds.add(pluginId);
-  } else {
-    autoAllowlistedPluginIdsByState.set(state, new Set([pluginId]));
-  }
+  const pluginIds = autoAllowlistedPluginIdsByState.get(state) ?? new Set<string>();
+  pluginIds.add(pluginId);
+  autoAllowlistedPluginIdsByState.set(state, pluginIds);
 }
 
 function untrackAutoAllowlistedPluginId(state: RuntimeConfigState, pluginId: string) {
@@ -710,7 +693,7 @@ export function discardConfigFormValue(state: RuntimeConfigState, path: Array<st
   }
   // Restore absence with the submission owner's existing empty-container rules;
   // otherwise Cancel alone leaves a dirty draft and schedules a redundant write.
-  current = sanitizeRedactedFormForSubmit(current, original, original);
+  current = pruneEmptyConfigForm(current, original);
   if (configFormContentConflicts(original, current, canonical)) {
     state.configAutoSaveStatus = "conflict";
     state.lastError = "config changed since last load; re-run config.get and retry";
@@ -741,11 +724,6 @@ export function stageDefaultAgentConfigEntry(state: RuntimeConfigState, agentId:
     const entries = asConfigRecord(agents?.entries);
     if (!entries) {
       return;
-    }
-    for (const entry of Object.values(entries)) {
-      if (isRecord(entry)) {
-        delete entry.default;
-      }
     }
     if (Object.keys(entries).length > 1) {
       setPathValue(draft, ["agents", "ownership"], "explicit");

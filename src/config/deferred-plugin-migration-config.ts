@@ -10,7 +10,6 @@ import { parseConcreteConfigPath, toDotPath } from "../shared/dot-path.js";
 import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
 import { applyUnsetPathsForWrite } from "./config-path-mutation.js";
 import type { ConfigWriteOptions } from "./io.types.js";
-import { inheritLegacyDefaultAgentId } from "./legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "./types.js";
 
 const snapshotMigrationFacts = new WeakMap<object, readonly DeferredPluginMigration[]>();
@@ -49,6 +48,33 @@ function readPathValue(value: unknown, segments: readonly string[]): unknown {
 
 function uniquePaths(paths: readonly string[][]): string[][] {
   return [...new Map(paths.map((path) => [JSON.stringify(path), path])).values()];
+}
+
+/** Empty plugin config has no settings; opaque legacy values still belong to their owner. */
+export function hasDeferredPluginMigrationConfig(
+  config: unknown,
+  pending: DeferredPluginMigration,
+): boolean {
+  if (
+    (pending.validationExcludedPaths ?? []).some(
+      (segments) => readPathValue(config, segments) !== undefined,
+    )
+  ) {
+    return true;
+  }
+  const pluginConfigPath = ["plugins", "entries", pending.pluginId, "config"];
+  return [...(pending.configPaths ?? []), pluginConfigPath].some((segments) => {
+    const value = readPathValue(config, segments);
+    return (
+      value !== undefined &&
+      !(
+        segments.length === pluginConfigPath.length &&
+        segments.every((segment, index) => segment === pluginConfigPath[index]) &&
+        isRecord(value) &&
+        Object.keys(value).length === 0
+      )
+    );
+  });
 }
 
 /** Preserve only current source inputs owned by the deferred plugin or the shared session locator. */
@@ -153,7 +179,7 @@ export function preserveDeferredPluginMigrationConfig(params: {
       }
     }
   }
-  return isRecord(next) ? inheritLegacyDefaultAgentId(params.nextConfig, next) : params.nextConfig;
+  return isRecord(next) ? next : params.nextConfig;
 }
 
 /** Retained plugin-owned legacy fields are inert until their migration owner becomes available. */
@@ -162,12 +188,9 @@ export function omitDeferredPluginMigrationConfig(
   pending: readonly DeferredPluginMigration[] | undefined,
 ): unknown {
   return isRecord(raw)
-    ? inheritLegacyDefaultAgentId(
+    ? applyUnsetPathsForWrite(
         raw,
-        applyUnsetPathsForWrite(
-          raw,
-          pending?.flatMap((entry) => entry.validationExcludedPaths ?? []),
-        ),
+        pending?.flatMap((entry) => entry.validationExcludedPaths ?? []),
       )
     : raw;
 }

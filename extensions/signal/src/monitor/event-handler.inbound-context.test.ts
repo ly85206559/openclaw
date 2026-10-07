@@ -9,11 +9,11 @@ import {
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveSignalReplyContextWithPersistence } from "../reply-authors.js";
 import { resetSignalReplyAuthorsForTests } from "../reply-authors.test-helpers.js";
+import type { TestDispatchResult } from "./event-handler.test-harness.js";
 import type {
   SignalDataMessage,
   SignalEnvelope,
   SignalEventHandlerDeps,
-  SignalReactionMessage,
 } from "./event-handler.types.js";
 vi.useRealTimers();
 let createBaseSignalEventHandlerDeps: typeof import("./event-handler.test-harness.js").createBaseSignalEventHandlerDeps;
@@ -35,25 +35,6 @@ type DispatchInboundMessageMockParams = {
     onToolStart?: (payload: { name?: string }) => boolean | void | Promise<boolean | void>;
     onCompactionStart?: () => boolean | void | Promise<boolean | void>;
     onCompactionEnd?: () => boolean | void | Promise<boolean | void>;
-  };
-};
-
-type TestDispatchResult = {
-  queuedFinal: boolean;
-  counts: Record<"tool" | "block" | "final", number>;
-  failedCounts?: Partial<Record<"tool" | "block" | "final", number>>;
-  settledReceipt?: {
-    counts: Record<
-      "tool" | "block" | "final",
-      {
-        delivered: number;
-        deliveredNotVisible: number;
-        cancelled: number;
-        failedBeforeSend: number;
-        failedAfterSend: number;
-      }
-    >;
-    anyVisibleDelivered: boolean;
   };
 };
 
@@ -106,6 +87,26 @@ vi.mock("../send-reactions.js", () => ({
   sendReactionSignal: sendReactionSignalMock,
 }));
 
+vi.mock("openclaw/plugin-sdk/channel-feedback", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-feedback")>();
+  return {
+    ...actual,
+    createStatusReactionController: (
+      options: Parameters<typeof actual.createStatusReactionController>[0],
+    ) =>
+      actual.createStatusReactionController({
+        ...options,
+        timing: {
+          debounceMs: 0,
+          doneHoldMs: 0,
+          errorHoldMs: 0,
+          stallSoftMs: 5_000,
+          stallHardMs: 15_000,
+        },
+      }),
+  };
+});
+
 vi.mock("openclaw/plugin-sdk/reply-runtime", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/reply-runtime")>(
     "openclaw/plugin-sdk/reply-runtime",
@@ -126,6 +127,14 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
   return {
     ...actual,
     readAgentRunTerminalOutcome: readAgentRunTerminalOutcomeMock,
+    // Timer-driven delivery tests prepare descriptive facts without worker scheduling.
+    resolveInboundSessionEnvelopeContextAsync: vi
+      .fn<typeof actual.resolveInboundSessionEnvelopeContextAsync>()
+      .mockImplementation(async ({ cfg }) => ({
+        storePath: "/tmp/openclaw/signal-sessions.json",
+        envelopeOptions: actual.resolveEnvelopeFormatOptions(cfg),
+        previousTimestamp: undefined,
+      })),
     runChannelInboundEvent: async (params: RunParams) => {
       const input = await params.adapter.ingest(params.raw);
       if (!input) {
@@ -293,25 +302,7 @@ type DirectMessageOverrides = Omit<SignalEnvelope, "dataMessage"> & {
   dataMessage?: NonNullable<SignalEnvelope["dataMessage"]>;
 };
 
-const statusReactionTiming = {
-  debounceMs: 0,
-  doneHoldMs: 0,
-  errorHoldMs: 0,
-  stallSoftMs: 60_000,
-  stallHardMs: 120_000,
-};
-
-const shortStatusReactionTiming = {
-  ...statusReactionTiming,
-  stallSoftMs: 5_000,
-  stallHardMs: 15_000,
-};
-
-type TestMessagesConfig = Omit<Partial<SignalMessagesConfig>, "statusReactions"> & {
-  statusReactions?: NonNullable<SignalMessagesConfig["statusReactions"]> & {
-    timing?: typeof statusReactionTiming;
-  };
-};
+type TestMessagesConfig = Partial<SignalMessagesConfig>;
 
 function createStatusReactionConfig(
   options: {
@@ -324,7 +315,7 @@ function createStatusReactionConfig(
       ackReaction: "👀",
       ackReactionScope: "direct",
       inbound: { debounceMs: 0 },
-      statusReactions: { enabled: true, timing: { ...statusReactionTiming } },
+      statusReactions: { enabled: true },
       ...options.messages,
     },
     channels: {
@@ -727,12 +718,7 @@ describe("signal createSignalEventHandler inbound context", () => {
         },
       );
       const handler = createTestHandler({
-        cfg: createStatusReactionConfig({
-          messages: {
-            statusReactions: { enabled: true, timing: { ...shortStatusReactionTiming } },
-          },
-        }),
-        statusReactionTiming: { ...shortStatusReactionTiming },
+        cfg: createStatusReactionConfig(),
       });
 
       const handled = receiveDirectMessage(handler);
@@ -1024,7 +1010,7 @@ describe("signal createSignalEventHandler inbound context", () => {
         messages: {
           ackReaction: "👀",
           ackReactionScope: "group-all",
-          statusReactions: { enabled: true, timing: { ...statusReactionTiming } },
+          statusReactions: { enabled: true },
         },
         signal: {
           groupAllowFrom: ["g1"],
@@ -1055,7 +1041,7 @@ describe("signal createSignalEventHandler inbound context", () => {
         messages: {
           ackReaction: "👀",
           groupChat: { mentionPatterns: ["@bot"] },
-          statusReactions: { enabled: true, timing: { ...statusReactionTiming } },
+          statusReactions: { enabled: true },
         },
         signal: {
           groupAllowFrom: ["g1"],
@@ -1286,18 +1272,13 @@ describe("signal createSignalEventHandler inbound context", () => {
       groupPolicy: "allowlist",
       groupAllowFrom: ["g1"],
       reactionMode: "all",
-      isSignalReactionMessage: (reaction): reaction is SignalReactionMessage => Boolean(reaction),
-      shouldEmitSignalReactionNotification: () => true,
-      resolveSignalReactionTargets: () => [
-        { kind: "phone", id: "+15550001111", display: "+15550001111" },
-      ],
-      buildSignalReactionSystemEventText: () => "reaction added",
     });
 
     await handler(
       createSignalReceiveEvent({
         reactionMessage: {
           emoji: "+1",
+          targetAuthor: "+15550001111",
           targetSentTimestamp: 1700000000000,
           groupInfo: { groupId: "g1", groupName: "Test Group" },
         },
@@ -1305,10 +1286,13 @@ describe("signal createSignalEventHandler inbound context", () => {
     );
 
     expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-    expect(enqueueSystemEventMock).toHaveBeenCalledWith("reaction added", {
-      sessionKey: "agent:main:signal:group:g1",
-      contextKey: "signal:reaction:added:1700000000000:+15550001111:+1:g1",
-    });
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith(
+      "Signal reaction added: +1 by Alice msg 1700000000000 from +15550001111 in Test Group id:g1",
+      {
+        sessionKey: "agent:main:signal:group:g1",
+        contextKey: "signal:reaction:added:1700000000000:+15550001111:+1:g1",
+      },
+    );
   });
 
   it("checks approval reactions before dropping defaultTo-only senders at the generic access gate", async () => {
@@ -1328,12 +1312,6 @@ describe("signal createSignalEventHandler inbound context", () => {
       dmPolicy: "allowlist",
       allowFrom: [],
       reactionMode: "all",
-      isSignalReactionMessage: (reaction): reaction is SignalReactionMessage => Boolean(reaction),
-      shouldEmitSignalReactionNotification: () => true,
-      resolveSignalReactionTargets: () => [
-        { kind: "phone", id: "+15550001111", display: "+15550001111" },
-      ],
-      buildSignalReactionSystemEventText: () => "reaction added",
     });
 
     await handler(

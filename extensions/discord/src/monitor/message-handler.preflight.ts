@@ -26,7 +26,7 @@ import { ChannelType, MessageType, type User } from "../internal/discord.js";
 import {
   resolveDiscordGuildEntry,
   resolveDiscordMemberAccessState,
-  resolveDiscordShouldRequireMention,
+  resolveDiscordMentionPolicy,
 } from "./allow-list.js";
 import { resolveDiscordChannelInfoSafe, resolveDiscordChannelNameSafe } from "./channel-access.js";
 import { resolveDiscordTextCommandAccess } from "./dm-command-auth.js";
@@ -51,7 +51,6 @@ import {
   matchesActiveDiscordMentionPatterns,
   resolveDiscordMentionState,
   resolveInjectedBoundThreadLookupRecord,
-  resolvePreflightMentionRequirement,
   shouldIgnoreBoundThreadWebhookMessage,
 } from "./message-handler.preflight-helpers.js";
 import { buildDiscordPreflightHistoryEntry } from "./message-handler.preflight-history.js";
@@ -88,10 +87,7 @@ export type {
   DiscordMessagePreflightParams,
 } from "./message-handler.preflight.types.js";
 
-export {
-  resolvePreflightMentionRequirement,
-  shouldIgnoreBoundThreadWebhookMessage,
-} from "./message-handler.preflight-helpers.js";
+export { shouldIgnoreBoundThreadWebhookMessage } from "./message-handler.preflight-helpers.js";
 
 const DISCORD_HISTORY_MEDIA_MAX_ATTACHMENTS = 4;
 const DISCORD_HISTORY_MEDIA_MAX_BYTES = 10 * 1024 * 1024;
@@ -463,7 +459,6 @@ export async function preflightDiscordMessage(
     return null;
   }
   const isBoundThreadSession = Boolean(threadBinding && threadChannel);
-  const bypassMentionRequirement = isBoundThreadSession;
   if (
     isBoundThreadBotSystemMessage({
       isBoundThreadSession,
@@ -584,21 +579,18 @@ export async function preflightDiscordMessage(
     memberRoleIds,
   });
 
-  const threadOwnerId = threadChannel
-    ? (resolveDiscordChannelInfoSafe(threadChannel).ownerId ?? channelInfo?.ownerId)
-    : undefined;
-  const shouldRequireMentionByConfig = resolveDiscordShouldRequireMention({
+  const mentionPolicy = resolveDiscordMentionPolicy({
     isGuildMessage,
     isThread: Boolean(threadChannel),
     botId,
-    threadOwnerId,
+    threadOwnerId: threadChannel
+      ? (resolveDiscordChannelInfoSafe(threadChannel).ownerId ?? channelInfo?.ownerId)
+      : undefined,
     channelConfig,
     guildInfo,
   });
-  const shouldRequireMention = resolvePreflightMentionRequirement({
-    shouldRequireMention: shouldRequireMentionByConfig,
-    bypassMentionRequirement,
-  });
+  const shouldRequireMentionByConfig = mentionPolicy.requireMention;
+  const shouldRequireMention = shouldRequireMentionByConfig && !isBoundThreadSession;
   const { hasAccessRestrictions, memberAllowed } = resolveDiscordMemberAccessState({
     channelConfig,
     guildInfo,
@@ -632,15 +624,14 @@ export async function preflightDiscordMessage(
     return null;
   }
 
-  const mentionText = hasTypedText ? baseText : "";
   const { implicitMentionKinds, wasMentioned: wasNormallyMentioned } = resolveDiscordMentionState({
-    authorIsBot: Boolean(author.bot),
     botId,
+    authorIsBot: Boolean(author.bot),
     hasAnyMention,
     isDirectMessage,
     isExplicitlyMentioned: explicitlyMentioned,
     mentionRegexes,
-    mentionText,
+    mentionText: hasTypedText ? baseText : "",
     mentionedEveryone: message.mentionedEveryone,
     referencedAuthorId: message.referencedMessage?.author?.id,
     senderIsPluralKit: sender.isPluralKit,
@@ -668,7 +659,7 @@ export async function preflightDiscordMessage(
       : params.cfg.broadcast?.[`discord:${messageChannelId}`] !== undefined
         ? messageChannelId
         : (threadParentId ?? messageChannelId),
-    text: mentionText || preflightTranscript || "",
+    text: (hasTypedText ? baseText : "") || preflightTranscript || "",
     sessionKey: boundSessionKey || effectiveRoute.sessionKey,
     acpBinding: Boolean(configuredBinding),
   });
@@ -746,6 +737,7 @@ export async function preflightDiscordMessage(
     policy: {
       isGroup: isGuildMessage,
       requireMention: shouldRequireMention,
+      allowedImplicitMentionKinds: mentionPolicy.allowedImplicitMentionKinds,
       allowTextCommands,
       hasControlCommand: hasControlCommandInMessage,
       commandAuthorized,
