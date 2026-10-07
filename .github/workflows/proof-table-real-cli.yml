@@ -40,6 +40,14 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: 26.8.2
+      - name: Verify owned-process cleanup and timeout diagnostics without product code
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/table-real-cli/${{ matrix.stage }}/supervisor"
+          python3 tooling/.github/proof/table-real-cli.py \
+            --self-check \
+            --output "${RUNNER_TEMP}/table-real-cli/${{ matrix.stage }}/supervisor"
       - name: Verify source identity and install frozen dependencies
         shell: bash
         working-directory: source

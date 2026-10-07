@@ -1,6 +1,7 @@
 """Fork-only proof through the supported CLI, real inventory, and a 122-column PTY."""
 
 import argparse
+import ctypes
 import errno
 import fcntl
 import hashlib
@@ -13,6 +14,7 @@ import select
 import signal
 import struct
 import subprocess
+import sys
 import tempfile
 import termios
 import time
@@ -54,12 +56,106 @@ def source_identity(source):
     }
 
 
-def cli(source, env, output, label, options, terminal=False):
-    command = ["pnpm", "--silent", "openclaw", "plugins", "list", "--enabled", *options]
+def enable_subreaper():
+    # Detached CLI workers become our children when their launcher exits.
+    # https://man7.org/linux/man-pages/man2/PR_SET_CHILD_SUBREAPER.2const.html
+    libc = ctypes.CDLL(None, use_errno=True)
+    libc.prctl.argtypes = [ctypes.c_int, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong]
+    libc.prctl.restype = ctypes.c_int
+    if libc.prctl(36, 1, 0, 0, 0) != 0:
+        error = ctypes.get_errno()
+        raise OSError(error, os.strerror(error))
+
+
+def process_info(pid):
+    try:
+        fields = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
+        return int(fields[1]), int(fields[19]), fields[0]
+    except (FileNotFoundError, ProcessLookupError):
+        return None
+
+
+def owned_descendants():
+    processes = {
+        int(path.name): info
+        for path in Path("/proc").iterdir()
+        if path.name.isdecimal() and (info := process_info(int(path.name))) is not None
+    }
+    owners = {os.getpid()}
+    while True:
+        children = {pid for pid, (parent, _, _) in processes.items() if parent in owners}
+        if children <= owners:
+            break
+        owners.update(children)
+    return {pid: processes[pid] for pid in owners if pid != os.getpid()}
+
+
+def cleanup_owned(process, grace):
+    signaled = []
+    for kind, seconds in [(signal.SIGTERM, grace), (signal.SIGKILL, 2)]:
+        deadline = time.monotonic() + seconds
+        sent = set()
+        while True:
+            process.poll()  # Popen retains its own leader's actual exit status.
+            descendants = owned_descendants()
+            for pid, (parent, _, state) in descendants.items():
+                if parent == os.getpid() and state == "Z" and pid != process.pid:
+                    try:
+                        os.waitpid(pid, os.WNOHANG)
+                    except ChildProcessError:
+                        pass
+            live = {pid: info for pid, info in descendants.items() if info[2] != "Z"}
+            if not live:
+                return {"signals": signaled, "remaining": []}
+            for pid, info in live.items():
+                identity = (pid, info[1])
+                if identity in sent:
+                    continue
+                try:
+                    descriptor = os.pidfd_open(pid)
+                except ProcessLookupError:
+                    continue
+                try:
+                    current = process_info(pid)
+                    # Binding the signal to a pidfd also excludes PID reuse after this check.
+                    if current is not None and current[1] == info[1]:
+                        signal.pidfd_send_signal(descriptor, kind)
+                        signaled.append({"pid": pid, "startTime": info[1], "signal": int(kind)})
+                        sent.add(identity)
+                except ProcessLookupError:
+                    pass
+                finally:
+                    os.close(descriptor)
+            if time.monotonic() >= deadline:
+                break
+            select.select([], [], [], min(0.02, max(0, deadline - time.monotonic())))
+    return {"signals": signaled, "remaining": [pid for pid, info in owned_descendants().items() if info[2] != "Z"]}
+
+
+def drain_pty(master, stdout, deadline):
+    while time.monotonic() < deadline:
+        ready, _, _ = select.select([master], [], [], max(0, min(1, deadline - time.monotonic())))
+        if ready:
+            try:
+                chunk = os.read(master, 65536)
+            except OSError as error:
+                if error.errno == errno.EIO:
+                    return True
+                raise
+            if not chunk:
+                return True
+            stdout.extend(chunk)
+    return False
+
+
+def capture_command(command, source, env, output, label, terminal=False, budget=1200, grace=10):
     started = time.monotonic()
-    deadline = started + 1200
+    deadline = started + budget
     stdout = bytearray()
-    stderr = b""
+    stdout_path = output / (label + ".stdout.txt")
+    stderr_path = output / (label + ".stderr.txt")
+    stdout_file = None
+    stderr_file = None
     process = None
     master = None
     slave = None
@@ -75,51 +171,53 @@ def cli(source, env, output, label, options, terminal=False):
             )
             os.close(slave)
             slave = None
-            while True:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    raise TimeoutError("Actual CLI exceeded the proof execution budget")
-                ready, _, _ = select.select([master], [], [], min(remaining, 1))
-                if ready:
-                    try:
-                        chunk = os.read(master, 65536)
-                    except OSError as error:
-                        if error.errno != errno.EIO:
-                            raise
-                        break
-                    if not chunk:
-                        break
-                    stdout.extend(chunk)
+            if not drain_pty(master, stdout, deadline):
+                raise TimeoutError("Actual CLI exceeded the proof execution budget")
             process.wait(timeout=max(0.1, deadline - time.monotonic()))
         else:
+            # Regular artifacts retain partial diagnostics even if wait times out.
+            stdout_file = stdout_path.open("wb")
+            stderr_file = stderr_path.open("wb")
             process = subprocess.Popen(
                 command, cwd=source, env=env, stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True,
+                stdout=stdout_file, stderr=stderr_file, start_new_session=True,
             )
-            captured, stderr = process.communicate(timeout=deadline - time.monotonic())
-            stdout.extend(captured)
+            process.wait(timeout=max(0.1, deadline - time.monotonic()))
         result["exitCode"] = process.returncode
     except BaseException as error:
         result["error"] = str(error)
-        if process is not None and process.poll() is None:
-            os.killpg(process.pid, signal.SIGTERM)
-            try:
-                process.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                os.killpg(process.pid, signal.SIGKILL)
-                process.wait()
         raise
     finally:
-        if master is not None:
-            os.close(master)
-        if slave is not None:
-            os.close(slave)
-        result["seconds"] = round(time.monotonic() - started, 3)
-        (output / (label + ".stdout.txt")).write_bytes(stdout)
-        (output / (label + ".stderr.txt")).write_bytes(stderr)
-        write_json(output / (label + ".command.json"), result)
+        try:
+            if process is not None:
+                result["cleanup"] = cleanup_owned(process, grace)
+                if terminal and master is not None:
+                    result["drainComplete"] = drain_pty(master, stdout, time.monotonic() + 2)
+                result["exitCode"] = process.poll()
+                if result["cleanup"]["remaining"] or result.get("drainComplete") is False:
+                    result["cleanupError"] = "Owned command descendants or output did not finish within cleanup budget"
+                    raise RuntimeError(result["cleanupError"])
+        finally:
+            if master is not None:
+                os.close(master)
+            if slave is not None:
+                os.close(slave)
+            for stream in [stdout_file, stderr_file]:
+                if stream is not None:
+                    stream.close()
+            result["seconds"] = round(time.monotonic() - started, 3)
+            if terminal:
+                stdout_path.write_bytes(stdout)
+                stderr_path.write_bytes(b"")
+            write_json(output / (label + ".command.json"), result)
+    return result, stdout_path.read_text(encoding="utf-8")
+
+
+def cli(source, env, output, label, options, terminal=False):
+    command = ["pnpm", "--silent", "openclaw", "plugins", "list", "--enabled", *options]
+    result, transcript = capture_command(command, source, env, output, label, terminal=terminal)
     assert result["exitCode"] == 0, f"{label}: CLI failed; this is not an expected regression RED"
-    return bytes(stdout).decode("utf-8", errors="strict")
+    return transcript
 
 
 def table_rows(transcript):
@@ -215,15 +313,79 @@ def proof_case(source, output, plugin_root, description, stage):
     print(json.dumps({"stage": stage, "case": label, "rows": rows, "result": "expected behavior verified"}))
 
 
+def self_check(output):
+    # The pipe is a readiness barrier: the launcher cannot exit/block until its
+    # detached worker has installed SIGTERM handling and emitted both streams.
+    child = r"""
+import os, signal, sys
+read_fd, write_fd = os.pipe()
+pid = os.fork()
+if pid == 0:
+    os.close(read_fd)
+    os.setsid()
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    with open(sys.argv[1], 'w') as target:
+        target.write(str(os.getpid()))
+    os.write(1, b'SYNTHETIC_STDOUT_READY\n')
+    os.write(2, b'SYNTHETIC_STDERR_READY\n')
+    os.write(write_fd, b'1')
+    os.close(write_fd)
+    while True:
+        signal.pause()
+os.close(write_fd)
+assert os.read(read_fd, 1) == b'1'
+os.close(read_fd)
+if sys.argv[2] == 'exit':
+    os._exit(0)
+while True:
+    signal.pause()
+"""
+    for terminal, mode in [(True, "exit"), (False, "block")]:
+        label = "leader-exited-pty" if terminal else "timeout-file-logs"
+        pid_path = output / (label + ".pid.txt")
+        try:
+            capture_command(
+                [sys.executable, "-c", child, str(pid_path), mode], output,
+                {"PATH": os.environ["PATH"]}, output, label, terminal=terminal, budget=2, grace=0.1,
+            )
+        except (TimeoutError, subprocess.TimeoutExpired):
+            pass
+        else:
+            raise AssertionError("Synthetic worker must hold the terminal or launcher until timeout")
+        metadata = json.loads((output / (label + ".command.json")).read_text())
+        assert metadata["error"] and metadata["cleanup"]["remaining"] == []
+        assert any(item["signal"] == signal.SIGKILL for item in metadata["cleanup"]["signals"])
+        pid = int(pid_path.read_text())
+        assert process_info(pid) is None, "Detached synthetic worker must be killed and reaped"
+        stdout = (output / (label + ".stdout.txt")).read_bytes()
+        stderr = (output / (label + ".stderr.txt")).read_bytes()
+        assert stdout.count(b"SYNTHETIC_STDOUT_READY") == 1
+        if terminal:
+            assert metadata["exitCode"] == 0, "This case must exercise cleanup after launcher exit"
+            assert stdout.count(b"SYNTHETIC_STDERR_READY") == 1
+        else:
+            assert stderr == b"SYNTHETIC_STDERR_READY\n", "Timeout must retain complete prior stderr"
+            assert stdout == b"SYNTHETIC_STDOUT_READY\n", "Timeout must retain complete prior stdout"
+    assert owned_descendants() == {}, "Self-check must leave no owned process behind"
+    write_json(output / "self-check.json", {"complete": True, "cases": 2})
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--source", required=True, type=Path)
+    parser.add_argument("--source", type=Path)
     parser.add_argument("--output", required=True, type=Path)
-    parser.add_argument("--stage", required=True, choices=["base", "head"])
+    parser.add_argument("--stage", choices=["base", "head"])
+    parser.add_argument("--self-check", action="store_true")
     args = parser.parse_args()
-    source = args.source.resolve()
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
+    enable_subreaper()
+    if args.self_check:
+        self_check(output)
+        return
+    if args.source is None or args.stage is None:
+        parser.error("Real CLI proof requires --source and --stage")
+    source = args.source.resolve()
     before = source_identity(source)
     write_json(output / "source-before.json", before)
     assert before["sha"] == (BASE if args.stage == "base" else HEAD)
