@@ -1,4 +1,4 @@
-name: Widget error message exact-head changed checks
+name: Widget PR inherited transcript minute-boundary diagnosis
 
 on:
   push:
@@ -8,45 +8,52 @@ permissions:
   contents: read
 
 jobs:
-  changed-checks:
+  transcript-clock:
     runs-on: ubuntu-24.04
-    timeout-minutes: 40
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        clock: [fixed, crossed]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: 68412b82c639619add3ded8da9a880611a557086
-          fetch-depth: 2
           persist-credentials: false
-      - name: Provide the official guard's missing ripgrep prerequisite
-        shell: bash
+      - name: Retain diagnostic harness and unchanged public-result reporter
         run: |
-          set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install --yes ripgrep
-          rg --version
+          cp proof-transcript-minute.mjs proof-widget-message-validator.mjs "$RUNNER_TEMP/"
+          git rev-parse HEAD | tee "$RUNNER_TEMP/diagnostic-proof-head.log"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: 0dc20916873149b6f6803d1eae711c8d44f3de9e
+          fetch-depth: 1
+          persist-credentials: false
       - uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
           cache-mode: "off"
-      - name: Bind unchanged product head and complete remaining checks
+      - name: Diagnose on the actual upstream main parent, not widget code
         shell: bash
         env:
           FORCE_COLOR: "0"
+          CLOCK_CELL: ${{ matrix.clock }}
+          WIDGET_MESSAGE_AUDIT_PATH: ${{ runner.temp }}/transcript-minute-audit.json
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "68412b82c639619add3ded8da9a880611a557086"
-          test "$(git rev-parse HEAD^)" = "5dcf668765dea9dfc8101e163804c77ca52bdb53"
-          test "$(git hash-object src/canvas/wrap.ts)" = "97acfbbb0ab534c34265f015ff2debda58a00a07"
-          test "$(git hash-object ui/src/components/canvas-widget-view.ts)" = "19fec1286325959462fcf4c19bd6c508ea4ee63b"
-          git diff --check 5dcf668765dea9dfc8101e163804c77ca52bdb53 HEAD
-          paths=(src/canvas/wrap.ts src/canvas/wrap.test.ts ui/src/components/canvas-widget-view.ts ui/src/components/canvas-widget-view.test.ts)
-          pnpm changed:lanes --json --base 5dcf668765dea9dfc8101e163804c77ca52bdb53 --head HEAD -- "${paths[@]}" 2>&1 | tee "$RUNNER_TEMP/widget-message-final-lanes.log"
-          node scripts/check-changed.mjs --dry-run --base 5dcf668765dea9dfc8101e163804c77ca52bdb53 --head HEAD -- "${paths[@]}" 2>&1 | tee "$RUNNER_TEMP/widget-message-final-plan.log"
-          node scripts/check-changed.mjs --timed --base 5dcf668765dea9dfc8101e163804c77ca52bdb53 --head HEAD -- "${paths[@]}" 2>&1 | tee "$RUNNER_TEMP/widget-message-final-checks.log"
+          test "$(git rev-parse HEAD)" = "0dc20916873149b6f6803d1eae711c8d44f3de9e"
+          node "$RUNNER_TEMP/proof-transcript-minute.mjs" prepare
+          git diff -- ui/src/pages/chat/components/chat-transcript-invalidation.test.ts | tee "$RUNNER_TEMP/diagnostic-clock-overlay.log"
+          set +e
+          pnpm test ui/src/pages/chat/components/chat-transcript-invalidation.test.ts --maxWorkers=1 --reporter=verbose --reporter=json --reporter="$RUNNER_TEMP/proof-widget-message-validator.mjs" --outputFile="$RUNNER_TEMP/transcript-minute.json" 2>&1 | tee "$RUNNER_TEMP/transcript-minute.log"
+          result=${PIPESTATUS[0]}
+          set -e
+          node "$RUNNER_TEMP/proof-transcript-minute.mjs" validate "$result"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         if: always()
         with:
-          name: widget-message-exact-head-checks
+          name: transcript-minute-${{ matrix.clock }}
           path: |
-            ${{ runner.temp }}/widget-message-final-*.log
+            ${{ runner.temp }}/transcript-minute*
+            ${{ runner.temp }}/diagnostic-*.log
+            ${{ runner.temp }}/proof-transcript-minute.mjs
           if-no-files-found: error
