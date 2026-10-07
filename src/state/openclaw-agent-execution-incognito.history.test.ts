@@ -26,7 +26,13 @@ import { resolveIncognitoOpenClawAgentSqlitePath } from "./openclaw-agent-db.pat
 import { registerIncognitoHistoryWiringTests } from "./openclaw-agent-execution-incognito.history-wiring.test-support.js";
 import type { IncognitoAgentDatabaseExecution } from "./openclaw-agent-execution-incognito.js";
 import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
-import { closeOpenClawStateDatabaseAsync } from "./openclaw-state-db.js";
+import { closeOpenClawStateDatabaseAsync, openOpenClawStateDatabase } from "./openclaw-state-db.js";
+
+// Two retained private actors plus shared ACP state need three broker slots.
+vi.mock("node:os", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:os")>()),
+  availableParallelism: () => 24,
+}));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
 const authority: IncognitoSessionAuthority = { assertCurrent() {} };
@@ -40,6 +46,7 @@ let sql: ReturnType<typeof observeHostDataSql>;
 beforeAll(async () => {
   env = { OPENCLAW_STATE_DIR: tempDirs.make("incognito-history-") };
   mainStorePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env });
+  openOpenClawStateDatabase({ env });
   const posted = vi.spyOn(Worker.prototype, "postMessage");
   try {
     const opened = await captureOpenClawAgentDatabaseExecution({
@@ -536,7 +543,7 @@ it("reads committed actor writes in FIFO order and retains the hydration snapsho
       actor.sessions.history(authority, { type: "session.history.branches", input }),
       actor.sessions.history(authority, {
         type: "session.history.search",
-        input: { ...input, query: "committed" },
+        input: { sessions: [input], sessionId: input.sessionId, query: "committed" },
       }),
     ]);
     barrier.release.resolve();
@@ -860,6 +867,9 @@ it.each(["consume", "pending-list", "pending-read"] as const)(
 
 registerIncognitoHistoryWiringTests({
   authority,
+  get siblingActor() {
+    return lossActor;
+  },
   get actor() {
     return actor;
   },
