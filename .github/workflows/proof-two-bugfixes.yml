@@ -17,7 +17,8 @@ jobs:
       matrix:
         include:
           - lane: table
-            head: 2f05478df41e8836156a6bcdb5d0fede7d70451b
+            head: 2a34ff24e0f315ce108823c4101a48dd4500e329
+            commits: 2
             owner: packages/terminal-core/src/table.ts
             regression: packages/terminal-core/src/table.test.ts
             filter: sizes multiline
@@ -26,6 +27,7 @@ jobs:
             destination: src/cli/plugins-list-command.multiline-proof.test.ts
           - lane: voice
             head: 373834a5d1aa47ba225a3bdeaa280d774b90f3db
+            commits: 1
             owner: extensions/voice-call/src/providers/mock.ts
             regression: extensions/voice-call/src/manager/events.inbound.test.ts
             filter: admits mock
@@ -35,6 +37,7 @@ jobs:
     env:
       BASE_SHA: fa420c6eb2752a78430cef1f2e3bf15cc17d8e9e
       TARGET_SHA: ${{ matrix.head }}
+      COMMIT_COUNT: ${{ matrix.commits }}
       LANE: ${{ matrix.lane }}
       OWNER_FILE: ${{ matrix.owner }}
       TEST_FILE: ${{ matrix.regression }}
@@ -55,8 +58,10 @@ jobs:
           mkdir -p "${RUNNER_TEMP}/proof"
           cp "${FIXTURE}" "${RUNNER_TEMP}/proof/fixture.test.ts"
           git fetch --depth=1 --no-tags https://github.com/openclaw/openclaw.git "${BASE_SHA}"
-          git fetch --depth=1 --no-tags https://github.com/ly85206559/openclaw.git "${TARGET_SHA}"
-          test "$(git cat-file -p "${TARGET_SHA}" | grep '^parent ')" = "parent ${BASE_SHA}"
+          git fetch --depth=3 --no-tags https://github.com/ly85206559/openclaw.git "${TARGET_SHA}"
+          test "$(git merge-base "${BASE_SHA}" "${TARGET_SHA}")" = "${BASE_SHA}"
+          test "$(git rev-list --count "${BASE_SHA}..${TARGET_SHA}")" = "${COMMIT_COUNT}"
+          test -z "$(git rev-list --merges "${BASE_SHA}..${TARGET_SHA}")"
           test "$(git diff --name-only "${BASE_SHA}" "${TARGET_SHA}" | sort)" = "$(printf '%s\n' "${OWNER_FILE}" "${TEST_FILE}" | sort)"
           git diff --check "${BASE_SHA}" "${TARGET_SHA}"
           git show "${TARGET_SHA}:${TEST_FILE}" > "${RUNNER_TEMP}/proof/regression.test.ts"
@@ -93,6 +98,9 @@ jobs:
         run: |
           set -euo pipefail
           cp "${RUNNER_TEMP}/proof/fixture.test.ts" "${PROOF_FILE}"
+          if test "${LANE}" = voice; then
+            printf '\ndatabaseWorkerExtensionTestFiles.push("%s");\n' "${PROOF_FILE}" >> test/vitest/vitest.extension-database-workers-paths.mjs
+          fi
           if test "${LANE}" = table; then
             /usr/bin/time -f '%e' -o "${RUNNER_TEMP}/proof/before-controls-wall.txt" node scripts/run-vitest.mjs "${PROOF_FILE}" -t 'single-line source control|complete metadata|single-line width control' --reporter=verbose > "${RUNNER_TEMP}/proof/before-controls.log" 2>&1
             cat "${RUNNER_TEMP}/proof/before-controls.log"
@@ -111,6 +119,7 @@ jobs:
           fi
           cat "${RUNNER_TEMP}/proof/before.log"
           rm "${PROOF_FILE}"
+          git restore --source=HEAD --worktree -- test/vitest/vitest.extension-database-workers-paths.mjs
           git diff --exit-code
       - name: Exact candidate GREEN and touched checks
         shell: bash
@@ -118,7 +127,11 @@ jobs:
           set -euo pipefail
           git checkout --detach "${TARGET_SHA}"
           test "$(git rev-parse HEAD)" = "${TARGET_SHA}"
-          pnpm exec oxfmt --check "${OWNER_FILE}" "${TEST_FILE}"
+          if ! pnpm exec oxfmt --check "${OWNER_FILE}" "${TEST_FILE}"; then
+            pnpm exec oxfmt "${OWNER_FILE}" "${TEST_FILE}"
+            git diff -- "${OWNER_FILE}" "${TEST_FILE}" > "${RUNNER_TEMP}/proof/format.patch"
+            exit 1
+          fi
           pnpm exec oxlint --config .oxlintrc.json "${OWNER_FILE}" "${TEST_FILE}"
           /usr/bin/time -f '%e' -o "${RUNNER_TEMP}/proof/green-wall.txt" node scripts/run-vitest.mjs "${TEST_FILE}" --reporter=verbose > "${RUNNER_TEMP}/proof/green.log" 2>&1
           cat "${RUNNER_TEMP}/proof/green.log"
@@ -126,9 +139,13 @@ jobs:
             node scripts/run-vitest.mjs extensions/voice-call/src/providers/mock.test.ts --reporter=verbose | tee "${RUNNER_TEMP}/proof/siblings.log"
           fi
           cp "${RUNNER_TEMP}/proof/fixture.test.ts" "${PROOF_FILE}"
+          if test "${LANE}" = voice; then
+            printf '\ndatabaseWorkerExtensionTestFiles.push("%s");\n' "${PROOF_FILE}" >> test/vitest/vitest.extension-database-workers-paths.mjs
+          fi
           MOCK_CALL_PROOF_EXPECT_ADMISSION=1 /usr/bin/time -f '%e' -o "${RUNNER_TEMP}/proof/after-wall.txt" node scripts/run-vitest.mjs "${PROOF_FILE}" --reporter=verbose > "${RUNNER_TEMP}/proof/after.log" 2>&1
           cat "${RUNNER_TEMP}/proof/after.log"
           rm "${PROOF_FILE}"
+          git restore --source=HEAD --worktree -- test/vitest/vitest.extension-database-workers-paths.mjs
           git diff --check "${BASE_SHA}" "${TARGET_SHA}"
           git diff --exit-code
           git rev-parse HEAD HEAD^{tree} | tee "${RUNNER_TEMP}/proof/final-source.txt"
