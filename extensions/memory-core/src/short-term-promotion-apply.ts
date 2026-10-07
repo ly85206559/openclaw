@@ -8,8 +8,8 @@ import {
   formatMemoryDreamingDay,
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import { appendMemoryHostEvent } from "openclaw/plugin-sdk/memory-host-events";
+import { resolveNonNegativeIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   appendConsolidationSkippedSummary,
   appendConsolidationSummary,
@@ -21,8 +21,10 @@ import {
   isPromotionOriginBlocked,
 } from "./dreaming-consolidation-candidates.js";
 import { applyMemoryConsolidationPlan, consolidateMemory } from "./dreaming-consolidation.js";
-import { compactMemoryForBudget, DEFAULT_MEMORY_FILE_MAX_CHARS } from "./memory-budget.js";
+import { buildBudgetedMemoryAppend } from "./memory-budget-append.js";
+import { DEFAULT_MEMORY_FILE_MAX_CHARS } from "./memory-budget.js";
 import { pruneMemoryEntryOrigins, reserveMemoryEntryOrigins } from "./memory-entry-origins.js";
+import { readWorkspaceFile } from "./memory-workspace-files.js";
 import { withMemoryWorkspaceLock } from "./memory-workspace-lock.js";
 import {
   buildPromotionMarker,
@@ -30,6 +32,7 @@ import {
   extractPromotionKeys,
   hashMemoryContent,
   isAtomicReplacePermissionError,
+  MemoryAtomicPublicationError,
   MemoryWriteConflictError,
   readMemoryContent,
   resolveMemoryWritePath,
@@ -52,14 +55,13 @@ import {
   type ShortTermRecallEntry,
 } from "./short-term-promotion-types.js";
 import {
+  formatPromotedSnippetForMemory,
   isContaminatedDreamingSnippet,
-  normalizeSnippet,
   toFiniteNonNegativeInt,
   toFiniteScore,
 } from "./short-term-promotion-utils.js";
 import { resolveMemoryCoreNowMs, resolveMemoryCoreTimestamp } from "./time.js";
 
-const PROMOTED_SNIPPET_CHARS_PER_TOKEN_ESTIMATE = 4;
 const MEMORY_WRITE_LOCK_OPTIONS = {
   retries: { retries: 100, factor: 1.2, minTimeout: 25, maxTimeout: 250 },
   stale: 120_000,
@@ -98,50 +100,6 @@ function buildPromotionSection(
 
   lines.push("");
   return lines.join("\n");
-}
-
-function resolvePromotedSnippetCharLimit(maxTokens: number): number {
-  const tokenLimit = toFiniteNonNegativeInt(
-    maxTokens,
-    DEFAULT_MEMORY_DEEP_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS,
-  );
-  // This is an inexpensive display-size guard, not a tokenizer contract.
-  return tokenLimit * PROMOTED_SNIPPET_CHARS_PER_TOKEN_ESTIMATE;
-}
-
-function truncatePromotedSnippet(snippet: string, maxTokens: number): string {
-  const limit = resolvePromotedSnippetCharLimit(maxTokens);
-  if (limit === 0 || snippet.length <= limit) {
-    return snippet;
-  }
-  const hardLimit = truncateUtf16Safe(snippet, limit);
-  const sentenceBoundary = Math.max(
-    hardLimit.lastIndexOf(". "),
-    hardLimit.lastIndexOf("! "),
-    hardLimit.lastIndexOf("? "),
-  );
-  const wordBoundary = hardLimit.lastIndexOf(" ");
-  const cutAt =
-    sentenceBoundary >= Math.floor(limit * 0.55)
-      ? sentenceBoundary + 1
-      : wordBoundary >= Math.floor(limit * 0.65)
-        ? wordBoundary
-        : limit;
-  return `${hardLimit.slice(0, cutAt).trimEnd()}...`;
-}
-
-function formatPromotedSnippetForMemory(rawSnippet: string, maxTokens: number): string {
-  const normalized = normalizeSnippet(rawSnippet || "(no snippet captured)")
-    .replace(/^[-*+] +/, "")
-    .trim();
-  return truncatePromotedSnippet(normalized || "(no snippet captured)", maxTokens);
-}
-
-function withTrailingNewline(content: string): string {
-  if (!content) {
-    return "";
-  }
-  return content.endsWith("\n") ? content : `${content}\n`;
 }
 
 function consolidationCandidateFingerprint(candidate: PromotionCandidate): string {
@@ -203,7 +161,7 @@ async function promotionSourceFingerprint(
 ): Promise<string> {
   for (const sourcePath of resolveShortTermSourcePathCandidates(workspaceDir, candidate.path)) {
     try {
-      const content = await fs.readFile(sourcePath);
+      const content = await readWorkspaceFile(workspaceDir, sourcePath);
       return createHash("sha256").update(content).digest("hex");
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
@@ -230,9 +188,7 @@ export async function applyShortTermPromotions(
   const workspaceDir = options.workspaceDir.trim();
   const nowMs = resolveMemoryCoreNowMs(options.nowMs);
   const nowIso = resolveMemoryCoreTimestamp(nowMs);
-  const limit = Number.isFinite(options.limit)
-    ? Math.max(0, Math.floor(options.limit as number))
-    : options.candidates.length;
+  const limit = resolveNonNegativeIntegerOption(options.limit, options.candidates.length);
   const minScore = toFiniteScore(options.minScore, DEFAULT_PROMOTION_MIN_SCORE);
   const minRecallCount = toFiniteNonNegativeInt(
     options.minRecallCount,
@@ -396,13 +352,8 @@ export async function applyShortTermPromotions(
   );
   // Promotions historically follow user-managed MEMORY.md symlinks. Replace the
   // final target atomically without severing the chain, matching the prior writeFile path.
-  let memoryWritePath = await resolveMemoryWritePath(memoryPath);
-  let existingMemory = await fs.readFile(memoryWritePath, "utf-8").catch((err: unknown) => {
-    if ((err as NodeJS.ErrnoException)?.code === "ENOENT") {
-      return "";
-    }
-    throw err;
-  });
+  let memoryWritePath = await resolveMemoryWritePath(memoryPath, workspaceDir);
+  let existingMemory = await readMemoryContent(memoryWritePath, workspaceDir);
   let existingMarkers = new Set(extractPromotionKeys(existingMemory));
   let alreadyWritten = rehydratedSelected.filter((candidate) => existingMarkers.has(candidate.key));
   let toAppend = rehydratedSelected.filter((candidate) => !existingMarkers.has(candidate.key));
@@ -412,10 +363,14 @@ export async function applyShortTermPromotions(
   );
 
   let compactedDates: string[] = [];
-  const budgetChars =
-    typeof options.memoryFileMaxChars === "number" && Number.isFinite(options.memoryFileMaxChars)
-      ? Math.max(0, Math.floor(options.memoryFileMaxChars))
-      : DEFAULT_MEMORY_FILE_MAX_CHARS;
+  const budgetChars = resolveNonNegativeIntegerOption(
+    options.memoryFileMaxChars,
+    DEFAULT_MEMORY_FILE_MAX_CHARS,
+  );
+  const maxPriorEntryLossFraction = Math.max(
+    0,
+    Math.min(1, options.maxPriorEntryLossFraction ?? 0.25),
+  );
   const consolidationPlan =
     options.agentId && options.consolidation?.subagent && toAppend.length > 0
       ? await consolidateMemory({
@@ -424,10 +379,7 @@ export async function applyShortTermPromotions(
           existingMemory,
           candidates: toAppend,
           ...(options.consolidation.model ? { model: options.consolidation.model } : {}),
-          maxPriorEntryLossFraction: Math.max(
-            0,
-            Math.min(1, options.maxPriorEntryLossFraction ?? 0.25),
-          ),
+          maxPriorEntryLossFraction,
           memoryFileMaxChars: budgetChars,
           ...(typeof options.maxPromotedSnippetTokens === "number"
             ? { maxPromotedSnippetTokens: options.maxPromotedSnippetTokens }
@@ -485,13 +437,8 @@ export async function applyShortTermPromotions(
           authoritativeSelected.push(currentCandidate);
         }
       }
-      memoryWritePath = await resolveMemoryWritePath(memoryPath);
-      existingMemory = await fs.readFile(memoryWritePath, "utf-8").catch((err: unknown) => {
-        if ((err as NodeJS.ErrnoException)?.code === "ENOENT") {
-          return "";
-        }
-        throw err;
-      });
+      memoryWritePath = await resolveMemoryWritePath(memoryPath, workspaceDir);
+      existingMemory = await readMemoryContent(memoryWritePath, workspaceDir);
       existingMarkers = new Set(extractPromotionKeys(existingMemory));
       alreadyWritten = authoritativeSelected.filter((candidate) =>
         existingMarkers.has(candidate.key),
@@ -522,10 +469,7 @@ export async function applyShortTermPromotions(
             nowMs,
             ...(options.timezone ? { timezone: options.timezone } : {}),
             memoryFileMaxChars: budgetChars,
-            maxPriorEntryLossFraction: Math.max(
-              0,
-              Math.min(1, options.maxPriorEntryLossFraction ?? 0.25),
-            ),
+            maxPriorEntryLossFraction,
           });
         }
       }
@@ -549,15 +493,16 @@ export async function applyShortTermPromotions(
         }
       }
       if (consolidationResult && consolidationPlan) {
-        // Reserve the union before publishing its replacement. A failed origin
-        // write must leave MEMORY unchanged; uncommitted rewrites release only new rows.
-        const rollbackOrigins = reserveMemoryEntryOrigins({
+        // Reserve lineage before publication; release new rows only when the
+        // file owner rules out a replacement or reconciles an unchanged target.
+        const rollbackOrigins = await reserveMemoryEntryOrigins({
           agentIds: originAgentIds,
           previousMemory: existingMemory,
           operations: consolidationPlan.operations,
         });
         try {
           await commitMemoryContent({
+            workspaceDir,
             filePath: memoryWritePath,
             tempPrefix: `${path.basename(memoryPath)}.promotion`,
             expectedHash: consolidationBaseMemoryHash,
@@ -569,7 +514,10 @@ export async function applyShortTermPromotions(
           }
           appendedCandidates = toAppend.length;
         } catch (error) {
-          rollbackOrigins();
+          if (error instanceof MemoryAtomicPublicationError) {
+            throw error;
+          }
+          await rollbackOrigins();
           if (
             !(error instanceof MemoryWriteConflictError) &&
             !isAtomicReplacePermissionError(error)
@@ -581,7 +529,7 @@ export async function applyShortTermPromotions(
               ? "MEMORY.md changed immediately before the consolidation rename"
               : "the MEMORY.md directory blocked atomic replacement";
           consolidationResult = null;
-          existingMemory = await readMemoryContent(memoryWritePath);
+          existingMemory = await readMemoryContent(memoryWritePath, workspaceDir);
           existingMarkers = new Set(extractPromotionKeys(existingMemory));
           alreadyWritten = authoritativeSelected.filter((candidate) =>
             existingMarkers.has(candidate.key),
@@ -604,37 +552,45 @@ export async function applyShortTermPromotions(
         if (toAppend.length > 0) {
           // Model absence or rejected output preserves the shipped append-only
           // promotion contract, so a deep sweep never loses eligible memories.
-          const section = buildPromotionSection(
-            toAppend,
-            nowMs,
-            options.timezone,
-            options.maxPromotedSnippetTokens,
-          );
-          const compaction = compactMemoryForBudget({
+          const appendPlan = buildBudgetedMemoryAppend({
             existingMemory,
-            newSection: section,
+            newSection: buildPromotionSection(
+              toAppend,
+              nowMs,
+              options.timezone,
+              options.maxPromotedSnippetTokens,
+            ),
             budgetChars,
+            maxPriorEntryLossFraction,
           });
-          const droppedDates = compaction.droppedDates;
-          const baseMemory = compaction.compacted;
-          const header = baseMemory.trim().length > 0 ? "" : "# Long-Term Memory\n\n";
-          const content = `${header}${withTrailingNewline(baseMemory)}${section}`;
-          // Append fallback keeps the historical read-modify-replace contract. Policy accepts
-          // its external-editor race because OpenClaw writers remain serialized by this sweep lock.
-          await commitMemoryContent({
-            filePath: memoryWritePath,
-            tempPrefix: `${path.basename(memoryPath)}.promotion`,
-            expectedHash: hashMemoryContent(existingMemory),
-            expectedContent: existingMemory,
-            allowInPlaceFallback: true,
-            content,
-          });
-          committedMemoryContent = content;
-          for (const candidate of toAppend) {
-            successfulCandidates.set(candidate.key, candidate);
+          const { content, droppedDates } = appendPlan;
+          if (budgetChars > 0 && content.length > budgetChars) {
+            const reason = `MEMORY.md budget exceeded (${content.length} > ${budgetChars} chars)`;
+            for (const candidate of toAppend) {
+              reject(candidate.key, "memory budget", reason);
+            }
+            options.consolidation?.logger.info(
+              `memory-core: deferred ${toAppend.length} promotion candidate(s) because ${reason}.`,
+            );
+          } else {
+            // Append fallback keeps the historical read-modify-replace contract. Policy accepts
+            // its external-editor race because OpenClaw writers remain serialized by this sweep lock.
+            await commitMemoryContent({
+              workspaceDir,
+              filePath: memoryWritePath,
+              tempPrefix: `${path.basename(memoryPath)}.promotion`,
+              expectedHash: hashMemoryContent(existingMemory),
+              expectedContent: existingMemory,
+              allowInPlaceFallback: true,
+              content,
+            });
+            committedMemoryContent = content;
+            for (const candidate of toAppend) {
+              successfulCandidates.set(candidate.key, candidate);
+            }
+            compactedDates = droppedDates;
+            appendedCandidates = toAppend.length;
           }
-          compactedDates = droppedDates;
-          appendedCandidates = toAppend.length;
         }
       }
       if (rewriteSkippedReason) {

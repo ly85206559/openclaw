@@ -1,4 +1,3 @@
-// Npm Update Scripts script supports OpenClaw repository automation.
 import { posixAgentWorkspaceScript, windowsAgentWorkspaceScript } from "./agent-workspace.ts";
 import { shellQuote } from "./host-command.ts";
 import {
@@ -95,6 +94,36 @@ function posixPrintLogTailFunction(): string {
     echo "--- $log_file truncated: showing last $max_bytes of $log_bytes bytes ---"
   fi
   tail -c "$max_bytes" "$log_file" 2>/dev/null || true
+}`;
+}
+
+function posixWaitForGatewayScript(command: string): string {
+  return String.raw`wait_for_gateway() {
+  deadline=$((SECONDS + 240))
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    if ${command} gateway status --deep --require-rpc --timeout 15000; then
+      return
+    fi
+    if ! kill -0 "$gateway_pid" 2>/dev/null; then
+      if wait "$gateway_pid"; then gateway_exit_status=0; else gateway_exit_status=$?; fi
+      if [ "$gateway_exit_status" -le 128 ] && [ "$gateway_restart_count" -eq 0 ]; then
+        if tail -c +"$((gateway_launch_log_offset + 1))" "$gateway_log" 2>/dev/null | grep -F -- ${shellQuote(startupMigrationRestartPrefix)} >/dev/null; then
+          gateway_restart_count=1
+          echo "gateway exited after startup migration convergence refusal; restarting once"
+          start_openclaw_gateway
+          continue
+        fi
+      fi
+      print_log_tail "$gateway_log" >&2
+      echo "gateway exited before becoming ready after update (exit $gateway_exit_status)" >&2
+      if [ "$gateway_exit_status" -eq 0 ]; then exit 1; fi
+      exit "$gateway_exit_status"
+    fi
+    sleep 2
+  done
+  print_log_tail "$gateway_log" >&2
+  echo "gateway did not become ready after update" >&2
+  exit 1
 }`;
 }
 
@@ -288,33 +317,7 @@ start_openclaw_gateway() {
   gateway_pid=$!
   sleep 1
 }
-wait_for_gateway() {
-  deadline=$((SECONDS + 240))
-  while [ "$SECONDS" -lt "$deadline" ]; do
-    if "$OPENCLAW_BIN" gateway status --deep --require-rpc --timeout 15000; then
-      return
-    fi
-    if ! kill -0 "$gateway_pid" 2>/dev/null; then
-      if wait "$gateway_pid"; then gateway_exit_status=0; else gateway_exit_status=$?; fi
-      if [ "$gateway_exit_status" -le 128 ] && [ "$gateway_restart_count" -eq 0 ]; then
-        if tail -c +"$((gateway_launch_log_offset + 1))" "$gateway_log" 2>/dev/null | grep -F -- ${shellQuote(startupMigrationRestartPrefix)} >/dev/null; then
-          gateway_restart_count=1
-          echo "gateway exited after startup migration convergence refusal; restarting once"
-          start_openclaw_gateway
-          continue
-        fi
-      fi
-      print_log_tail "$gateway_log" >&2
-      echo "gateway exited before becoming ready after update (exit $gateway_exit_status)" >&2
-      if [ "$gateway_exit_status" -eq 0 ]; then exit 1; fi
-      exit "$gateway_exit_status"
-    fi
-    sleep 2
-  done
-  print_log_tail "$gateway_log" >&2
-  echo "gateway did not become ready after update" >&2
-  exit 1
-}
+${posixWaitForGatewayScript(macosOpenClawCommand)}
 scrub_future_plugin_entries
 stop_openclaw_gateway_processes
 ${posixNpmRegistryEnv(input.npmRegistry)}OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS=1 "$OPENCLAW_BIN" update --tag ${shellQuote(input.updateTarget)} --yes --json --no-restart
@@ -451,33 +454,7 @@ start_openclaw_gateway() {
   )} >/dev/null 2>&1 < /dev/null &
   gateway_pid=$!
 }
-wait_for_gateway() {
-  deadline=$((SECONDS + 240))
-  while [ "$SECONDS" -lt "$deadline" ]; do
-    if openclaw gateway status --deep --require-rpc --timeout 15000; then
-      return
-    fi
-    if ! kill -0 "$gateway_pid" 2>/dev/null; then
-      if wait "$gateway_pid"; then gateway_exit_status=0; else gateway_exit_status=$?; fi
-      if [ "$gateway_exit_status" -le 128 ] && [ "$gateway_restart_count" -eq 0 ]; then
-        if tail -c +"$((gateway_launch_log_offset + 1))" "$gateway_log" 2>/dev/null | grep -F -- ${shellQuote(startupMigrationRestartPrefix)} >/dev/null; then
-          gateway_restart_count=1
-          echo "gateway exited after startup migration convergence refusal; restarting once"
-          start_openclaw_gateway
-          continue
-        fi
-      fi
-      print_log_tail "$gateway_log" >&2
-      echo "gateway exited before becoming ready after update (exit $gateway_exit_status)" >&2
-      if [ "$gateway_exit_status" -eq 0 ]; then exit 1; fi
-      exit "$gateway_exit_status"
-    fi
-    sleep 2
-  done
-  print_log_tail "$gateway_log" >&2
-  echo "gateway did not become ready after update" >&2
-  exit 1
-}
+${posixWaitForGatewayScript("openclaw")}
 scrub_future_plugin_entries
 stop_openclaw_gateway_processes
 ${posixNpmRegistryEnv(input.npmRegistry)}OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS=1 openclaw update --tag ${shellQuote(input.updateTarget)} --yes --json --no-restart
@@ -495,68 +472,48 @@ ${posixAssertAgentOkScript("openclaw", input, "linux", "parallels-npm-update-lin
 
 function posixVersionCheck(command: string, expectedNeedle: string): string {
   const quotedNeedle = shellQuote(expectedNeedle);
-  if (!expectedNeedle) {
-    return `hash -r || true
-version_deadline=$((SECONDS + 60))
-while true; do
-  if version="$(${command} --version 2>&1)"; then
-    version_status=0
-    printf '%s\\n' "$version"
-    break
-  else
-    version_status=$?
-    printf '%s\\n' "$version"
-  fi
-  if [ "$SECONDS" -ge "$version_deadline" ]; then
-    exit "$version_status"
-  fi
-  sleep 2
-done`;
-  }
+  const success = expectedNeedle ? `case "$version" in *${quotedNeedle}*) break ;; esac` : "break";
+  const failure = expectedNeedle
+    ? `if [ "$version_status" -ne 0 ]; then
+      exit "$version_status"
+    fi
+    echo "version mismatch: expected ${expectedNeedle}" >&2
+    exit 1`
+    : 'exit "$version_status"';
   return `hash -r || true
 version_deadline=$((SECONDS + 60))
 while true; do
   if version="$(${command} --version 2>&1)"; then
     version_status=0
     printf '%s\\n' "$version"
-    case "$version" in *${quotedNeedle}*) break ;; esac
+    ${success}
   else
     version_status=$?
     printf '%s\\n' "$version"
   fi
   if [ "$SECONDS" -ge "$version_deadline" ]; then
-    if [ "$version_status" -ne 0 ]; then
-      exit "$version_status"
-    fi
-    echo "version mismatch: expected ${expectedNeedle}" >&2
-    exit 1
+    ${failure}
   fi
   sleep 2
 done`;
 }
 
 function windowsVersionCheck(expectedNeedle: string): string {
-  if (!expectedNeedle) {
-    return `$versionDeadline = (Get-Date).AddSeconds(60)
-while ($true) {
-  $version = Invoke-OpenClaw --version
-  $version
-  if ($LASTEXITCODE -eq 0) { break }
-  if ((Get-Date) -ge $versionDeadline) { throw "openclaw --version failed with exit code $LASTEXITCODE" }
-  Start-Sleep -Seconds 2
-}`;
-  }
-  const expectedPattern = psSingleQuote(`*${expectedNeedle}*`);
-  const mismatch = psSingleQuote(`version mismatch: expected ${expectedNeedle}`);
+  const expectedCondition = expectedNeedle
+    ? ` -and (($version | Out-String) -like ${psSingleQuote(`*${expectedNeedle}*`)})`
+    : "";
+  const failure = expectedNeedle
+    ? `{
+    if ($LASTEXITCODE -ne 0) { throw "openclaw --version failed with exit code $LASTEXITCODE" }
+    throw ${psSingleQuote(`version mismatch: expected ${expectedNeedle}`)}
+  }`
+    : '{ throw "openclaw --version failed with exit code $LASTEXITCODE" }';
   return `$versionDeadline = (Get-Date).AddSeconds(60)
 while ($true) {
   $version = Invoke-OpenClaw --version
   $version
-  if ($LASTEXITCODE -eq 0 -and (($version | Out-String) -like ${expectedPattern})) { break }
-  if ((Get-Date) -ge $versionDeadline) {
-    if ($LASTEXITCODE -ne 0) { throw "openclaw --version failed with exit code $LASTEXITCODE" }
-    throw ${mismatch}
-  }
+  if ($LASTEXITCODE -eq 0${expectedCondition}) { break }
+  if ((Get-Date) -ge $versionDeadline) ${failure}
   Start-Sleep -Seconds 2
 }`;
 }

@@ -1,10 +1,10 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
 import type { ConfigSnapshot } from "../../api/types.ts";
 import {
   CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS,
-  deferred,
   createGatewayHarness,
   createConfigServerMock,
   createDeferredSetServerMock,
@@ -19,9 +19,11 @@ describe("runtime config capability", () => {
         return {
           sourceConfig: {
             agents: {
+              ownership: "explicit",
+              defaults: { systemAgent: { agentId: "reviewer" } },
               entries: {
                 main: {},
-                reviewer: { default: true },
+                reviewer: {},
               },
             },
           },
@@ -47,7 +49,11 @@ describe("runtime config capability", () => {
     expect(runtimeConfig.stageDefaultAgent("main")).toBe(false);
     expect(runtimeConfig.state.configFormDirty).toBe(false);
     expect(runtimeConfig.state.configForm).toEqual({
-      agents: { entries: { main: {}, reviewer: { default: true } } },
+      agents: {
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "reviewer" } },
+        entries: { main: {}, reviewer: {} },
+      },
     });
     runtimeConfig.dispose();
   });
@@ -236,7 +242,7 @@ describe("runtime config capability", () => {
     const client = { request: server.request } as unknown as GatewayBrowserClient;
     const { gateway, publish } = createGatewayHarness(client);
     const runtimeConfig = createRuntimeConfigCapability(gateway);
-    const originalParse = deferred<void>();
+    const originalParse = deferred();
 
     await runtimeConfig.ensureLoaded();
     runtimeConfig.state.configRawOriginalParsePending = originalParse.promise;
@@ -846,7 +852,7 @@ describe("runtime config capability", () => {
     const client = { request: server.request } as unknown as GatewayBrowserClient;
     const { gateway, publish } = createGatewayHarness(client);
     const runtimeConfig = createRuntimeConfigCapability(gateway);
-    const originalParse = deferred<void>();
+    const originalParse = deferred();
 
     await runtimeConfig.ensureLoaded();
     runtimeConfig.state.configRawOriginalParsePending = originalParse.promise;
