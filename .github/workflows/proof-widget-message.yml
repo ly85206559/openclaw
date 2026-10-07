@@ -1,4 +1,4 @@
-name: Widget error message exact-head proof
+name: Widget error message exact-head changed checks
 
 on:
   push:
@@ -8,157 +8,45 @@ permissions:
   contents: read
 
 jobs:
-  proposed-proof:
+  changed-checks:
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          persist-credentials: false
-      - name: Retain reviewed unchanged browser proof fixtures
-        shell: bash
-        run: |
-          set -euo pipefail
-          git rev-parse HEAD
-          for fixture in wrap.stored-proof.ts chat-widget-sandbox.e2e.test.ts proof-widget-message-validator.mjs; do
-            sha256sum "$fixture"
-            cp "$fixture" "$RUNNER_TEMP/$fixture"
-          done
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
           ref: 68412b82c639619add3ded8da9a880611a557086
           fetch-depth: 2
           persist-credentials: false
+      - name: Provide the official guard's missing ripgrep prerequisite
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes ripgrep
+          rg --version
       - uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
           cache-mode: "off"
-      - name: Verify actual product head and record approved generated HTML fingerprint
-        shell: bash
-        env:
-          EXPECTED_HEAD: 68412b82c639619add3ded8da9a880611a557086
-        run: |
-          set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
-          test "$(git rev-parse HEAD:src/canvas/wrap.ts)" = "97acfbbb0ab534c34265f015ff2debda58a00a07"
-          test "$(git rev-parse HEAD:ui/src/components/canvas-widget-view.ts)" = "19fec1286325959462fcf4c19bd6c508ea4ee63b"
-          git show 5dcf668765dea9dfc8101e163804c77ca52bdb53:src/canvas/wrap.ts | cmp - "$RUNNER_TEMP/wrap.stored-proof.ts"
-          pnpm exec oxfmt --check --threads=1 src/canvas/wrap.ts src/canvas/wrap.test.ts ui/src/components/canvas-widget-view.ts ui/src/components/canvas-widget-view.test.ts
-          mkdir -p "$RUNNER_TEMP/widget-message-proposed-files"
-          cp --parents src/canvas/wrap.ts src/canvas/wrap.test.ts ui/src/components/canvas-widget-view.ts ui/src/components/canvas-widget-view.test.ts "$RUNNER_TEMP/widget-message-proposed-files/"
-          sha256sum src/canvas/wrap.ts src/canvas/wrap.test.ts ui/src/components/canvas-widget-view.ts ui/src/components/canvas-widget-view.test.ts | tee "$RUNNER_TEMP/widget-message-proposed-files.sha256.log"
-          git diff --check 5dcf668765dea9dfc8101e163804c77ca52bdb53 HEAD
-          node --import ./scripts/tsx.mjs --input-type=module <<'NODE' | tee "$RUNNER_TEMP/widget-message-proposed-fingerprint.json"
-          import { createHash } from "node:crypto";
-          import assert from "node:assert/strict";
-          import { buildWidgetDocument } from "./src/canvas/wrap.ts";
-          const html = buildWidgetDocument("Status <live>", '<SvG viewBox="0 0 10 10"><circle r="4" /></SvG>');
-          assert.equal(Buffer.byteLength(html), 17747);
-          assert.equal(createHash("sha256").update(html).digest("hex"), "ce1bccdce31139aee6dd75936219737417d19332f04d43ae656a0c9c80beea48");
-          console.log(JSON.stringify({
-            snapshotKind: "exact committed product head",
-            head: process.env.EXPECTED_HEAD,
-            base: "5dcf668765dea9dfc8101e163804c77ca52bdb53",
-            baselineProof: "https://github.com/ly85206559/openclaw/actions/runs/37602473292",
-            bytes: Buffer.byteLength(html),
-            sha256: createHash("sha256").update(html).digest("hex"),
-            byteFixtureAssertion: "approved generated-wrapper expectations; stored HTML unchanged",
-          }));
-          NODE
-      - name: Exact-head full owner regressions and six real Chromium scenes
+      - name: Bind unchanged product head and complete remaining checks
         shell: bash
         env:
           FORCE_COLOR: "0"
-          OPENCLAW_UI_E2E_ARTIFACT_DIR: ${{ runner.temp }}/widget-message-proposed-captures
         run: |
           set -euo pipefail
-          validate_green() {
-            node --input-type=module - "$1" "$2" "$3" <<'NODE'
-          import assert from "node:assert/strict";
-          import { readFile } from "node:fs/promises";
-          const [phase, count, file] = process.argv.slice(2);
-          const prefix = `${process.env.RUNNER_TEMP}/widget-message-proposed-${phase}`;
-          const report = JSON.parse(await readFile(`${prefix}.json`, "utf8"));
-          const audit = JSON.parse(await readFile(`${prefix}-audit.json`, "utf8"));
-          const timeout = await readFile(`${prefix}-audit.json.process-timeout.json`, "utf8").catch((error) => {
-            if (error.code === "ENOENT") return undefined;
-            throw error;
-          });
-          assert.equal(timeout, undefined);
-          assert.equal(report.success, true);
-          assert.equal(report.numPassedTests, Number(count));
-          assert.equal(report.numFailedTests, 0);
-          assert.equal(report.numTodoTests, 0);
-          assert.equal(report.testResults.length, 1);
-          assert.equal(audit.reason, "passed");
-          assert.deepEqual(audit.unhandledErrors, []);
-          assert.equal(audit.modules.length, 1);
-          const result = report.testResults[0];
-          const module = audit.modules[0];
-          assert(result.name.replaceAll("\\", "/").endsWith(`/${file}`));
-          assert.equal(module.name, result.name);
-          assert.equal(result.message, "");
-          assert.deepEqual(module.errors, []);
-          for (const suite of module.suites) assert.deepEqual(suite.errors, []);
-          assert.equal(module.tests.filter((test) => test.state === "passed").length, Number(count));
-          for (const test of module.tests) {
-            assert(["passed", "skipped"].includes(test.state));
-            assert.deepEqual(test.errors, []);
-          }
-          const passed = module.tests.filter((test) => test.state === "passed").map((test) => test.title);
-          if (phase === "wrapper") {
-            assert.deepEqual(passed.toSorted(), [...["ASCII limits", "short Unicode", "surrogate message and source boundaries"].map((label) => `reports bounded runtime errors with ${label} before widget code, deduplicating and limiting reports`), "keeps the wrapped document bytes stable"].toSorted());
-          } else if (phase === "component") {
-            for (const label of ["short Unicode message", "surrogate message boundary", "stored dangling surrogate"]) {
-              assert(passed.includes(`shows a bounded script error and wakes only once with a ${label}`));
-            }
-          } else {
-            assert.deepEqual(passed, ["preserves bounded widget error messages in current and stored wrappers"]);
-          }
-          console.log(JSON.stringify({ phase, passed: Number(count), unhandledErrors: 0 }));
-          NODE
-          }
-          WIDGET_MESSAGE_AUDIT_PATH="$RUNNER_TEMP/widget-message-proposed-wrapper-audit.json" pnpm test src/canvas/wrap.test.ts --maxWorkers=1 --reporter=verbose --reporter=json --reporter="$RUNNER_TEMP/proof-widget-message-validator.mjs" --outputFile="$RUNNER_TEMP/widget-message-proposed-wrapper.json" 2>&1 | tee "$RUNNER_TEMP/widget-message-proposed-wrapper.log"
-          validate_green wrapper 4 src/canvas/wrap.test.ts
-          WIDGET_MESSAGE_AUDIT_PATH="$RUNNER_TEMP/widget-message-proposed-component-audit.json" pnpm test ui/src/components/canvas-widget-view.test.ts --maxWorkers=1 --reporter=verbose --reporter=json --reporter="$RUNNER_TEMP/proof-widget-message-validator.mjs" --outputFile="$RUNNER_TEMP/widget-message-proposed-component.json" 2>&1 | tee "$RUNNER_TEMP/widget-message-proposed-component.log"
-          validate_green component 29 ui/src/components/canvas-widget-view.test.ts
-          cp "$RUNNER_TEMP/wrap.stored-proof.ts" src/canvas/wrap.stored-proof.ts
-          cp "$RUNNER_TEMP/chat-widget-sandbox.e2e.test.ts" ui/src/e2e/chat-widget-sandbox.e2e.test.ts
-          cmp src/canvas/wrap.stored-proof.ts "$RUNNER_TEMP/wrap.stored-proof.ts"
-          cmp ui/src/e2e/chat-widget-sandbox.e2e.test.ts "$RUNNER_TEMP/chat-widget-sandbox.e2e.test.ts"
-          pnpm exec playwright install --with-deps chromium
-          WIDGET_MESSAGE_AUDIT_PATH="$RUNNER_TEMP/widget-message-proposed-browser-audit.json" pnpm test:ui:e2e ui/src/e2e/chat-widget-sandbox.e2e.test.ts --maxWorkers=1 -t 'preserves bounded widget error messages in current and stored wrappers' --reporter=verbose --reporter=json --reporter="$RUNNER_TEMP/proof-widget-message-validator.mjs" --outputFile="$RUNNER_TEMP/widget-message-proposed-browser.json" 2>&1 | tee "$RUNNER_TEMP/widget-message-proposed-browser.log"
-          validate_green browser 1 ui/src/e2e/chat-widget-sandbox.e2e.test.ts
-          test "$(grep -c '"case":"' "$RUNNER_TEMP/widget-message-proposed-browser.log")" = "6"
-          for wrapper in current stored; do
-            for control in short ascii; do
-              grep -E "\"case\":\"$wrapper-$control\".*\"rawBridgeWellFormed\":true.*\"wakeWellFormed\":true.*\"documentReads\":1.*\"wakeCount\":1" "$RUNNER_TEMP/widget-message-proposed-browser.log"
-            done
-          done
-          grep -E '"case":"current-boundary".*"rawBridgeWellFormed":true.*"wakeWellFormed":true.*"documentReads":1.*"wakeCount":1' "$RUNNER_TEMP/widget-message-proposed-browser.log"
-          grep -E '"case":"stored-boundary".*"rawBridgeWellFormed":false.*"wakeWellFormed":true.*"documentReads":1.*"wakeCount":1' "$RUNNER_TEMP/widget-message-proposed-browser.log"
+          test "$(git rev-parse HEAD)" = "68412b82c639619add3ded8da9a880611a557086"
+          test "$(git rev-parse HEAD^)" = "5dcf668765dea9dfc8101e163804c77ca52bdb53"
           test "$(git hash-object src/canvas/wrap.ts)" = "97acfbbb0ab534c34265f015ff2debda58a00a07"
           test "$(git hash-object ui/src/components/canvas-widget-view.ts)" = "19fec1286325959462fcf4c19bd6c508ea4ee63b"
-          git restore -- ui/src/e2e/chat-widget-sandbox.e2e.test.ts
-          rm src/canvas/wrap.stored-proof.ts
-      - name: Inspect and complete actual changed checks
-        shell: bash
-        env:
-          FORCE_COLOR: "0"
-        run: |
-          set -euo pipefail
+          git diff --check 5dcf668765dea9dfc8101e163804c77ca52bdb53 HEAD
           paths=(src/canvas/wrap.ts src/canvas/wrap.test.ts ui/src/components/canvas-widget-view.ts ui/src/components/canvas-widget-view.test.ts)
-          pnpm changed:lanes --json --base 5dcf668765dea9dfc8101e163804c77ca52bdb53 --head HEAD -- "${paths[@]}" 2>&1 | tee "$RUNNER_TEMP/widget-message-proposed-lanes.log"
-          node scripts/check-changed.mjs --dry-run --base 5dcf668765dea9dfc8101e163804c77ca52bdb53 --head HEAD -- "${paths[@]}" 2>&1 | tee "$RUNNER_TEMP/widget-message-proposed-plan.log"
-          node scripts/check-changed.mjs --timed --base 5dcf668765dea9dfc8101e163804c77ca52bdb53 --head HEAD -- "${paths[@]}" 2>&1 | tee "$RUNNER_TEMP/widget-message-proposed-checks.log"
+          pnpm changed:lanes --json --base 5dcf668765dea9dfc8101e163804c77ca52bdb53 --head HEAD -- "${paths[@]}" 2>&1 | tee "$RUNNER_TEMP/widget-message-final-lanes.log"
+          node scripts/check-changed.mjs --dry-run --base 5dcf668765dea9dfc8101e163804c77ca52bdb53 --head HEAD -- "${paths[@]}" 2>&1 | tee "$RUNNER_TEMP/widget-message-final-plan.log"
+          node scripts/check-changed.mjs --timed --base 5dcf668765dea9dfc8101e163804c77ca52bdb53 --head HEAD -- "${paths[@]}" 2>&1 | tee "$RUNNER_TEMP/widget-message-final-checks.log"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         if: always()
         with:
-          name: widget-message-proposed
+          name: widget-message-exact-head-checks
           path: |
-            ${{ runner.temp }}/widget-message-proposed-*.log
-            ${{ runner.temp }}/widget-message-proposed-*.json
-            ${{ runner.temp }}/widget-message-proposed-captures
-            ${{ runner.temp }}/widget-message-proposed-files
-            ${{ runner.temp }}/proof-widget-message-validator.mjs
+            ${{ runner.temp }}/widget-message-final-*.log
           if-no-files-found: error
