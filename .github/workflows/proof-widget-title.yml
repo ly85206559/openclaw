@@ -8,37 +8,87 @@ permissions:
   contents: read
 
 jobs:
-  baseline-red:
+  boundary-proof:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: baseline
+            candidate: 89fab966a2fe99b9823467d2891c41a3fbf65161
+            expected-exit: "1"
+          - variant: fixed
+            candidate: 16c01ab94dcbf42eda1bd5c6ca6bd612bac1ad9d
+            expected-exit: "0"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Retain temporary browser harness
+        shell: bash
+        run: cp ui/src/e2e/chat-widget-sandbox.e2e.test.ts "$RUNNER_TEMP/widget-title-browser.test.ts"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ matrix.candidate }}
+          persist-credentials: false
       - uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
-      - name: Observe actual registered component baseline
+      - name: Verify exact source and registered component
         shell: bash
         env:
           FORCE_COLOR: "0"
+          EXPECTED_HEAD: ${{ matrix.candidate }}
+          EXPECTED_EXIT: ${{ matrix.expected-exit }}
+          VARIANT: ${{ matrix.variant }}
         run: |
           set -euo pipefail
           node --version
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
           git rev-parse HEAD
           sha256sum ui/src/components/canvas-widget-view{,.test}.ts
+          pnpm exec oxfmt --check ui/src/components/canvas-widget-view.ts ui/src/components/canvas-widget-view.test.ts
           started=$(date +%s)
           set +e
-          pnpm test ui/src/components/canvas-widget-view.test.ts --maxWorkers=1 --reporter=verbose 2>&1 | tee "$RUNNER_TEMP/widget-title-red.log"
+          pnpm test ui/src/components/canvas-widget-view.test.ts --maxWorkers=1 --reporter=verbose 2>&1 | tee "$RUNNER_TEMP/widget-title-$VARIANT-component.log"
           result=${PIPESTATUS[0]}
           set -e
-          echo "baseline_test_exit=$result wall_seconds=$(($(date +%s)-started))"
-          test "$result" -ne 0
-          rg 'surrogate title boundary' "$RUNNER_TEMP/widget-title-red.log"
-          rg 'Tests.*1 failed' "$RUNNER_TEMP/widget-title-red.log"
+          echo "component_test_exit=$result wall_seconds=$(($(date +%s)-started))"
+          test "$result" = "$EXPECTED_EXIT"
+          if [[ "$VARIANT" == baseline ]]; then
+            grep 'surrogate title boundary' "$RUNNER_TEMP/widget-title-$VARIANT-component.log"
+            grep 'Tests.*1 failed' "$RUNNER_TEMP/widget-title-$VARIANT-component.log"
+          else
+            pnpm tsgo:ui
+          fi
+      - name: Real Chromium iframe before or after
+        shell: bash
+        env:
+          FORCE_COLOR: "0"
+          EXPECTED_EXIT: ${{ matrix.expected-exit }}
+          VARIANT: ${{ matrix.variant }}
+        run: |
+          set -euo pipefail
+          cp "$RUNNER_TEMP/widget-title-browser.test.ts" ui/src/e2e/chat-widget-sandbox.e2e.test.ts
+          pnpm exec playwright install --with-deps chromium
+          started=$(date +%s)
+          set +e
+          pnpm test:ui:e2e ui/src/e2e/chat-widget-sandbox.e2e.test.ts --maxWorkers=1 -t 'preserves bounded widget titles in real iframe runtime-error wakes' 2>&1 | tee "$RUNNER_TEMP/widget-title-$VARIANT-browser.log"
+          result=${PIPESTATUS[0]}
+          set -e
+          echo "browser_test_exit=$result wall_seconds=$(($(date +%s)-started))"
+          test "$result" = "$EXPECTED_EXIT"
+          grep '"case":"short".*"wellFormed":true' "$RUNNER_TEMP/widget-title-$VARIANT-browser.log"
+          grep '"case":"ascii".*"wellFormed":true' "$RUNNER_TEMP/widget-title-$VARIANT-browser.log"
+          if [[ "$VARIANT" == baseline ]]; then
+            grep '"case":"boundary".*"wellFormed":false' "$RUNNER_TEMP/widget-title-$VARIANT-browser.log"
+          else
+            grep '"case":"boundary".*"wellFormed":true' "$RUNNER_TEMP/widget-title-$VARIANT-browser.log"
+          fi
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         if: always()
         with:
-          name: widget-title-baseline-red
-          path: ${{ runner.temp }}/widget-title-red.log
+          name: widget-title-${{ matrix.variant }}
+          path: ${{ runner.temp }}/widget-title-${{ matrix.variant }}-*.log
           if-no-files-found: error

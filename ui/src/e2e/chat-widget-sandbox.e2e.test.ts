@@ -182,6 +182,78 @@ async function startProtectedSource(html: string) {
 }
 
 suite.define(() => {
+  it("preserves bounded widget titles in real iframe runtime-error wakes", async () => {
+    const sandboxServer = createSandboxHostHttpServer();
+    const sandboxPort = await listen(sandboxServer);
+    const sandboxUrl = buildSandboxHostPath({ blockDescendantFrames: true });
+    const rows = [
+      { id: "short", title: "Status 😀", expected: "Status 😀" },
+      { id: "ascii", title: "a".repeat(81), expected: "a".repeat(80) },
+      { id: "boundary", title: "a".repeat(79) + "😀", expected: "a".repeat(79) },
+    ];
+    try {
+      for (const row of rows) {
+        const docId = `widget-title-proof-${row.id}`;
+        const proofSession = `agent:main:widget-title-proof-${row.id}`;
+        const html = buildWidgetDocument(
+          row.title,
+          `<button id="fail">Report error</button><script>
+            document.getElementById("fail").addEventListener("click", () => {
+              throw new Error("Widget failed");
+            });
+          </script>`,
+        );
+        await suite.withPage(
+          {
+            viewport: { width: 1200, height: 900 },
+            serviceWorkers: "block",
+            permissions: ["local-network-access"],
+          },
+          async ({ page }) => {
+            const gateway = await installMockGateway(page, {
+              sessionKey: proofSession,
+              featureMethods: [...defaultControlUiFeatureMethods, "canvas.document.view", "wake"],
+              historyMessages: [{
+                role: "assistant",
+                content: [{
+                  type: "text",
+                  text: `[embed ref="${docId}" title="${row.title}" height="160" /]`,
+                }],
+                timestamp: Date.now(),
+              }],
+              methodResponses: {
+                "canvas.document.view": { html, sandboxUrl, sandboxPort },
+                wake: { ok: true },
+              },
+            });
+            await page.goto(controlUiSessionUrl(suite.server.baseUrl, proofSession));
+            const outer = page.locator(".chat-tool-card__preview-frame");
+            const inner = outer.contentFrame().frameLocator("iframe");
+            await inner.getByRole("button", { name: "Report error" }).click();
+            const sent = asRecord((await gateway.waitForRequest("wake")).params);
+            const text = String(sent.text);
+            console.log(JSON.stringify({
+              case: row.id,
+              inputUnits: row.title.length,
+              expectedUnits: row.expected.length,
+              wellFormed: text.isWellFormed(),
+              wake: sent,
+            }));
+            expect(sent).toMatchObject({ mode: "now", sessionKey: proofSession });
+            expect(text.startsWith(
+              `Inline widget "${row.expected}" (${docId}) threw a script error after rendering: Widget failed`,
+            )).toBe(true);
+            expect(text.isWellFormed()).toBe(true);
+            expect(await gateway.getRequests("canvas.document.view")).toHaveLength(1);
+            expect(await gateway.getRequests("wake")).toHaveLength(1);
+          },
+        );
+      }
+    } finally {
+      await runQaGatewayFixture(() => close(sandboxServer));
+    }
+  });
+
   it("loads protected widgets in chat and preserves isolated interactive frames", async () => {
     const html = widgetDocument();
     const sandboxServer = createSandboxHostHttpServer();
