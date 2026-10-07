@@ -25,6 +25,14 @@ describe("real mock voice-call HTTP webhook boundary", () => {
     config.inboundPolicy = policy;
     const provider = new MockProvider();
     const hangup = vi.spyOn(provider, "hangupCall");
+    const greetingFinished = Promise.withResolvers<void>();
+    const realStartListening = provider.startListening.bind(provider);
+    vi.spyOn(provider, "startListening").mockImplementation(async (input) => {
+      await realStartListening(input);
+      if (input.providerCallId === "mock-open-call.answered") {
+        greetingFinished.resolve();
+      }
+    });
     const manager = registerTestManagerCleanup(new CallManager(config, createTestStorePath()));
     const server = new VoiceCallWebhookServer(
       createTestPluginServiceScheduler(),
@@ -49,7 +57,7 @@ describe("real mock voice-call HTTP webhook boundary", () => {
       for (const [type, expectedState] of [
         ["call.initiated", "ringing"],
         ["call.ringing", "ringing"],
-        ["call.answered", "answered"],
+        ["call.answered", "listening"],
         ["call.active", "active"],
       ] as const) {
         const providerCallId = `mock-${policy}-${type}`;
@@ -65,6 +73,9 @@ describe("real mock voice-call HTTP webhook boundary", () => {
         };
         const hangupsBefore = hangup.mock.calls.length;
         await post(event);
+        if (policy === "open" && admitsInbound && type === "call.answered") {
+          await greetingFinished.promise;
+        }
         const record = await manager.getCallFromMemoryOrStore(providerCallId);
         const admitted = manager.getActiveCalls().length;
         console.log("MOCK_CALL_HTTP_PROOF", JSON.stringify({
