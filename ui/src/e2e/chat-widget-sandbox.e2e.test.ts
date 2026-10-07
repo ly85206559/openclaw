@@ -206,7 +206,8 @@ suite.define(() => {
         await suite.withPage(
           {
             viewport: { width: 1200, height: 900 },
-            serviceWorkers: "block",
+            // Playwright's blocker reads a forbidden API in the opaque child iframe.
+            serviceWorkers: "allow",
             permissions: ["local-network-access"],
           },
           async ({ page }) => {
