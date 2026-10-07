@@ -1,0 +1,75 @@
+name: Table multiline real CLI inventory proof
+
+on:
+  push:
+    branches: [codex/proof-table-real-cli-20261007]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  proof:
+    if: github.repository == 'ly85206559/openclaw'
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - stage: base
+            repository: openclaw/openclaw
+            sha: fa420c6eb2752a78430cef1f2e3bf15cc17d8e9e
+          - stage: head
+            repository: ly85206559/openclaw
+            sha: 2a34ff24e0f315ce108823c4101a48dd4500e329
+    steps:
+      - name: Check out fork-only proof tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: tooling
+          persist-credentials: false
+      - name: Check out independently frozen actual source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ${{ matrix.repository }}
+          ref: ${{ matrix.sha }}
+          path: source
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 26.8.2
+      - name: Verify source identity and install frozen dependencies
+        shell: bash
+        working-directory: source
+        env:
+          EXPECTED_SHA: ${{ matrix.sha }}
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/table-real-cli/${{ matrix.stage }}"
+          test "$(git rev-parse HEAD)" = "${EXPECTED_SHA}"
+          git diff --exit-code
+          corepack enable
+          pnpm install --frozen-lockfile > "${RUNNER_TEMP}/table-real-cli/${{ matrix.stage }}/install.log" 2>&1
+          test "$(pnpm --version)" = 12.5.1
+          test "$(node --version)" = v26.8.2
+          printf 'node=%s\npnpm=%s\npython=%s\n' "$(node --version)" "$(pnpm --version)" "$(python3 --version)" > "${RUNNER_TEMP}/table-real-cli/${{ matrix.stage }}/toolchain.txt"
+          git diff --exit-code
+      - name: Execute real inventory CLI, expected regression, and controls
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tooling/.github/proof/table-real-cli.py \
+            --source "${GITHUB_WORKSPACE}/source" \
+            --output "${RUNNER_TEMP}/table-real-cli/${{ matrix.stage }}" \
+            --stage "${{ matrix.stage }}" \
+            2>&1 | tee "${RUNNER_TEMP}/table-real-cli/${{ matrix.stage }}/proof.log"
+      - name: Retain exact-source synthetic raw CLI outcomes
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: table-real-cli-${{ matrix.stage }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/table-real-cli/${{ matrix.stage }}/
+          if-no-files-found: error
+          retention-days: 30
