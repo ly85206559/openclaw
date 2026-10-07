@@ -162,29 +162,32 @@ describe("renderTable", () => {
     ["CRLF", "\r\n", "", ""],
     ["colored CRLF", "\r\n", "\x1b[31m", "\x1b[39m"],
     ["linked LF", "\n", "\x1b]8;;https://example.com/\x07", "\x1b]8;;\x07"],
-  ])("sizes multiline %s headers and cells by their widest line", (_label, separator, open, close) => {
-    const out = renderTable({
-      border: "ascii",
-      columns: [
-        { key: "A", header: ["abc", "def"].join(separator) },
-        { key: "B", header: "B" },
-      ],
-      rows: [{ A: "x", B: `${open}abc${separator}def${close}` }],
-    });
+  ])(
+    "sizes multiline %s headers and cells by their widest line",
+    (_label, separator, open, close) => {
+      const out = renderTable({
+        border: "ascii",
+        columns: [
+          { key: "A", header: ["abc", "def"].join(separator) },
+          { key: "B", header: "B" },
+        ],
+        rows: [{ A: "x", B: `${open}abc${separator}def${close}` }],
+      });
 
-    expect(stripAnsi(out)).toBe(
-      [
-        "+-----+-----+",
-        "| abc | B   |",
-        "| def |     |",
-        "+-----+-----+",
-        "| x   | abc |",
-        "|     | def |",
-        "+-----+-----+",
-        "",
-      ].join("\n"),
-    );
-  });
+      expect(stripAnsi(out)).toBe(
+        [
+          "+-----+-----+",
+          "| abc | B   |",
+          "| def |     |",
+          "+-----+-----+",
+          "| x   | abc |",
+          "|     | def |",
+          "+-----+-----+",
+          "",
+        ].join("\n"),
+      );
+    },
+  );
 
   it("keeps newlines inside an OSC payload out of table line metrics", () => {
     const open = "\x1b]8;id=line\nmetadata;https://example.com/\x07";
