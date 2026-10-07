@@ -1,0 +1,104 @@
+name: Slack startup auth conflict refresh proof
+
+on:
+  push:
+    branches: [codex/proof-slack-conflict-20261007]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  slack-auth-proof:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      BASE_SHA: c91f3e11d97583ce8631f2f0064d1314f93a3988
+      TARGET_SHA: 97653fbec624cc1709f3e072e81f44955bf0fa7a
+      OLD_SHA: 0a458f9d8df3ecd21f86b1c1cfe7f9a067f8c970
+      CI: "true"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Preserve proof and verify immutable candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/slack-proof"
+          cp .github/proof/pr-155846-slack-runtime-refresh.mts "${RUNNER_TEMP}/slack-proof/harness.mts"
+          git fetch --no-tags https://github.com/openclaw/openclaw.git "${BASE_SHA}" "${OLD_SHA}"
+          git fetch --no-tags https://github.com/ly85206559/openclaw.git "${TARGET_SHA}"
+          test "$(git rev-parse "${TARGET_SHA}^1")" = "${OLD_SHA}"
+          test "$(git rev-parse "${TARGET_SHA}^2")" = "${BASE_SHA}"
+          test "$(git merge-base "${BASE_SHA}" "${TARGET_SHA}")" = "${BASE_SHA}"
+          test "$(git diff --name-only "${BASE_SHA}...${TARGET_SHA}")" = "$(printf '%s\n' extensions/slack/src/client.test.ts extensions/slack/src/client.ts)"
+          git diff --check "${BASE_SHA}...${TARGET_SHA}"
+          git checkout --detach "${TARGET_SHA}"
+          test "$(git rev-parse HEAD)" = "${TARGET_SHA}"
+          git show "${TARGET_SHA}:extensions/slack/src/client.test.ts" > "${RUNNER_TEMP}/slack-proof/regression.test.ts"
+          printf 'base=%s\nhead=%s\ntree=%s\n' "${BASE_SHA}" "${TARGET_SHA}" "$(git rev-parse HEAD^{tree})" | tee "${RUNNER_TEMP}/slack-proof/source-identity.txt"
+          for file in package.json pnpm-lock.yaml pnpm-workspace.yaml extensions/slack/package.json scripts/run-vitest.mjs scripts/tsx.mjs; do
+            test "$(git rev-parse "${BASE_SHA}:${file}")" = "$(git rev-parse "${TARGET_SHA}:${file}")"
+          done
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 26.8.2
+      - name: Prepare clean frozen dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          corepack enable
+          pnpm install --frozen-lockfile
+          node --version | tee "${RUNNER_TEMP}/slack-proof/node-version.txt"
+          pnpm --version | tee "${RUNNER_TEMP}/slack-proof/pnpm-version.txt"
+          test "$(pnpm --version)" = 12.5.1
+      - name: Baseline regression fails for the clock domain
+        shell: bash
+        run: |
+          set -euo pipefail
+          git checkout --detach "${BASE_SHA}"
+          cp "${RUNNER_TEMP}/slack-proof/regression.test.ts" extensions/slack/src/client.test.ts
+          set +e
+          /usr/bin/time -f '%e' -o "${RUNNER_TEMP}/slack-proof/red-wall.txt" node scripts/run-vitest.mjs extensions/slack/src/client.test.ts -t "keeps the startup auth retry budget stable" > "${RUNNER_TEMP}/slack-proof/red.log" 2>&1
+          result=$?
+          set -e
+          printf '%s\n' "${result}" | tee "${RUNNER_TEMP}/slack-proof/red-exit.txt"
+          cat "${RUNNER_TEMP}/slack-proof/red.log"
+          test "${result}" = 1
+          grep -q '2 failed' "${RUNNER_TEMP}/slack-proof/red.log"
+          grep -q '95000' "${RUNNER_TEMP}/slack-proof/red.log"
+          git restore --source="${BASE_SHA}" --worktree -- extensions/slack/src/client.test.ts
+          git diff --exit-code
+      - name: Real baseline SDK HTTP defect and success control
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${BASE_SHA}"
+          cp "${RUNNER_TEMP}/slack-proof/harness.mts" .proof-slack-runtime.mts
+          PROOF_EXPECT_FIXED=0 PROOF_EXACT_SHA="${BASE_SHA}" PROOF_OUTPUT="${RUNNER_TEMP}/slack-proof/before.json" timeout 240s node --import ./scripts/tsx.mjs .proof-slack-runtime.mts | tee "${RUNNER_TEMP}/slack-proof/before.log"
+          rm .proof-slack-runtime.mts
+          test -z "$(git status --porcelain=v1)"
+      - name: Exact candidate tests and real SDK HTTP behavior
+        shell: bash
+        run: |
+          set -euo pipefail
+          git checkout --detach "${TARGET_SHA}"
+          test "$(git rev-parse HEAD)" = "${TARGET_SHA}"
+          pnpm exec oxfmt --check extensions/slack/src/client.ts extensions/slack/src/client.test.ts
+          pnpm exec oxlint --config .oxlintrc.json extensions/slack/src/client.ts extensions/slack/src/client.test.ts
+          /usr/bin/time -f '%e' -o "${RUNNER_TEMP}/slack-proof/green-wall.txt" pnpm test extensions/slack/src/client.test.ts --maxWorkers=1 | tee "${RUNNER_TEMP}/slack-proof/green.log"
+          cp "${RUNNER_TEMP}/slack-proof/harness.mts" .proof-slack-runtime.mts
+          PROOF_EXPECT_FIXED=1 PROOF_EXACT_SHA="${TARGET_SHA}" PROOF_OUTPUT="${RUNNER_TEMP}/slack-proof/after.json" timeout 240s node --import ./scripts/tsx.mjs .proof-slack-runtime.mts | tee "${RUNNER_TEMP}/slack-proof/after.log"
+          rm .proof-slack-runtime.mts
+          git diff --check "${BASE_SHA}...${TARGET_SHA}"
+          test -z "$(git status --porcelain=v1)"
+          git rev-parse HEAD HEAD^{tree} | tee "${RUNNER_TEMP}/slack-proof/final-source-identity.txt"
+      - name: Preserve receipts and raw outcomes
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: slack-auth-conflict-proof-${{ github.run_id }}
+          path: ${{ runner.temp }}/slack-proof/
+          if-no-files-found: error
+          retention-days: 30
