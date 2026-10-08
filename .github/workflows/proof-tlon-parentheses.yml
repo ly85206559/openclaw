@@ -1,6 +1,8 @@
 name: Secretless Tlon parentheses proof
 
 on:
+  push:
+    branches: [codex/proof-tlon-parentheses-20261008]
   workflow_dispatch:
     inputs:
       target_sha:
@@ -19,6 +21,10 @@ on:
 permissions:
   contents: read
 
+env:
+  PROOF_TARGET: ${{ inputs.target_sha || 'a9d68fff897f4e89cbff757ac370611564a7c133' }}
+  PROOF_EXPECTATION: ${{ inputs.expectation || 'baseline' }}
+
 jobs:
   proof:
     if: github.repository == 'ly85206559/openclaw'
@@ -32,8 +38,8 @@ jobs:
           persist-credentials: false
       - name: Save identical harness and tests outside subject checkout
         env:
-          TARGET_SHA: ${{ inputs.target_sha }}
-          EXPECTATION: ${{ inputs.expectation }}
+          TARGET_SHA: ${{ env.PROOF_TARGET }}
+          EXPECTATION: ${{ env.PROOF_EXPECTATION }}
         run: |
           set -euo pipefail
           [[ "$TARGET_SHA" =~ ^[a-f0-9]{40}$ ]]
@@ -46,11 +52,11 @@ jobs:
       - name: Checkout exact product source without proof overlays
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.target_sha }}
+          ref: ${{ env.PROOF_TARGET }}
           persist-credentials: false
       - name: Bind subject and add only frozen test overlay
         env:
-          TARGET_SHA: ${{ inputs.target_sha }}
+          TARGET_SHA: ${{ env.PROOF_TARGET }}
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$TARGET_SHA"
@@ -70,7 +76,7 @@ jobs:
           frozen-lockfile: "true"
       - name: Collect complete owner regression test results
         env:
-          EXPECTATION: ${{ inputs.expectation }}
+          EXPECTATION: ${{ env.PROOF_EXPECTATION }}
         run: |
           set -euo pipefail
           set +e
@@ -87,8 +93,8 @@ jobs:
           sha256sum -c .tlon-proof/story-source-before.txt
       - name: Exercise built CLI to synthetic HTTP boundary
         env:
-          EXPECTATION: ${{ inputs.expectation }}
-          PROOF_SOURCE_SHA: ${{ inputs.target_sha }}
+          EXPECTATION: ${{ env.PROOF_EXPECTATION }}
+          PROOF_SOURCE_SHA: ${{ env.PROOF_TARGET }}
         run: |
           set -euo pipefail
           node "$RUNNER_TEMP/tlon-proof-tools/harness.mjs" --expect "$EXPECTATION" --out .tlon-proof/cli > .tlon-proof/cli.log 2>&1
@@ -98,7 +104,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: tlon-${{ inputs.expectation }}-${{ inputs.target_sha }}
+          name: tlon-${{ env.PROOF_EXPECTATION }}-${{ env.PROOF_TARGET }}
           path: .tlon-proof
           include-hidden-files: true
           if-no-files-found: error
