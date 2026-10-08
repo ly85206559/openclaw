@@ -103,6 +103,11 @@ jobs:
         if: env.PROOF_EXPECTATION == 'fixed'
         run: |
           set -euo pipefail
+          if ! command -v rg >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install --no-install-recommends --yes ripgrep
+          fi
+          rg --version
           node scripts/check-changed.mjs --dry-run -- extensions/tlon/src/urbit/story.ts extensions/tlon/src/urbit/story.test.ts > .tlon-proof/changed-plan.log 2>&1
           node scripts/check-changed.mjs -- extensions/tlon/src/urbit/story.ts extensions/tlon/src/urbit/story.test.ts > .tlon-proof/changed-checks.log 2>&1
           pnpm test extensions/tlon/src/outbound.loopback.test.ts extensions/tlon/src/urbit/send.test.ts extensions/tlon/src/channel.outbound.test.ts --reporter=json --outputFile="$PWD/.tlon-proof/sibling-tests.json" > .tlon-proof/sibling-tests.log 2>&1
