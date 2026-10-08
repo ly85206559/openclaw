@@ -24,6 +24,7 @@ permissions:
 env:
   PROOF_TARGET: ${{ inputs.target_sha || '9a06576ccd33dacf8fb7f00d86f15879c2dd696f' }}
   PROOF_EXPECTATION: ${{ inputs.expectation || 'fixed' }}
+  PROOF_BASE: 54bd6ecee1897f51b2963b6ea4c165a356e2d805
 
 jobs:
   proof:
@@ -54,6 +55,7 @@ jobs:
         with:
           ref: ${{ env.PROOF_TARGET }}
           persist-credentials: false
+          fetch-depth: 3
       - name: Bind subject and add only frozen test overlay
         env:
           TARGET_SHA: ${{ env.PROOF_TARGET }}
@@ -68,6 +70,17 @@ jobs:
           git diff --check
           git diff --name-only | tee .tlon-proof/overlay-files.txt
           test "$(git diff --name-only)" = extensions/tlon/src/urbit/story.test.ts || test -z "$(git diff --name-only)"
+      - name: Bind frozen upstream base for changed checks
+        if: env.PROOF_EXPECTATION == 'fixed'
+        env:
+          BASE_SHA: ${{ env.PROOF_BASE }}
+          TARGET_SHA: ${{ env.PROOF_TARGET }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=1 https://github.com/openclaw/openclaw.git "$BASE_SHA:refs/remotes/origin/main"
+          test "$(git rev-parse origin/main)" = "$BASE_SHA"
+          test "$(git merge-base origin/main HEAD)" = "$BASE_SHA"
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
       - name: Install pinned supported toolchain and frozen dependencies
         uses: ./.github/actions/setup-node-env
         with:
