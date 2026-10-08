@@ -9,7 +9,7 @@ on:
         description: Exact subject commit (40 lowercase hex characters)
         required: true
         type: string
-        default: a9d68fff897f4e89cbff757ac370611564a7c133
+        default: 9a06576ccd33dacf8fb7f00d86f15879c2dd696f
       expectation:
         description: Baseline demonstrates four defects; fixed preserves all controls
         required: true
@@ -22,8 +22,8 @@ permissions:
   contents: read
 
 env:
-  PROOF_TARGET: ${{ inputs.target_sha || 'a9d68fff897f4e89cbff757ac370611564a7c133' }}
-  PROOF_EXPECTATION: ${{ inputs.expectation || 'baseline' }}
+  PROOF_TARGET: ${{ inputs.target_sha || '9a06576ccd33dacf8fb7f00d86f15879c2dd696f' }}
+  PROOF_EXPECTATION: ${{ inputs.expectation || 'fixed' }}
 
 jobs:
   proof:
@@ -86,6 +86,13 @@ jobs:
           printf '%s\n' "$test_exit" | tee .tlon-proof/owner-tests-exit.txt
           if [[ "$EXPECTATION" == baseline ]]; then test "$test_exit" = 1; else test "$test_exit" = 0; fi
           node "$RUNNER_TEMP/tlon-proof-tools/harness.mjs" --expect "$EXPECTATION" --test-report .tlon-proof/owner-tests.json --out .tlon-proof
+      - name: Run touched-surface checks and sender siblings
+        if: env.PROOF_EXPECTATION == 'fixed'
+        run: |
+          set -euo pipefail
+          node scripts/check-changed.mjs --dry-run -- extensions/tlon/src/urbit/story.ts extensions/tlon/src/urbit/story.test.ts > .tlon-proof/changed-plan.log 2>&1
+          node scripts/check-changed.mjs -- extensions/tlon/src/urbit/story.ts extensions/tlon/src/urbit/story.test.ts > .tlon-proof/changed-checks.log 2>&1
+          pnpm test extensions/tlon/src/outbound.loopback.test.ts extensions/tlon/src/urbit/send.test.ts extensions/tlon/src/channel.outbound.test.ts --reporter=json --outputFile="$PWD/.tlon-proof/sibling-tests.json" > .tlon-proof/sibling-tests.log 2>&1
       - name: Build genuine CLI and registered plugins
         run: |
           set -euo pipefail
