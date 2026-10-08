@@ -1,0 +1,104 @@
+name: Secretless Tlon parentheses proof
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_sha:
+        description: Exact subject commit (40 lowercase hex characters)
+        required: true
+        type: string
+        default: a9d68fff897f4e89cbff757ac370611564a7c133
+      expectation:
+        description: Baseline demonstrates four defects; fixed preserves all controls
+        required: true
+        type: choice
+        options:
+          - baseline
+          - fixed
+
+permissions:
+  contents: read
+
+jobs:
+  proof:
+    if: github.repository == 'ly85206559/openclaw'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Freeze proof tools and regression fixtures
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Save identical harness and tests outside subject checkout
+        env:
+          TARGET_SHA: ${{ inputs.target_sha }}
+          EXPECTATION: ${{ inputs.expectation }}
+        run: |
+          set -euo pipefail
+          [[ "$TARGET_SHA" =~ ^[a-f0-9]{40}$ ]]
+          [[ "$EXPECTATION" == baseline || "$EXPECTATION" == fixed ]]
+          mkdir -p "$RUNNER_TEMP/tlon-proof-tools"
+          cp scripts/tmp/tlon-parentheses-proof.mjs "$RUNNER_TEMP/tlon-proof-tools/harness.mjs"
+          cp extensions/tlon/src/urbit/story.test.ts "$RUNNER_TEMP/tlon-proof-tools/story.test.ts"
+          sha256sum "$RUNNER_TEMP/tlon-proof-tools/"*
+          git rev-parse HEAD
+      - name: Checkout exact product source without proof overlays
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.target_sha }}
+          persist-credentials: false
+      - name: Bind subject and add only frozen test overlay
+        env:
+          TARGET_SHA: ${{ inputs.target_sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          mkdir -p .tlon-proof
+          git rev-parse HEAD:extensions/tlon/src/urbit/story.ts | tee .tlon-proof/story-blob.txt
+          sha256sum extensions/tlon/src/urbit/story.ts > .tlon-proof/story-source-before.txt
+          cp "$RUNNER_TEMP/tlon-proof-tools/story.test.ts" extensions/tlon/src/urbit/story.test.ts
+          sha256sum extensions/tlon/src/urbit/story.test.ts "$RUNNER_TEMP/tlon-proof-tools/harness.mjs" | tee .tlon-proof/proof-inputs.txt
+          git diff --check
+          git diff --name-only | tee .tlon-proof/overlay-files.txt
+          test "$(git diff --name-only)" = extensions/tlon/src/urbit/story.test.ts || test -z "$(git diff --name-only)"
+      - name: Install pinned supported toolchain and frozen dependencies
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: 24.21.0
+          cache-mode: "off"
+          frozen-lockfile: "true"
+      - name: Collect complete owner regression test results
+        env:
+          EXPECTATION: ${{ inputs.expectation }}
+        run: |
+          set -euo pipefail
+          set +e
+          pnpm test extensions/tlon/src/urbit/story.test.ts --reporter=json --outputFile="$PWD/.tlon-proof/owner-tests.json" > .tlon-proof/owner-tests.log 2>&1
+          test_exit=$?
+          set -e
+          printf '%s\n' "$test_exit" | tee .tlon-proof/owner-tests-exit.txt
+          if [[ "$EXPECTATION" == baseline ]]; then test "$test_exit" = 1; else test "$test_exit" = 0; fi
+          node "$RUNNER_TEMP/tlon-proof-tools/harness.mjs" --expect "$EXPECTATION" --test-report .tlon-proof/owner-tests.json --out .tlon-proof
+      - name: Build genuine CLI and registered plugins
+        run: |
+          set -euo pipefail
+          pnpm build > .tlon-proof/build.log 2>&1
+          sha256sum -c .tlon-proof/story-source-before.txt
+      - name: Exercise built CLI to synthetic HTTP boundary
+        env:
+          EXPECTATION: ${{ inputs.expectation }}
+          PROOF_SOURCE_SHA: ${{ inputs.target_sha }}
+        run: |
+          set -euo pipefail
+          node "$RUNNER_TEMP/tlon-proof-tools/harness.mjs" --expect "$EXPECTATION" --out .tlon-proof/cli > .tlon-proof/cli.log 2>&1
+          sha256sum -c .tlon-proof/story-source-before.txt
+          git diff --check
+      - name: Preserve synthetic payloads, command exits, coverage and cleanup
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: tlon-${{ inputs.expectation }}-${{ inputs.target_sha }}
+          path: .tlon-proof
+          include-hidden-files: true
+          if-no-files-found: error
