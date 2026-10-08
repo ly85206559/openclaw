@@ -56,7 +56,7 @@ const { disposePluginRegistryInstances } = await import("./src/plugins/runtime.j
 const registry = loadOpenClawPlugins({
   config: cfg, onlyPluginIds: ["telegram"], mode: "full",
   toolDiscovery: control === "tool-discovery", preferBuiltPluginArtifacts: false,
-  activate: false, cache: false, runtimeSideEffects: false, throwOnLoadError: true,
+  activate: false, cache: false, runtimeSideEffects: control === "full", throwOnLoadError: true,
 });
 try {
   const owner = registry.plugins.find((p) => p.id === "telegram");
