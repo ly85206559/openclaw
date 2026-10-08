@@ -1,5 +1,8 @@
-import { defineBundledChannelEntry } from "openclaw/plugin-sdk/channel-entry-contract";
-import { registerTelegramMiniApp } from "./miniapp-api.js";
+import {
+  defineBundledChannelEntry,
+  loadBundledEntryExportSync,
+} from "openclaw/plugin-sdk/channel-entry-contract";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 
 export default defineBundledChannelEntry({
   id: "telegram",
@@ -22,5 +25,11 @@ export default defineBundledChannelEntry({
     specifier: "./account-inspect-api.js",
     exportName: "inspectTelegramReadOnlyAccount",
   },
-  registerFull: registerTelegramMiniApp,
+  registerFull(api) {
+    const registerTelegramMiniApp = loadBundledEntryExportSync<(api: OpenClawPluginApi) => void>(
+      import.meta.url,
+      { specifier: "./miniapp-api.js", exportName: "registerTelegramMiniApp" },
+    );
+    registerTelegramMiniApp(api);
+  },
 });
