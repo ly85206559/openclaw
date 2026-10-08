@@ -1,0 +1,83 @@
+name: Telegram read-only inspection boundary proof
+
+on:
+  push:
+    branches: [codex/proof-telegram-inspect-20261008]
+
+permissions:
+  contents: read
+
+jobs:
+  boundary-proof:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: baseline
+            candidate: f2e9b9634e8cf3d908c264b59780445b99b4af0a
+            expected-exit: "1"
+            expected-lazy: "0"
+          - variant: fixed
+            candidate: 6d2a85d4213c5375abece67798aa744b8ad077d4
+            expected-exit: "0"
+            expected-lazy: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Retain independent real-entry harness
+        run: cp telegram-inspect-proof.mts "$RUNNER_TEMP/telegram-inspect-proof.mts"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ matrix.candidate }}
+          persist-credentials: false
+      - uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+      - name: Exact-head regression and genuine load-boundary proof
+        shell: bash
+        env:
+          FORCE_COLOR: "0"
+          OPENCLAW_LOCAL_CHECK: "0"
+          EXPECTED_HEAD: ${{ matrix.candidate }}
+          EXPECTED_EXIT: ${{ matrix.expected-exit }}
+          EXPECTED_LAZY: ${{ matrix.expected-lazy }}
+          VARIANT: ${{ matrix.variant }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          node --version
+          git rev-parse HEAD
+          sha256sum extensions/telegram/index{,.test}.ts
+          started=$(date +%s)
+          set +e
+          pnpm test extensions/telegram/index.test.ts --reporter=verbose 2>&1 | tee "$RUNNER_TEMP/telegram-$VARIANT-regression.log"
+          result=${PIPESTATUS[0]}
+          set -e
+          echo "test_exit=$result wall_seconds=$(($(date +%s)-started))"
+          test "$result" = "$EXPECTED_EXIT"
+          if [[ "$VARIANT" == baseline ]]; then
+            grep 'Mini App runtime must not load during account inspection' "$RUNNER_TEMP/telegram-$VARIANT-regression.log"
+            grep 'Tests.*1 failed' "$RUNNER_TEMP/telegram-$VARIANT-regression.log"
+          else
+            pnpm exec oxfmt --check extensions/telegram/index.ts extensions/telegram/index.test.ts
+          fi
+          cp "$RUNNER_TEMP/telegram-inspect-proof.mts" telegram-inspect-proof.mts
+          export OPENCLAW_BUNDLED_PLUGINS_DIR="$PWD/extensions"
+          export OPENCLAW_STATE_DIR="$RUNNER_TEMP/telegram-proof-state-$VARIANT"
+          for control in tool-discovery full; do
+            node --import ./scripts/tsx.mjs telegram-inspect-proof.mts "$control" 2>&1 | tee "$RUNNER_TEMP/telegram-$VARIANT-$control.log"
+          done
+          if [[ "$VARIANT" == fixed ]]; then
+            node scripts/check-changed.mjs --dry-run -- extensions/telegram/index.ts extensions/telegram/index.test.ts
+            pnpm build 2>&1 | tee "$RUNNER_TEMP/telegram-$VARIANT-build.log"
+            node --import ./scripts/tsx.mjs scripts/profile-extension-memory.mts --extension telegram --skip-combined --concurrency 1 --json "$RUNNER_TEMP/telegram-$VARIANT-profile.json" 2>&1 | tee "$RUNNER_TEMP/telegram-$VARIANT-profile.log"
+          fi
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: always()
+        with:
+          name: telegram-inspect-${{ matrix.variant }}
+          path: ${{ runner.temp }}/telegram-${{ matrix.variant }}-*
+          if-no-files-found: error
