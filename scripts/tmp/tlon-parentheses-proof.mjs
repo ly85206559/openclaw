@@ -174,12 +174,12 @@ for (const target of targets) {
       await fs.mkdir(coverageDir, { recursive: true });
       await fs.mkdir(path.join(temporary, "workspace"));
       await fs.writeFile(configPath, JSON.stringify({
-        agents: { list: [{ id: "main", default: true, workspace: path.join(temporary, "workspace") }] },
+        agents: { entries: { main: { workspace: path.join(temporary, "workspace") } } },
         plugins: { allow: ["tlon"], entries: { tlon: { enabled: true } }, slots: { memory: "none" } },
         channels: { tlon: { enabled: true, ship: "~zod", url: `http://127.0.0.1:${server.address().port}`, code: "mock-code", network: { dangerouslyAllowPrivateNetwork: true } } },
       }));
       // Deliberately do not inherit tokens, service credentials, or runner state.
-      const env = { PATH: process.env.PATH, HOME: temporary, TMPDIR: temporary, LANG: "C.UTF-8", CI: "true", OPENCLAW_STATE_DIR: path.join(temporary, "state"), OPENCLAW_CONFIG_PATH: configPath, NODE_V8_COVERAGE: coverageDir };
+      const env = { PATH: process.env.PATH, COREPACK_HOME: process.env.COREPACK_HOME, HOME: temporary, TMPDIR: temporary, LANG: "C.UTF-8", CI: "true", OPENCLAW_STATE_DIR: path.join(temporary, "state"), OPENCLAW_CONFIG_PATH: configPath, NODE_V8_COVERAGE: coverageDir };
       const args = ["--silent", "openclaw", "message", "send", "--channel", "tlon", "--target", target.to, "--message", test.text, "--json"];
       if (target.thread) args.push("--thread-id", target.thread);
       record = { ...record, command: await runCommand(args, env) };
