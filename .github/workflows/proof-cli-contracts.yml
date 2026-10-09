@@ -1,0 +1,117 @@
+name: Secretless CLI contract TDD
+
+on:
+  push:
+    branches: [codex/proof-cli-contracts-20261009]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  red:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - lane: model
+            head: 73da41b2e9afaadc22e2581927350562b26049f1
+            test: src/cli/capability-cli/model.run-reasoning-only.test.ts
+            failures: 4
+            passes: 6
+          - lane: meeting
+            head: 8aae280a552b3d4a5cde58f52ea78b50e0139b80
+            test: src/meeting-bot/plugin-cli.test.ts
+            failures: 6
+            passes: 11
+    env:
+      BASE_SHA: 4938f90b94a574ac7629b227f6097c6d63a3ce9b
+      TARGET_SHA: ${{ matrix.head }}
+      TEST_FILE: ${{ matrix.test }}
+      EXPECTED_FAILURES: ${{ matrix.failures }}
+      EXPECTED_PASSES: ${{ matrix.passes }}
+      CI: "true"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Freeze tests-only baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/proof"
+          cp .github/proof/audit-reporter.mjs "${RUNNER_TEMP}/proof/audit-reporter.mjs"
+          git fetch --no-tags --depth=2 https://github.com/ly85206559/openclaw.git "${TARGET_SHA}"
+          test "$(git rev-parse "${TARGET_SHA}^")" = "${BASE_SHA}"
+          test "$(git diff --name-only "${BASE_SHA}" "${TARGET_SHA}")" = "${TEST_FILE}"
+          git diff --check "${BASE_SHA}" "${TARGET_SHA}"
+          git checkout --detach "${TARGET_SHA}"
+          printf 'base=%s\nhead=%s\ntree=%s\n' "${BASE_SHA}" "$(git rev-parse HEAD)" "$(git rev-parse HEAD^{tree})" | tee "${RUNNER_TEMP}/proof/source.txt"
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 26.8.2
+      - name: Frozen secretless dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -z "${GH_TOKEN:-}${GITHUB_TOKEN:-}${AWS_ACCESS_KEY_ID:-}${AWS_SECRET_ACCESS_KEY:-}"
+          corepack enable
+          pnpm install --frozen-lockfile
+          test "$(pnpm --version)" = 12.7.0
+      - name: Observe exact regression failures and passing controls
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          /usr/bin/time -f '%e' -o "${RUNNER_TEMP}/proof/red-wall.txt" pnpm test "${TEST_FILE}" --maxWorkers=1 --reporter=verbose --reporter=json --reporter="${RUNNER_TEMP}/proof/audit-reporter.mjs" --outputFile="${RUNNER_TEMP}/proof/red.json" > "${RUNNER_TEMP}/proof/red.log" 2>&1
+          result=$?
+          set -e
+          cat "${RUNNER_TEMP}/proof/red.log"
+          test "${result}" = 1
+          node --input-type=module <<'JS'
+          import fs from 'node:fs';
+          import assert from 'node:assert/strict';
+          const report = JSON.parse(fs.readFileSync(`${process.env.RUNNER_TEMP}/proof/red.json`, 'utf8'));
+          assert.equal(report.numFailedTests, Number(process.env.EXPECTED_FAILURES));
+          assert.equal(report.numPassedTests, Number(process.env.EXPECTED_PASSES));
+          assert.equal(report.numPendingTests, 0);
+          assert.equal(report.numTodoTests, 0);
+          assert.equal(report.testResults.length, 1);
+          assert.equal(report.testResults[0].status, 'failed');
+          assert.equal(report.testResults[0].message, '');
+          assert.ok(report.testResults[0].name.endsWith(process.env.TEST_FILE));
+          const audit = JSON.parse(fs.readFileSync(`${process.env.RUNNER_TEMP}/proof/runner-audit.json`, 'utf8'));
+          assert.equal(audit.reason, 'failed');
+          assert.deepEqual(audit.errors, []);
+          assert.deepEqual(audit.suiteErrors, []);
+          const log = fs.readFileSync(`${process.env.RUNNER_TEMP}/proof/red.log`, 'utf8');
+          const marker = 'PROOF_VITEST_TEST_RUN_ENDED';
+          assert.equal(log.split(marker).length, 2, 'exactly one terminal reporter marker');
+          const allowedTail = new Set([
+            `JSON report written to ${process.env.RUNNER_TEMP}/proof/red.json`,
+            'ELIFECYCLE Test failed. See above for more details.',
+            'ELIFECYCLE Command failed with exit code 1.',
+          ]);
+          for (const rawLine of log.split(marker)[1].split(/\r?\n/)) {
+            const line = rawLine.replace(/\u2009/g, ' ').trim();
+            assert.ok(line === '' || allowedTail.has(line), `unexpected post-report output: ${line}`);
+          }
+          const cases = report.testResults.flatMap(file => file.assertionResults);
+          const failed = cases.filter(test => test.status === 'failed');
+          assert.equal(failed.length, Number(process.env.EXPECTED_FAILURES));
+          for (const test of failed) {
+            assert.equal(test.failureMessages.length, 1, test.fullName);
+            assert.ok(test.failureMessages.every(message => /promise resolved .* instead of rejecting/s.test(message)), test.fullName);
+          }
+          JS
+          git diff --exit-code
+      - name: Retain original raw failures
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: cli-tdd-${{ matrix.lane }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/proof/
+          if-no-files-found: error
+          retention-days: 30
