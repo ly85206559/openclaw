@@ -52,27 +52,34 @@ describe("meeting plugin CLI options", () => {
   it.each(
     ["join", "test-speech", "test-listen", "setup"].flatMap((command) => [
       { command, option: "--mode", error: "mode must be agent, bidi, or transcribe; received " },
-      { command, option: "--transport", error: "transport must be chrome or chrome-node; received " },
+      {
+        command,
+        option: "--transport",
+        error: "transport must be chrome or chrome-node; received ",
+      },
     ]),
-  )("rejects an explicitly empty $option for $command before gateway dispatch", async (testCase) => {
-    vi.spyOn(process.stdout, "write").mockImplementation(() => true);
-    const callGateway = vi.fn(async () => ({ ok: true }));
-    const cli = createCli(callGateway as unknown as typeof callGatewayFromCli);
+  )(
+    "rejects an explicitly empty $option for $command before gateway dispatch",
+    async (testCase) => {
+      vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+      const callGateway = vi.fn(async () => ({ ok: true }));
+      const cli = createCli(callGateway as unknown as typeof callGatewayFromCli);
 
-    await expect(
-      cli.parseAsync(
-        [
-          "testmeetings",
-          testCase.command,
-          ...(testCase.command === "setup" ? [] : ["https://meet.example.test/room"]),
-          testCase.option,
-          "",
-        ],
-        { from: "user" },
-      ),
-    ).rejects.toThrow(testCase.error);
-    expect(callGateway).not.toHaveBeenCalled();
-  });
+      await expect(
+        cli.parseAsync(
+          [
+            "testmeetings",
+            testCase.command,
+            ...(testCase.command === "setup" ? [] : ["https://meet.example.test/room"]),
+            testCase.option,
+            "",
+          ],
+          { from: "user" },
+        ),
+      ).rejects.toThrow(testCase.error);
+      expect(callGateway).not.toHaveBeenCalled();
+    },
+  );
 
   it.each(
     [
