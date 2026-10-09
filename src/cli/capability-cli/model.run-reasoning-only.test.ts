@@ -132,6 +132,7 @@ it.each(["stop", "length"])(
         ok: true,
         outputs: [{ text: "complete answer", mediaUrl: null }],
       }),
+      2,
     );
   },
 );
