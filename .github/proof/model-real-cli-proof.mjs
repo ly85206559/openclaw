@@ -69,7 +69,7 @@ assert.ok(address && typeof address === "object");
 await writeFile(configPath, JSON.stringify({
   agents: {
     defaults: { workspace: path.join(root, "workspace"), model: { primary: "proof/proof-fixture" } },
-    list: [{ id: "main" }],
+    entries: { main: {} },
   },
   models: {
     mode: "replace",
