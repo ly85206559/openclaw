@@ -64,14 +64,36 @@ it.each([
     stopReason: "aborted",
     error: 'No text output returned for provider "openai" model "gpt-5.4".',
   },
+  {
+    stopReason: "error",
+    text: "partial answer",
+    errorMessage: "socket hang up",
+    error: 'Model run failed for provider "openai" model "gpt-5.4": socket hang up.',
+  },
+  {
+    stopReason: "error",
+    text: "partial answer",
+    error: 'Model run failed for provider "openai" model "gpt-5.4".',
+  },
+  {
+    stopReason: "aborted",
+    text: "partial answer",
+    errorMessage: "request cancelled",
+    error: 'Model run aborted for provider "openai" model "gpt-5.4": request cancelled.',
+  },
+  {
+    stopReason: "aborted",
+    text: "partial answer",
+    error: 'Model run aborted for provider "openai" model "gpt-5.4".',
+  },
 ])(
-  "picks the local model run no-text error for reasoning plus blank text (stopReason $stopReason)",
-  async ({ stopReason, errorMessage, error }) => {
+  "rejects an unsuccessful local model response (stopReason $stopReason, text $text)",
+  async ({ stopReason, text = " ", errorMessage, error }) => {
     mocks.complete.mockResolvedValueOnce({
       role: "assistant",
       content: [
         { type: "thinking", thinking: "private chain of thought" },
-        { type: "text", text: " " },
+        { type: "text", text },
       ],
       stopReason,
       ...(errorMessage ? { errorMessage } : {}),
@@ -86,5 +108,30 @@ it.each([
 
     expect(mocks.runtime.error.mock.calls.map((call) => call[0])).toEqual([error]);
     expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
+  },
+);
+
+it.each(["stop", "length"])(
+  "keeps text output successful for stopReason %s",
+  async (stopReason) => {
+    mocks.complete.mockResolvedValueOnce({
+      role: "assistant",
+      content: [{ type: "text", text: "complete answer" }],
+      stopReason,
+    });
+    const program = new Command();
+    program.exitOverride();
+    registerModelCapabilityCommands(program);
+
+    await program.parseAsync(["model", "run", "--prompt", "hello", "--json"], { from: "user" });
+
+    expect(mocks.runtime.error).not.toHaveBeenCalled();
+    expect(mocks.runtime.exit).not.toHaveBeenCalled();
+    expect(mocks.runtime.writeJson).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        ok: true,
+        outputs: [{ text: "complete answer", mediaUrl: null }],
+      }),
+    );
   },
 );
