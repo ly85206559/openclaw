@@ -5,6 +5,7 @@ import { PROGRESS_STATUS_PREAMBLE_FRESH_MS } from "../../channels/progress-draft
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GetReplyOptions } from "../get-reply-options.types.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
+import { buildCommandOutputFromToolResultEvent } from "./agent-runner-command-output.js";
 import {
   generateNarrationWithUtilityModel,
   type ProgressNarrationInput,
@@ -539,6 +540,34 @@ describe("progress narration through reply options", () => {
     expect(notes).not.toContain("private command output");
     expect(onUpdate).toHaveBeenLastCalledWith({ text: "The command failed, retrying." });
   });
+
+  it.each(["mcp__openclaw__exec", "mcp_openclaw_exec", "exec"])(
+    "keeps the authored title in narration for a failed %s result",
+    async (name) => {
+      const { narrator, inputs } = createNarratorHarness();
+      const outcome = buildCommandOutputFromToolResultEvent({
+        stream: "tool",
+        data: {
+          phase: "result",
+          name,
+          toolCallId: "failed-cli-command",
+          commandBearing: true,
+          args: { command: "false", title: "Check build status" },
+          isError: true,
+          result: { exitCode: 1, output: "private command output" },
+        },
+      });
+      expect(outcome).toMatchObject({ name, toolCallId: "failed-cli-command", exitCode: 1 });
+      if (!outcome) {
+        throw new Error("expected a projected CLI command outcome");
+      }
+      narrator.noteCommandOutput(outcome);
+      await flushNarrations();
+
+      expect(inputs[0]?.activityNotes).toEqual(["`Check build status`: failed (exit 1)"]);
+      narrator.stopTurn();
+    },
+  );
 
   it("drops duplicate narration text", async () => {
     let nowMs = 0;
