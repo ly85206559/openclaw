@@ -31,7 +31,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "${RUNNER_TEMP}/proof"
-          cp "${TEST_FILE}" "${RUNNER_TEMP}/proof/regression.test.ts"
+          cp .github/proof/cli-failure-narration.fixture.ts "${RUNNER_TEMP}/proof/regression.test.ts"
           git fetch --depth=1 --no-tags https://github.com/openclaw/openclaw.git "${BASE_SHA}"
           git checkout --detach "${BASE_SHA}"
           printf 'baseline=%s\nowner=%s\n' "$(git rev-parse HEAD)" "$(git rev-parse HEAD:${OWNER_FILE})" | tee "${RUNNER_TEMP}/proof/source.txt"
@@ -57,6 +57,7 @@ jobs:
           if (!source.includes(assertion)) throw new Error('missing unchanged regression assertion');
           fs.writeFileSync(path, source.replace(assertion, 'console.info("CLI_NARRATION_RECEIPT", JSON.stringify({ name, outcome, activityNotes: inputs[0]?.activityNotes }));\n      ' + assertion));
           NODE
+          cp "${TEST_FILE}" "${RUNNER_TEMP}/proof/instrumented-regression.test.ts"
           test "$(git hash-object "${OWNER_FILE}")" = "$(git rev-parse ${BASE_SHA}:${OWNER_FILE})"
           set +e
           /usr/bin/time -f '%e' -o "${RUNNER_TEMP}/proof/red-wall.txt" node scripts/run-vitest.mjs "${TEST_FILE}" -t 'keeps the authored title in narration' --reporter=verbose > "${RUNNER_TEMP}/proof/red.log" 2>&1
@@ -87,6 +88,13 @@ jobs:
           pnpm exec oxlint --config .oxlintrc.json "${OWNER_FILE}" "${TEST_FILE}"
           /usr/bin/time -f '%e' -o "${RUNNER_TEMP}/proof/green-wall.txt" node scripts/run-vitest.mjs "${TEST_FILE}" src/auto-reply/reply/agent-runner-command-output.test.ts src/agents/cli-runner/summary-tracker.test.ts --reporter=verbose > "${RUNNER_TEMP}/proof/green.log" 2>&1
           cat "${RUNNER_TEMP}/proof/green.log"
+          git diff --exit-code
+          cp "${RUNNER_TEMP}/proof/instrumented-regression.test.ts" "${TEST_FILE}"
+          /usr/bin/time -f '%e' -o "${RUNNER_TEMP}/proof/after-wall.txt" node scripts/run-vitest.mjs "${TEST_FILE}" -t 'keeps the authored title in narration' --reporter=verbose > "${RUNNER_TEMP}/proof/after.log" 2>&1
+          cat "${RUNNER_TEMP}/proof/after.log"
+          grep -q '3 passed' "${RUNNER_TEMP}/proof/after.log"
+          grep -q 'CLI_NARRATION_RECEIPT' "${RUNNER_TEMP}/proof/after.log"
+          git restore --source=HEAD --worktree -- "${TEST_FILE}"
           git diff --exit-code
           git rev-parse HEAD HEAD^{tree} | tee "${RUNNER_TEMP}/proof/final-source.txt"
       - name: Retain actual outcomes
