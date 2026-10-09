@@ -1,4 +1,4 @@
-name: Secretless meeting test formatting diagnosis
+name: Secretless final CLI repair gates
 
 on:
   push:
@@ -9,25 +9,56 @@ permissions:
   contents: read
 
 jobs:
-  meeting-format:
+  exact-head-gates:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - lane: model
+            head: 69b6a9fd0412e0c693d789effb783cd458f6ff0c
+            test: src/cli/capability-cli/model.run-reasoning-only.test.ts
+            count: 10
+            fixture: model-real-cli-proof.mjs
+            paths: |-
+              docs/cli/infer.md
+              src/cli/capability-cli/model.run-reasoning-only.test.ts
+              src/cli/capability-cli/model.ts
+          - lane: meeting
+            head: b6a958f4fb061ae449c9836821d36590555f3c1c
+            test: src/meeting-bot/plugin-cli.test.ts
+            count: 17
+            fixture: meeting-real-cli-proof.mjs
+            paths: |-
+              src/meeting-bot/plugin-cli.test.ts
+              src/meeting-bot/plugin-cli.ts
     runs-on: ubuntu-latest
     timeout-minutes: 40
     env:
-      TARGET_SHA: 336f95da6148e8d029a7b8acda97c9f0675a8c8d
+      BASE_SHA: 476ce032f4f01e2d95c2316a219c8fea8f5f09ba
+      TARGET_SHA: ${{ matrix.head }}
+      TEST_FILE: ${{ matrix.test }}
+      EXPECTED_TESTS: ${{ matrix.count }}
+      EXPECTED_PATHS: ${{ matrix.paths }}
+      PROOF_FIXTURE: ${{ matrix.fixture }}
+      PROOF_LANE: ${{ matrix.lane }}
       CI: "true"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - name: Freeze exact failing formatting input
+      - name: Freeze exact product and retained proof fixtures
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p "${RUNNER_TEMP}/proof"
-          git fetch --no-tags --depth=5 https://github.com/ly85206559/openclaw.git "${TARGET_SHA}"
+          cp ".github/proof/${PROOF_FIXTURE}" .github/proof/audit-reporter.mjs "${RUNNER_TEMP}/proof/"
+          sha256sum "${RUNNER_TEMP}/proof/${PROOF_FIXTURE}" | tee "${RUNNER_TEMP}/proof/fixture-sha256.txt"
+          git fetch --no-tags --depth=6 https://github.com/ly85206559/openclaw.git "${TARGET_SHA}"
+          git merge-base --is-ancestor "${BASE_SHA}" "${TARGET_SHA}"
+          test "$(git diff --name-only "${BASE_SHA}" "${TARGET_SHA}")" = "${EXPECTED_PATHS}"
+          git diff --check "${BASE_SHA}" "${TARGET_SHA}"
           git checkout --detach "${TARGET_SHA}"
-          test "$(git rev-parse HEAD)" = "${TARGET_SHA}"
-          printf 'head=%s\ntree=%s\n' "$(git rev-parse HEAD)" "$(git rev-parse HEAD^{tree})" | tee "${RUNNER_TEMP}/proof/source.txt"
+          printf 'base=%s\nhead=%s\ntree=%s\n' "${BASE_SHA}" "$(git rev-parse HEAD)" "$(git rev-parse HEAD^{tree})" | tee "${RUNNER_TEMP}/proof/source.txt"
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: 26.8.2
@@ -36,24 +67,71 @@ jobs:
         run: |
           set -euo pipefail
           test -z "${GH_TOKEN:-}${GITHUB_TOKEN:-}${AWS_ACCESS_KEY_ID:-}${AWS_SECRET_ACCESS_KEY:-}"
+          if ! command -v rg >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install --no-install-recommends -y ripgrep
+          fi
           corepack enable
           pnpm install --frozen-lockfile
           test "$(pnpm --version)" = 12.7.0
-      - name: Canonical formatter output for the failed test only
+      - name: GREEN full existing regression file and sibling controls
         shell: bash
         run: |
           set -euo pipefail
-          pnpm exec oxfmt src/meeting-bot/plugin-cli.test.ts
-          test "$(git diff --name-only)" = src/meeting-bot/plugin-cli.test.ts
-          git diff --check
-          git diff -- src/meeting-bot/plugin-cli.test.ts | tee "${RUNNER_TEMP}/proof/formatter.patch"
-          cp src/meeting-bot/plugin-cli.test.ts "${RUNNER_TEMP}/proof/plugin-cli.test.ts"
-          pnpm format:check --no-error-on-unmatched-pattern -- src/meeting-bot/plugin-cli.test.ts
-      - name: Retain canonical formatting evidence including failures
+          /usr/bin/time -f '%e' -o "${RUNNER_TEMP}/proof/green-wall.txt" pnpm test "${TEST_FILE}" --maxWorkers=1 --reporter=verbose --reporter=json --reporter="${RUNNER_TEMP}/proof/audit-reporter.mjs" --outputFile="${RUNNER_TEMP}/proof/green.json" > "${RUNNER_TEMP}/proof/green.log" 2>&1
+          cat "${RUNNER_TEMP}/proof/green.log"
+          node --input-type=module <<'JS'
+          import fs from 'node:fs';
+          import assert from 'node:assert/strict';
+          const proof = process.env.RUNNER_TEMP + '/proof/';
+          const report = JSON.parse(fs.readFileSync(proof + 'green.json', 'utf8'));
+          assert.equal(report.numFailedTests, 0);
+          assert.equal(report.numPassedTests, Number(process.env.EXPECTED_TESTS));
+          assert.equal(report.numPendingTests, 0);
+          assert.equal(report.numTodoTests, 0);
+          assert.equal(report.testResults.length, 1);
+          assert.equal(report.testResults[0].status, 'passed');
+          assert.equal(report.testResults[0].message, '');
+          assert.ok(report.testResults[0].name.endsWith(process.env.TEST_FILE));
+          assert.ok(report.testResults[0].assertionResults.every(test => test.status === 'passed'));
+          const audit = JSON.parse(fs.readFileSync(proof + 'runner-audit.json', 'utf8'));
+          assert.equal(audit.reason, 'passed');
+          assert.deepEqual(audit.errors, []);
+          assert.deepEqual(audit.suiteErrors, []);
+          JS
+      - name: Canonical build
+        shell: bash
+        run: |
+          set -euo pipefail
+          /usr/bin/time -f '%e' -o "${RUNNER_TEMP}/proof/build-wall.txt" pnpm build > "${RUNNER_TEMP}/proof/build.log" 2>&1
+          cat "${RUNNER_TEMP}/proof/build.log"
+      - name: Supported CLI fixed behavior
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${TARGET_SHA}"
+          if test "${PROOF_LANE}" = model; then
+            node "${RUNNER_TEMP}/proof/${PROOF_FIXTURE}" fixed "${RUNNER_TEMP}/proof/model-flow" | tee "${RUNNER_TEMP}/proof/flow.log"
+          elif test "${PROOF_LANE}" = meeting; then
+            node "${RUNNER_TEMP}/proof/${PROOF_FIXTURE}" "${GITHUB_WORKSPACE}" fixed "${RUNNER_TEMP}/proof/meeting-flow.json" | tee "${RUNNER_TEMP}/proof/flow.log"
+          else
+            exit 1
+          fi
+          git diff --exit-code
+      - name: Official exact-base changed lanes and full checker
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm changed:lanes --base "${BASE_SHA}" --head "${TARGET_SHA}" --json > "${RUNNER_TEMP}/proof/lanes.json"
+          node scripts/check-changed.mjs --base "${BASE_SHA}" --head "${TARGET_SHA}" --dry-run > "${RUNNER_TEMP}/proof/check-plan.log" 2>&1
+          /usr/bin/time -f '%e' -o "${RUNNER_TEMP}/proof/check-wall.txt" node scripts/check-changed.mjs --base "${BASE_SHA}" --head "${TARGET_SHA}" --timed > "${RUNNER_TEMP}/proof/check.log" 2>&1
+          cat "${RUNNER_TEMP}/proof/check.log"
+          git diff --exit-code
+      - name: Retain exact-head evidence including failures
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: meeting-format-${{ github.run_id }}
+          name: final-${{ matrix.lane }}-gates-${{ github.run_id }}
           path: ${{ runner.temp }}/proof/
           if-no-files-found: error
           retention-days: 30
