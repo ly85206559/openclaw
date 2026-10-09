@@ -22,6 +22,7 @@ jobs:
       TARGET_SHA: ${{ inputs.target_sha }}
       TEST_FILE: src/auto-reply/reply/progress-narrator.test.ts
       OWNER_FILE: src/auto-reply/reply/agent-runner-command-output.ts
+      CLI_PROOF_FILE: src/auto-reply/reply/agent-runner-execution-cli-progress.test.ts
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -32,6 +33,7 @@ jobs:
           set -euo pipefail
           mkdir -p "${RUNNER_TEMP}/proof"
           cp .github/proof/cli-failure-narration.fixture.ts "${RUNNER_TEMP}/proof/regression.test.ts"
+          cp .github/proof/cli-turn-narration.fixture.ts "${RUNNER_TEMP}/proof/cli-turn.test.ts"
           git fetch --depth=1 --no-tags https://github.com/openclaw/openclaw.git "${BASE_SHA}"
           git checkout --detach "${BASE_SHA}"
           printf 'baseline=%s\nowner=%s\n' "$(git rev-parse HEAD)" "$(git rev-parse HEAD:${OWNER_FILE})" | tee "${RUNNER_TEMP}/proof/source.txt"
@@ -72,17 +74,35 @@ jobs:
           grep -q 'CLI_NARRATION_RECEIPT' "${RUNNER_TEMP}/proof/red.log"
           git restore --source=HEAD --worktree -- "${TEST_FILE}"
           git diff --exit-code
+      - name: Baseline registered production CLI-turn failure and control
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp "${RUNNER_TEMP}/proof/cli-turn.test.ts" "${CLI_PROOF_FILE}"
+          set +e
+          /usr/bin/time -f '%e' -o "${RUNNER_TEMP}/proof/cli-before-wall.txt" node scripts/run-vitest.mjs "${CLI_PROOF_FILE}" --reporter=verbose > "${RUNNER_TEMP}/proof/cli-before.log" 2>&1
+          result=$?
+          set -e
+          cat "${RUNNER_TEMP}/proof/cli-before.log"
+          test "${result}" = 1
+          grep -q '2 failed' "${RUNNER_TEMP}/proof/cli-before.log"
+          grep -q '1 passed' "${RUNNER_TEMP}/proof/cli-before.log"
+          grep -q 'AssertionError' "${RUNNER_TEMP}/proof/cli-before.log"
+          grep -q 'CLI_TURN_NARRATION_RECEIPT' "${RUNNER_TEMP}/proof/cli-before.log"
+          git restore --source=HEAD --worktree -- "${CLI_PROOF_FILE}"
+          git diff --exit-code
       - name: Exact candidate green and unchanged controls
         if: ${{ inputs.target_sha != '' }}
         shell: bash
         run: |
           set -euo pipefail
           [[ "${TARGET_SHA}" =~ ^[0-9a-f]{40}$ ]]
-          git fetch --depth=4 --no-tags https://github.com/ly85206559/openclaw.git "${TARGET_SHA}"
+          git fetch --depth=16 --no-tags https://github.com/ly85206559/openclaw.git "${TARGET_SHA}"
           git checkout --detach "${TARGET_SHA}"
           test "$(git rev-parse HEAD)" = "${TARGET_SHA}"
           test "$(git merge-base "${BASE_SHA}" HEAD)" = "${BASE_SHA}"
-          test "$(git diff --name-only "${BASE_SHA}" HEAD | sort)" = "$(printf '%s\n' "${OWNER_FILE}" "${TEST_FILE}" | sort)"
+          changed_paths="$(git diff --name-only "${BASE_SHA}" HEAD | sort)"
+          test "${changed_paths}" = "${OWNER_FILE}" || test "${changed_paths}" = "$(printf '%s\n' "${OWNER_FILE}" "${TEST_FILE}" | sort)"
           git diff --check "${BASE_SHA}" HEAD
           pnpm exec oxfmt --check "${OWNER_FILE}" "${TEST_FILE}"
           pnpm exec oxlint --config .oxlintrc.json "${OWNER_FILE}" "${TEST_FILE}"
@@ -95,6 +115,13 @@ jobs:
           grep -q '3 passed' "${RUNNER_TEMP}/proof/after.log"
           grep -q 'CLI_NARRATION_RECEIPT' "${RUNNER_TEMP}/proof/after.log"
           git restore --source=HEAD --worktree -- "${TEST_FILE}"
+          git diff --exit-code
+          cp "${RUNNER_TEMP}/proof/cli-turn.test.ts" "${CLI_PROOF_FILE}"
+          /usr/bin/time -f '%e' -o "${RUNNER_TEMP}/proof/cli-after-wall.txt" node scripts/run-vitest.mjs "${CLI_PROOF_FILE}" --reporter=verbose > "${RUNNER_TEMP}/proof/cli-after.log" 2>&1
+          cat "${RUNNER_TEMP}/proof/cli-after.log"
+          grep -q '3 passed' "${RUNNER_TEMP}/proof/cli-after.log"
+          grep -q 'CLI_TURN_NARRATION_RECEIPT' "${RUNNER_TEMP}/proof/cli-after.log"
+          git restore --source=HEAD --worktree -- "${CLI_PROOF_FILE}"
           git diff --exit-code
           git rev-parse HEAD HEAD^{tree} | tee "${RUNNER_TEMP}/proof/final-source.txt"
       - name: Retain actual outcomes
