@@ -4,8 +4,8 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { PROGRESS_STATUS_PREAMBLE_FRESH_MS } from "../../channels/progress-draft-compositor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GetReplyOptions } from "../get-reply-options.types.js";
-import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { buildCommandOutputFromToolResultEvent } from "./agent-runner-command-output.js";
+import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import {
   generateNarrationWithUtilityModel,
   type ProgressNarrationInput,
@@ -564,7 +564,7 @@ describe("progress narration through reply options", () => {
       narrator.noteCommandOutput(outcome);
       await flushNarrations();
 
-      expect(inputs[0]?.activityNotes).toEqual(["`Check build status`: failed (exit 1)"]);
+      expect(inputs[0]?.activityNotes).toEqual(["Check build status: failed (exit 1)"]);
       narrator.stopTurn();
     },
   );
