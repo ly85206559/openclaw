@@ -188,16 +188,16 @@ async function runModelRun(params: {
               },
             });
             const text = collectTextContentBlocks(result.content).join("").trim();
+            const providerErrorMessage = (result as { errorMessage?: unknown }).errorMessage;
+            const detail =
+              typeof providerErrorMessage === "string" && providerErrorMessage.trim()
+                ? `: ${providerErrorMessage.trim()}`
+                : "";
+            const target = `for provider "${prepared.selection.provider}" model "${prepared.selection.modelId}"${detail}.`;
             if (!text) {
-              const providerErrorMessage = (result as { errorMessage?: unknown }).errorMessage;
-              const detail =
-                typeof providerErrorMessage === "string" && providerErrorMessage.trim()
-                  ? `: ${providerErrorMessage.trim()}`
-                  : "";
               // Keep AI runtime imports out of command registration and help loading.
               const { hasOnlyAssistantReasoningContent, isReasoningOnlyLengthAssistantTurn } =
                 await import("@openclaw/ai/internal/shared");
-              const target = `for provider "${prepared.selection.provider}" model "${prepared.selection.modelId}"${detail}.`;
               // Failed or aborted streams can keep partial reasoning; report those as provider failures.
               const completedWithoutError =
                 (result.stopReason === "stop" || result.stopReason === "length") && !detail;
@@ -210,6 +210,11 @@ async function runModelRun(params: {
                 );
               }
               throw new Error(`No text output returned ${target}`);
+            }
+            if (result.stopReason === "error" || result.stopReason === "aborted") {
+              throw new Error(
+                `Model run ${result.stopReason === "aborted" ? "aborted" : "failed"} ${target}`,
+              );
             }
             return {
               ok: true,
