@@ -1,4 +1,4 @@
-name: Secretless meeting CLI missing gates
+name: Secretless meeting test formatting diagnosis
 
 on:
   push:
@@ -9,89 +9,25 @@ permissions:
   contents: read
 
 jobs:
-  meeting-flow:
+  meeting-format:
     runs-on: ubuntu-latest
     timeout-minutes: 40
     env:
-      BASE_SHA: 4938f90b94a574ac7629b227f6097c6d63a3ce9b
       TARGET_SHA: 336f95da6148e8d029a7b8acda97c9f0675a8c8d
       CI: "true"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - name: Freeze exact product and retained proof fixtures
+      - name: Freeze exact failing formatting input
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p "${RUNNER_TEMP}/proof"
-          cp .github/proof/meeting-real-cli-proof.mjs "${RUNNER_TEMP}/proof/"
-          sha256sum "${RUNNER_TEMP}/proof/meeting-real-cli-proof.mjs" | tee "${RUNNER_TEMP}/proof/fixture-sha256.txt"
           git fetch --no-tags --depth=5 https://github.com/ly85206559/openclaw.git "${TARGET_SHA}"
-          git merge-base --is-ancestor "${BASE_SHA}" "${TARGET_SHA}"
-          test "$(git diff --name-only "${BASE_SHA}" "${TARGET_SHA}")" = "$(printf '%s\n' src/meeting-bot/plugin-cli.test.ts src/meeting-bot/plugin-cli.ts)"
-          git diff --check "${BASE_SHA}" "${TARGET_SHA}"
           git checkout --detach "${TARGET_SHA}"
-          printf 'base=%s\nhead=%s\ntree=%s\n' "${BASE_SHA}" "$(git rev-parse HEAD)" "$(git rev-parse HEAD^{tree})" | tee "${RUNNER_TEMP}/proof/source.txt"
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
-        with:
-          node-version: 26.8.2
-      - name: Frozen secretless dependencies
-        shell: bash
-        run: |
-          set -euo pipefail
-          test -z "${GH_TOKEN:-}${GITHUB_TOKEN:-}${AWS_ACCESS_KEY_ID:-}${AWS_SECRET_ACCESS_KEY:-}"
-          if ! command -v rg >/dev/null; then
-            sudo apt-get update
-            sudo apt-get install --no-install-recommends -y ripgrep
-          fi
-          corepack enable
-          pnpm install --frozen-lockfile
-          test "$(pnpm --version)" = 12.7.0
-      - name: Canonical build
-        shell: bash
-        run: |
-          set -euo pipefail
-          /usr/bin/time -f '%e' -o "${RUNNER_TEMP}/proof/build-wall.txt" pnpm build > "${RUNNER_TEMP}/proof/build.log" 2>&1
-          cat "${RUNNER_TEMP}/proof/build.log"
-      - name: Supported Teams and Zoom CLI fixed behavior
-        shell: bash
-        run: |
-          set -euo pipefail
           test "$(git rev-parse HEAD)" = "${TARGET_SHA}"
-          node "${RUNNER_TEMP}/proof/meeting-real-cli-proof.mjs" "${GITHUB_WORKSPACE}" fixed "${RUNNER_TEMP}/proof/meeting-flow.json" | tee "${RUNNER_TEMP}/proof/flow.log"
-          git diff --exit-code
-      - name: Retain corrected real-flow evidence including failures
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: meeting-fixed-flow-${{ github.run_id }}
-          path: ${{ runner.temp }}/proof/
-          if-no-files-found: error
-          retention-days: 30
-
-  meeting-checks:
-    runs-on: ubuntu-latest
-    timeout-minutes: 40
-    env:
-      BASE_SHA: 4938f90b94a574ac7629b227f6097c6d63a3ce9b
-      TARGET_SHA: 336f95da6148e8d029a7b8acda97c9f0675a8c8d
-      CI: "true"
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          persist-credentials: false
-      - name: Freeze exact product head for official checks
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p "${RUNNER_TEMP}/proof"
-          git fetch --no-tags --depth=5 https://github.com/ly85206559/openclaw.git "${TARGET_SHA}"
-          git merge-base --is-ancestor "${BASE_SHA}" "${TARGET_SHA}"
-          test "$(git diff --name-only "${BASE_SHA}" "${TARGET_SHA}")" = "$(printf '%s\n' src/meeting-bot/plugin-cli.test.ts src/meeting-bot/plugin-cli.ts)"
-          git diff --check "${BASE_SHA}" "${TARGET_SHA}"
-          git checkout --detach "${TARGET_SHA}"
-          printf 'base=%s\nhead=%s\ntree=%s\n' "${BASE_SHA}" "$(git rev-parse HEAD)" "$(git rev-parse HEAD^{tree})" | tee "${RUNNER_TEMP}/proof/source.txt"
+          printf 'head=%s\ntree=%s\n' "$(git rev-parse HEAD)" "$(git rev-parse HEAD^{tree})" | tee "${RUNNER_TEMP}/proof/source.txt"
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: 26.8.2
@@ -100,27 +36,24 @@ jobs:
         run: |
           set -euo pipefail
           test -z "${GH_TOKEN:-}${GITHUB_TOKEN:-}${AWS_ACCESS_KEY_ID:-}${AWS_SECRET_ACCESS_KEY:-}"
-          if ! command -v rg >/dev/null; then
-            sudo apt-get update
-            sudo apt-get install --no-install-recommends -y ripgrep
-          fi
           corepack enable
           pnpm install --frozen-lockfile
           test "$(pnpm --version)" = 12.7.0
-      - name: Official exact-base changed lanes and full checker
+      - name: Canonical formatter output for the failed test only
         shell: bash
         run: |
           set -euo pipefail
-          pnpm changed:lanes --base "${BASE_SHA}" --head "${TARGET_SHA}" --json > "${RUNNER_TEMP}/proof/lanes.json"
-          node scripts/check-changed.mjs --base "${BASE_SHA}" --head "${TARGET_SHA}" --dry-run > "${RUNNER_TEMP}/proof/check-plan.log" 2>&1
-          /usr/bin/time -f '%e' -o "${RUNNER_TEMP}/proof/check-wall.txt" node scripts/check-changed.mjs --base "${BASE_SHA}" --head "${TARGET_SHA}" --timed > "${RUNNER_TEMP}/proof/check.log" 2>&1
-          cat "${RUNNER_TEMP}/proof/check.log"
-          git diff --exit-code
-      - name: Retain exact-head official checker evidence including failures
+          pnpm exec oxfmt src/meeting-bot/plugin-cli.test.ts
+          test "$(git diff --name-only)" = src/meeting-bot/plugin-cli.test.ts
+          git diff --check
+          git diff -- src/meeting-bot/plugin-cli.test.ts | tee "${RUNNER_TEMP}/proof/formatter.patch"
+          cp src/meeting-bot/plugin-cli.test.ts "${RUNNER_TEMP}/proof/plugin-cli.test.ts"
+          pnpm format:check --no-error-on-unmatched-pattern -- src/meeting-bot/plugin-cli.test.ts
+      - name: Retain canonical formatting evidence including failures
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: meeting-official-checks-${{ github.run_id }}
+          name: meeting-format-${{ github.run_id }}
           path: ${{ runner.temp }}/proof/
           if-no-files-found: error
           retention-days: 30
