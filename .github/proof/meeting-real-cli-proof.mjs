@@ -246,7 +246,11 @@ try {
     assert.deepEqual(record.transportErrors, [], `${testCase.name}: fixture transport errors`);
     if (expectation === "fixed" && testCase.invalid) {
       assert.notEqual(code, 0, `${testCase.name}: empty enum must fail`);
-      assert(record.stderr.includes(testCase.invalid), `${testCase.name}: expected enum diagnostic`);
+      assert.deepEqual(JSON.parse(record.stdout), {
+        ok: false,
+        error: { type: "cli_error", message: `${testCase.invalid} ` },
+      }, `${testCase.name}: expected structured enum diagnostic`);
+      assert.equal(record.connections, 0, `${testCase.name}: invalid input must not connect`);
       assert.deepEqual(record.rpcs, [], `${testCase.name}: invalid input must not dispatch RPC`);
     } else {
       assert.equal(code, 0, `${testCase.name}: CLI should complete successfully`);
