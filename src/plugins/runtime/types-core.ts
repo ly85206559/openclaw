@@ -77,6 +77,12 @@ type RuntimeSessionStoreReadParams = {
 };
 type RuntimeSessionStoreListParams = Partial<Omit<RuntimeSessionStoreReadParams, "sessionKey">> & {
   readOnly?: boolean;
+  /** Restrict results to exact persisted keys while retaining canonical listing validation. */
+  sessionKeys?: readonly string[];
+  /** Set false to skip derived participant identities and counts when reading metadata. */
+  includeParticipants?: boolean;
+  /** Capture the admitted store's physical identity; access policy remains caller-owned. */
+  captureSource?: (assertCurrent: () => void) => void;
 };
 type RuntimeSessionStoreEntrySummary = {
   sessionKey: string;
@@ -335,6 +341,8 @@ type RuntimeRunEmbeddedAgent = (
 /** Core runtime helpers exposed to trusted native plugins. */
 export type PluginRuntimeCore = {
   version: string;
+  /** Optional host behavior guarantees; absent capabilities remain unsupported on older hosts. */
+  readonly capabilities?: readonly string[];
   decisions: import("../../decisions/types.js").DecisionRuntimeV1;
   config: {
     /** Current process runtime config snapshot. Prefer config passed into the active call path. */
