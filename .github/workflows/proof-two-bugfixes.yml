@@ -1,4 +1,4 @@
-name: Secretless CLI contract baseline flows
+name: Secretless meeting CLI repair gates
 
 on:
   push:
@@ -9,69 +9,98 @@ permissions:
   contents: read
 
 jobs:
-  baseline-flow:
+  meeting-green:
     runs-on: ubuntu-latest
     timeout-minutes: 40
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - lane: model
-            head: 73da41b2e9afaadc22e2581927350562b26049f1
-            test: src/cli/capability-cli/model.run-reasoning-only.test.ts
-            fixture: model-real-cli-proof.mjs
     env:
       BASE_SHA: 4938f90b94a574ac7629b227f6097c6d63a3ce9b
-      TARGET_SHA: ${{ matrix.head }}
-      TEST_FILE: ${{ matrix.test }}
-      FIXTURE: ${{ matrix.fixture }}
-      LANE: ${{ matrix.lane }}
+      TARGET_SHA: 336f95da6148e8d029a7b8acda97c9f0675a8c8d
+      TEST_FILE: src/meeting-bot/plugin-cli.test.ts
       CI: "true"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - name: Freeze baseline product and retained fixture
+      - name: Freeze exact product and retained proof fixtures
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p "${RUNNER_TEMP}/proof"
-          cp ".github/proof/${FIXTURE}" "${RUNNER_TEMP}/proof/${FIXTURE}"
-          sha256sum "${RUNNER_TEMP}/proof/${FIXTURE}" | tee "${RUNNER_TEMP}/proof/fixture-sha256.txt"
-          git fetch --no-tags --depth=2 https://github.com/ly85206559/openclaw.git "${TARGET_SHA}"
-          test "$(git rev-parse "${TARGET_SHA}^")" = "${BASE_SHA}"
-          test "$(git diff --name-only "${BASE_SHA}" "${TARGET_SHA}")" = "${TEST_FILE}"
+          cp .github/proof/meeting-real-cli-proof.mjs .github/proof/audit-reporter.mjs "${RUNNER_TEMP}/proof/"
+          sha256sum "${RUNNER_TEMP}/proof/meeting-real-cli-proof.mjs" | tee "${RUNNER_TEMP}/proof/fixture-sha256.txt"
+          git fetch --no-tags --depth=5 https://github.com/ly85206559/openclaw.git "${TARGET_SHA}"
+          git merge-base --is-ancestor "${BASE_SHA}" "${TARGET_SHA}"
+          test "$(git diff --name-only "${BASE_SHA}" "${TARGET_SHA}")" = "$(printf '%s\n' src/meeting-bot/plugin-cli.test.ts src/meeting-bot/plugin-cli.ts)"
+          git diff --check "${BASE_SHA}" "${TARGET_SHA}"
           git checkout --detach "${TARGET_SHA}"
           printf 'base=%s\nhead=%s\ntree=%s\n' "${BASE_SHA}" "$(git rev-parse HEAD)" "$(git rev-parse HEAD^{tree})" | tee "${RUNNER_TEMP}/proof/source.txt"
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: 26.8.2
-      - name: Frozen secretless dependencies and canonical build
+      - name: Frozen secretless dependencies
         shell: bash
         run: |
           set -euo pipefail
           test -z "${GH_TOKEN:-}${GITHUB_TOKEN:-}${AWS_ACCESS_KEY_ID:-}${AWS_SECRET_ACCESS_KEY:-}"
+          if ! command -v rg >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install --no-install-recommends -y ripgrep
+          fi
           corepack enable
           pnpm install --frozen-lockfile
           test "$(pnpm --version)" = 12.7.0
+      - name: GREEN full existing regression file and sibling controls
+        shell: bash
+        run: |
+          set -euo pipefail
+          /usr/bin/time -f '%e' -o "${RUNNER_TEMP}/proof/green-wall.txt" pnpm test "${TEST_FILE}" --maxWorkers=1 --reporter=verbose --reporter=json --reporter="${RUNNER_TEMP}/proof/audit-reporter.mjs" --outputFile="${RUNNER_TEMP}/proof/green.json" > "${RUNNER_TEMP}/proof/green.log" 2>&1
+          cat "${RUNNER_TEMP}/proof/green.log"
+          node --input-type=module <<'JS'
+          import fs from 'node:fs';
+          import assert from 'node:assert/strict';
+          const proof = process.env.RUNNER_TEMP + '/proof/';
+          const report = JSON.parse(fs.readFileSync(proof + 'green.json', 'utf8'));
+          assert.equal(report.numFailedTests, 0);
+          assert.equal(report.numPassedTests, 17);
+          assert.equal(report.numPendingTests, 0);
+          assert.equal(report.numTodoTests, 0);
+          assert.equal(report.testResults.length, 1);
+          assert.equal(report.testResults[0].status, 'passed');
+          assert.equal(report.testResults[0].message, '');
+          assert.ok(report.testResults[0].name.endsWith(process.env.TEST_FILE));
+          assert.ok(report.testResults[0].assertionResults.every(test => test.status === 'passed'));
+          const audit = JSON.parse(fs.readFileSync(proof + 'runner-audit.json', 'utf8'));
+          assert.equal(audit.reason, 'passed');
+          assert.deepEqual(audit.errors, []);
+          assert.deepEqual(audit.suiteErrors, []);
+          JS
+      - name: Canonical build
+        shell: bash
+        run: |
+          set -euo pipefail
           /usr/bin/time -f '%e' -o "${RUNNER_TEMP}/proof/build-wall.txt" pnpm build > "${RUNNER_TEMP}/proof/build.log" 2>&1
           cat "${RUNNER_TEMP}/proof/build.log"
-      - name: Supported CLI baseline behavior and controls
+      - name: Supported Teams and Zoom CLI fixed behavior
         shell: bash
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "${TARGET_SHA}"
-          if test "${LANE}" = model; then
-            node "${RUNNER_TEMP}/proof/${FIXTURE}" baseline "${RUNNER_TEMP}/proof/model-flow" | tee "${RUNNER_TEMP}/proof/flow.log"
-          else
-            node "${RUNNER_TEMP}/proof/${FIXTURE}" "$PWD" baseline "${RUNNER_TEMP}/proof/meeting-flow.json" | tee "${RUNNER_TEMP}/proof/flow.log"
-          fi
+          node "${RUNNER_TEMP}/proof/meeting-real-cli-proof.mjs" "$PWD" fixed "${RUNNER_TEMP}/proof/meeting-flow.json" | tee "${RUNNER_TEMP}/proof/flow.log"
           git diff --exit-code
-      - name: Retain exact-source original flow outcomes
+      - name: Official exact-base changed lanes and full checker
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm changed:lanes --base "${BASE_SHA}" --head "${TARGET_SHA}" --json > "${RUNNER_TEMP}/proof/lanes.json"
+          node scripts/check-changed.mjs --base "${BASE_SHA}" --head "${TARGET_SHA}" --dry-run > "${RUNNER_TEMP}/proof/check-plan.log" 2>&1
+          /usr/bin/time -f '%e' -o "${RUNNER_TEMP}/proof/check-wall.txt" node scripts/check-changed.mjs --base "${BASE_SHA}" --head "${TARGET_SHA}" --timed > "${RUNNER_TEMP}/proof/check.log" 2>&1
+          cat "${RUNNER_TEMP}/proof/check.log"
+          git diff --exit-code
+      - name: Retain exact-head evidence including original failures
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: cli-baseline-flow-${{ matrix.lane }}-${{ github.run_id }}
+          name: meeting-repair-gates-${{ github.run_id }}
           path: ${{ runner.temp }}/proof/
           if-no-files-found: error
           retention-days: 30
