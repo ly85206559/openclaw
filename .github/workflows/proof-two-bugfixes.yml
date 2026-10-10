@@ -18,7 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      BASE_SHA: 1f307d61d0f77dfe0c838420b8d2c18d73c0baf5
+      BASE_SHA: 14b764a9c338f3e55d98160b004ab71ad01cc10e
       TARGET_SHA: ${{ inputs.target_sha }}
       TEST_FILE: src/auto-reply/reply/progress-narrator.test.ts
       OWNER_TEST_FILE: src/auto-reply/reply/agent-runner-command-output.test.ts
@@ -118,8 +118,10 @@ jobs:
           git fetch --depth=16 --no-tags https://github.com/ly85206559/openclaw.git "${TARGET_SHA}"
           git checkout --detach "${TARGET_SHA}"
           test "$(git rev-parse HEAD)" = "${TARGET_SHA}"
+          printf 'candidate=%s\nmerge-base=%s\n' "$(git rev-parse HEAD)" "$(git merge-base "${BASE_SHA}" HEAD)" | tee "${RUNNER_TEMP}/proof/candidate-scope.txt"
           test "$(git merge-base "${BASE_SHA}" HEAD)" = "${BASE_SHA}"
           changed_paths="$(git diff --name-only "${BASE_SHA}" HEAD | sort)"
+          printf '%s\n' "${changed_paths}" | tee -a "${RUNNER_TEMP}/proof/candidate-scope.txt"
           test "${changed_paths}" = "${OWNER_FILE}" || test "${changed_paths}" = "$(printf '%s\n' "${OWNER_FILE}" "${OWNER_TEST_FILE}" | sort)"
           git diff --check "${BASE_SHA}" HEAD
           pnpm exec oxfmt --check "${OWNER_FILE}" "${OWNER_TEST_FILE}"
