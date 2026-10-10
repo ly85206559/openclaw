@@ -25,7 +25,7 @@ import {
   createFollowupRun,
   runInitialFallbackAttempt,
   type FallbackRunnerParams,
-} from "./agent-runner-execution.test-support.js";
+} from "./agent-runner-cli-registered.test-support.js";
 import { attachProgressNarratorToReplyOptions } from "./progress-narrator.js";
 import { prepareInternalGetReplyOptions } from "./get-reply.types.js";
 import type { ProgressNarrationInput } from "./progress-narrator-model.js";
