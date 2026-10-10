@@ -78,7 +78,12 @@ jobs:
           test "$(git diff --name-only "${BASE_SHA}" HEAD | sort)" = "$(printf '%s\n' "${OWNER_FILE}" "${TEST_FILE}" | sort)"
           cmp "${RUNNER_TEMP}/proof/regression.test.ts" "${TEST_FILE}"
           git diff --check "${BASE_SHA}" HEAD
-          pnpm exec oxfmt --check "${OWNER_FILE}" "${TEST_FILE}"
+          if ! pnpm exec oxfmt --check "${OWNER_FILE}" "${TEST_FILE}"; then
+            pnpm exec oxfmt "${OWNER_FILE}" "${TEST_FILE}"
+            git diff > "${RUNNER_TEMP}/proof/formatting.diff"
+            cp "${TEST_FILE}" "${RUNNER_TEMP}/proof/formatted.test.ts"
+            exit 1
+          fi
           pnpm exec oxlint --config .oxlintrc.json "${OWNER_FILE}" "${TEST_FILE}"
           /usr/bin/time -f '%e' -o "${RUNNER_TEMP}/proof/green-wall.txt" node scripts/run-vitest.mjs "${TEST_FILE}" extensions/googlechat/src/monitor.reply-delivery.test.ts --reporter=verbose > "${RUNNER_TEMP}/proof/green.log" 2>&1
           cat "${RUNNER_TEMP}/proof/green.log"
