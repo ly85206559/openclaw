@@ -1,0 +1,108 @@
+name: Native audio baseline deadcode diagnosis
+
+on:
+  push:
+    branches: [codex/proof-155850-conflict-20261010]
+    paths:
+      - .github/workflows/proof-native-audio-deadcode-baseline.yml
+
+permissions:
+  contents: read
+
+jobs:
+  baseline-deadcode:
+    if: github.repository == 'ly85206559/openclaw'
+    runs-on: ubuntu-latest
+    container: ubuntu:24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    env:
+      CI: "true"
+      SOURCE_SHA: a52e1c809def342ce419bacb352f160e3cf43ec8
+      BASE_SHA: f8e594e461efa21db360d345e986a2d0a543d5a4
+    steps:
+      - name: Prepare isolated container tooling
+        run: |
+          set -euo pipefail
+          apt-get update -qq
+          apt-get install -y ca-certificates git ripgrep curl xz-utils libatomic1 python3 python3-venv time
+      - name: Check out the pinned source and its baseline
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          persist-credentials: false
+          fetch-depth: 3
+      - name: Verify unchanged baseline scan inputs
+        run: |
+          set -euo pipefail
+          git config --global --add safe.directory "$PWD"
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test "$(git merge-base "$BASE_SHA" HEAD)" = "$BASE_SHA"
+          printf '%s\n' src/meeting-bot/realtime-local-audio-transport.test.ts src/meeting-bot/realtime-local-audio-transport.ts src/meeting-bot/realtime-output-owner.test.ts src/meeting-bot/realtime-output-owner.ts > "$RUNNER_TEMP/expected-paths"
+          git diff --name-only "$BASE_SHA"...HEAD > "$RUNNER_TEMP/actual-paths"
+          diff -u "$RUNNER_TEMP/expected-paths" "$RUNNER_TEMP/actual-paths"
+          git diff --quiet
+          git diff --cached --quiet
+      - name: Install the selected Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 26.8.2
+      - name: Install the source-declared pnpm version
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
+      - name: Verify toolchain and install frozen dependencies
+        run: |
+          set -euo pipefail
+          npm install --global corepack@0.36.0
+          expected_pnpm="$(node -p 'JSON.parse(require("node:fs").readFileSync("package.json", "utf8")).packageManager.match(/^pnpm@([^+]+)/)[1]')"
+          test "$(pnpm --version)" = "$expected_pnpm"
+          test "$(corepack pnpm --version)" = "$expected_pnpm"
+          node --version
+          pnpm install --frozen-lockfile
+          git checkout --detach "$BASE_SHA"
+          test "$(git rev-parse HEAD)" = "$BASE_SHA"
+          test "$(pnpm --version)" = "$expected_pnpm"
+          git diff --quiet
+          git diff --cached --quiet
+      - name: Reproduce baseline findings and retain the original failure
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$BASE_SHA"
+          log="$RUNNER_TEMP/baseline-deadcode.log"
+          test ! -e "$log"
+          set +e
+          /usr/bin/time -f 'baseline_deadcode wall_seconds=%e max_rss_kb=%M' node --import tsx scripts/check-deadcode-exports.mts > "$log" 2>&1
+          scan_exit=$?
+          set -e
+          cat "$log"
+          node --input-type=module - "$log" "$scan_exit" <<'NODE'
+          import assert from 'node:assert/strict';
+          import { readFileSync } from 'node:fs';
+          const output = readFileSync(process.argv[2], 'utf8');
+          assert.equal(Number(process.argv[3]), 1);
+          assert.ok(output.includes('production unused-export scan:\nUnused exports are not allowed:'));
+          assert.ok(output.includes('full-tree unused-export scan:\nUnused exports are not allowed:'));
+          assert.ok(output.includes('Knip script unused-export scan passed with 0 entries.'));
+          assert.doesNotMatch(output, /ERROR: Error loading|ETIMEDOUT|ENOBUFS|produced no export sections/);
+          const entries = output.split(/\r?\n/).filter(line => /^  src\/[^:]+: /.test(line)).sort();
+          const expected = [
+            '  src/agents/cli-runner/tool-authority.ts: bindCliQuestionAnswerAuthority',
+            '  src/auto-reply/reply/session-event-handoff.ts: prepareSessionEventTargetForHost',
+            '  src/config/sessions/session-accessor.sqlite-entry-cache-publication.ts: readSessionEntryCreationTransition',
+            '  src/infra/heartbeat-events-filter.ts: RESTART_CONTINUATION_CONTEXT_PREFIX',
+            '  src/config/sessions/session-accessor.sqlite-entry-cache-publication.ts: readSessionEntryCreationTransition (entryPublication)',
+            '  src/infra/heartbeat-events-filter.ts: RESTART_CONTINUATION_CONTEXT_PREFIX',
+          ].sort();
+          assert.deepEqual(entries, expected);
+          console.log(JSON.stringify({baseline: process.env.BASE_SHA, originalExit: Number(process.argv[3]), classification: 'same findings as candidate', findings: entries}));
+          NODE
+          printf 'Baseline findings match the candidate; preserving original scan exit %s, not claiming baseline product success.\n' "$scan_exit"
+          exit "$scan_exit"
+      - name: Verify final baseline identity
+        if: always()
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$BASE_SHA"
+          git diff --exit-code
+          git diff --cached --exit-code
