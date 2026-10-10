@@ -140,8 +140,11 @@ describe("Google Chat real guarded transport", () => {
     "only resends a typing reply after an authoritative 404 (%s)",
     async (status) => {
       const { createPluginRuntimeMock } = await import("openclaw/plugin-sdk/channel-test-helpers");
-      const requests: Array<{ method: string | undefined; path: string | undefined; body: string }> =
-        [];
+      const requests: Array<{
+        method: string | undefined;
+        path: string | undefined;
+        body: string;
+      }> = [];
       const receivedStatuses: number[] = [];
       let brokenResponse: ServerResponse | undefined;
       loopback.onResponse = (receivedStatus) => {
