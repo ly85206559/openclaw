@@ -101,14 +101,16 @@ describe("physical CLI process to registered failure narration", () => {
       narrationModelMocks.prepare.mockResolvedValue({ provider: "openai", model: "test-utility" });
       narrationModelMocks.generate.mockImplementation(async ({ input }: { input: ProgressNarrationInput }) => {
         stage("narration-input", { activityNotes: input.activityNotes });
-        const failedNote = input.activityNotes.find((note) => note.endsWith(": failed"));
+        const failedNote = input.activityNotes.findLast((note) => note.endsWith(": failed"));
         if (failedNote) observedInput.resolve(input);
         return { text: failedNote ? `Fixture failure narration: ${failedNote}` : "Fixture working." };
       });
       let registeredOptions: GetReplyOptions | undefined;
       const restReceipts: Array<{ method: string; route: string; content?: string }> = [];
-      const channelId = "101010101010101010";
-      const userId = "202020202020202020";
+      const caseNumber = ["mcp__openclaw__exec", "mcp_openclaw_exec", "exec"].indexOf(name) + 1;
+      const channelId = `10101010101010101${caseNumber}`;
+      const userId = `20202020202020202${caseNumber}`;
+      const messageId = `50505050505050505${caseNumber}`;
       const fetchFixture: typeof fetch = async (input, init) => {
         const url = new URL(input instanceof Request ? input.url : String(input));
         if (url.origin !== "https://discord.com" || !url.pathname.startsWith(`/api/v10/channels/${channelId}/`)) {
@@ -236,7 +238,7 @@ describe("physical CLI process to registered failure narration", () => {
           try {
             stage("registered-discord-ingress");
             await Promise.all([replyComplete.promise, handler({
-              id: "505050505050505050", channel_id: channelId, content: "Check the build status",
+              id: messageId, channel_id: channelId, content: "Check the build status",
               author: { id: userId, username: "fixture-user", discriminator: "0", avatar: null, bot: false },
               attachments: [], embeds: [], mentions: [], mention_roles: [], mention_everyone: false,
               timestamp: new Date().toISOString(), edited_timestamp: null, components: [], pinned: false, type: 0, tts: false,
@@ -256,7 +258,7 @@ describe("physical CLI process to registered failure narration", () => {
       const native: unknown = JSON.parse(receipts[0]?.stderr ?? "");
       expect(native).toMatchObject({ nativeExit: 1, command: "/bin/sh -c false", nativeStdout: "", nativeStderr: "" });
       expect(input.activityNotes).toContain("Check build status: failed");
-      expect(restReceipts.some((receipt) => receipt.content?.includes("Fixture failure narration:"))).toBe(true);
+      expect(restReceipts.some((receipt) => receipt.content?.includes("Fixture failure narration: Check build status: failed"))).toBe(true);
     },
   );
 });
