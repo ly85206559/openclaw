@@ -156,7 +156,7 @@ it.each([
       summary,
       result: {
         payloads: [{ text: "partial answer" }],
-        meta: { ...(detail ? { error: { kind: "incomplete_turn", message: detail } } : {}) },
+        meta: detail ? { error: { kind: "incomplete_turn", message: detail } } : {},
       },
     });
     await expect(runModel("--gateway")).rejects.toThrow("exit 1");
