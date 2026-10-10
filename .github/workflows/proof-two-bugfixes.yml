@@ -51,6 +51,7 @@ jobs:
           set -euo pipefail
           cp "${RUNNER_TEMP}/proof/regression.test.ts" "${TEST_FILE}"
           pnpm exec oxfmt "${TEST_FILE}"
+          git diff -- "${TEST_FILE}" > "${RUNNER_TEMP}/proof/normalization.diff"
           cp "${TEST_FILE}" "${RUNNER_TEMP}/proof/regression.test.ts"
           test "$(git hash-object "${OWNER_FILE}")" = "$(git rev-parse ${BASE_SHA}:${OWNER_FILE})"
           set +e
