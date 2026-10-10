@@ -1,0 +1,81 @@
+name: Secretless physical CLI title boundary proof
+
+on:
+  push:
+    branches: [codex/proof-cli-process-title-20261010]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  proof:
+    if: github.repository == 'ly85206559/openclaw'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      BASE_SHA: 14b764a9c338f3e55d98160b004ab71ad01cc10e
+      TARGET_SHA: 5ff17c5b3e6355e7630eda5636e55362383a2610
+      TEST_FILE: src/auto-reply/reply/agent-runner-execution-cli-process-proof.test.ts
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Freeze unchanged proof and source
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/proof"
+          cp .github/proof/cli-process-title.fixture.ts "${RUNNER_TEMP}/proof/fixture.test.ts"
+          git fetch --depth=1 --no-tags https://github.com/openclaw/openclaw.git "${BASE_SHA}"
+          git checkout --detach "${BASE_SHA}"
+          test "$(git rev-parse HEAD)" = "${BASE_SHA}"
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 26.8.2
+      - name: Prepare isolated dependencies
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+      - name: Actual process baseline RED and bare-exec control
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp "${RUNNER_TEMP}/proof/fixture.test.ts" "${TEST_FILE}"
+          set +e
+          /usr/bin/time -f '%e' -o "${RUNNER_TEMP}/proof/red-wall.txt" node scripts/run-vitest.mjs "${TEST_FILE}" --reporter=verbose > "${RUNNER_TEMP}/proof/red.log" 2>&1
+          result=$?
+          set -e
+          cat "${RUNNER_TEMP}/proof/red.log"
+          printf 'sha=%s\nexit=%s\n' "$(git rev-parse HEAD)" "${result}" | tee "${RUNNER_TEMP}/proof/red-source.txt"
+          test "${result}" = 1
+          grep -q '2 failed' "${RUNNER_TEMP}/proof/red.log"
+          grep -q '1 passed' "${RUNNER_TEMP}/proof/red.log"
+          grep -q 'AssertionError' "${RUNNER_TEMP}/proof/red.log"
+          test "$(grep -c PHYSICAL_CLI_NARRATION_RECEIPT "${RUNNER_TEMP}/proof/red.log")" = 3
+          rm "${TEST_FILE}"
+          git diff --exit-code
+      - name: Exact unchanged candidate GREEN
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --depth=16 --no-tags https://github.com/ly85206559/openclaw.git "${TARGET_SHA}"
+          git checkout --detach "${TARGET_SHA}"
+          test "$(git rev-parse HEAD)" = "${TARGET_SHA}"
+          test "$(git merge-base "${BASE_SHA}" HEAD)" = "${BASE_SHA}"
+          cp "${RUNNER_TEMP}/proof/fixture.test.ts" "${TEST_FILE}"
+          /usr/bin/time -f '%e' -o "${RUNNER_TEMP}/proof/green-wall.txt" node scripts/run-vitest.mjs "${TEST_FILE}" --reporter=verbose > "${RUNNER_TEMP}/proof/green.log" 2>&1
+          cat "${RUNNER_TEMP}/proof/green.log"
+          grep -q '3 passed' "${RUNNER_TEMP}/proof/green.log"
+          test "$(grep -c PHYSICAL_CLI_NARRATION_RECEIPT "${RUNNER_TEMP}/proof/green.log")" = 3
+          rm "${TEST_FILE}"
+          git diff --exit-code
+          git rev-parse HEAD HEAD^{tree} | tee "${RUNNER_TEMP}/proof/green-source.txt"
+      - name: Retain outcomes including fixture/environment failures
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: physical-cli-title-${{ github.run_id }}
+          path: ${{ runner.temp }}/proof/
+          if-no-files-found: error
+          retention-days: 30
