@@ -1,4 +1,3 @@
-// Tencent plugin entrypoint registers its OpenClaw integration.
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
 import { buildOpenAICompatibleProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
@@ -81,6 +80,7 @@ export default definePluginEntry({
           order: "simple",
           run: (ctx) =>
             buildOpenAICompatibleProviderCatalog({
+              discoveryMode: "strict",
               ctx,
               providerId: provider.providerId,
               buildProvider: provider.buildProvider,

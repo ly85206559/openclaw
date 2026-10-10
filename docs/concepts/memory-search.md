@@ -56,11 +56,11 @@ chunks. Set these with `queryInputType` and `documentInputType`; see
 | GitHub Copilot    | `github-copilot`    | No            | Uses your Copilot subscription    |
 | Local             | `local`             | No            | Managed llama.cpp GGUF, ~0.3 GB   |
 | LM Studio         | `lmstudio`          | No            | Local/self-hosted server          |
-| Mistral           | `mistral`           | Yes           |                                   |
+| Mistral           | `mistral`           | Yes           | Default model `mistral-embed`     |
 | Ollama            | `ollama`            | No            | Local/self-hosted server          |
-| OpenAI            | `openai`            | Yes           | Default                           |
+| OpenAI            | `openai`            | Depends       | API key or eligible Codex OAuth   |
 | OpenAI-compatible | `openai-compatible` | Usually       | Generic `/v1/embeddings` endpoint |
-| Voyage            | `voyage`            | Yes           |                                   |
+| Voyage            | `voyage`            | Yes           | Default model `voyage-4-large`    |
 
 ## How search works
 
@@ -107,6 +107,11 @@ MMR then reorders the scored hybrid candidate set to reduce redundant
 snippets. It does not change scores, threshold eligibility, or make another
 provider call.
 
+Search preserves keyword matches when every ranked result falls below the
+configured minimum score. Hybrid search can also fill remaining result slots
+with keyword-only matches. These rules also apply in project sessions;
+semantic-only matches still need to meet the configured minimum score.
+
 ## Deterministic trigger recall
 
 On eligible interactive turns, the builtin engine also compares the inbound
@@ -129,6 +134,11 @@ still indexes text for keyword search, including manual and background indexing
 before the first search. `memory_search` includes the
 redacted embedding-bootstrap reason in `debug.embeddingBootstrap` even when
 there are no matches.
+
+A failed local embedding request preserves keyword access to a matching index
+and records the degraded provider in memory status and Gateway logs. A real model
+or index-configuration mismatch still pauses search instead of serving
+mismatched data.
 
 **Explicit provider unavailable.** If you name any other provider explicitly
 (for example `openai`, `ollama`, `gemini`) and it becomes unavailable at
@@ -161,8 +171,8 @@ Reduces redundant results. If five notes all mention the same router config,
 MMR favors a similarly relevant result with different content instead of
 repeating near-identical snippets. The fixed relevance-biased setting uses
 lambda `0.7` with Jaccard overlap over snippet tokens. Its local work is
-`O(k²)`: ordinary defaults request 24 candidates per retrieval leg, for at
-most 48 unique non-exact candidates before overlap; broader project and
+`O(k²)`: ordinary defaults request 200 candidates per retrieval leg, for at
+most 400 unique non-exact candidates before overlap; broader project and
 identifier searches remain separately capped.
 
 <Tip>
@@ -218,12 +228,21 @@ incognito exclusions still apply.
 provider-owned batch deadlines. Run `openclaw memory status --deep` to inspect
 the managed server endpoints before rebuilding the index.
 
+OpenAI-compatible embedding requests honor the caller's deadline, including
+the longer indexing budget, without an earlier HTTP header or body timeout.
+Deep status probes make one attempt using the provider's query budget: normally
+60 seconds for remote providers or 5 minutes for `local`, unless the provider
+supplies its own query budget. Managed server readiness keeps its separate
+budget. A stalled probe reports `memory embedding probe timed out after Ns`.
+
 **CJK text not found?** Rebuild the FTS index with
 `openclaw memory index --force`.
 
 ## Related
 
 - [Memory overview](/concepts/memory)
+- [Memory architecture](/concepts/memory-architecture)
 - [Active memory](/concepts/active-memory)
 - [Builtin memory engine](/concepts/memory-builtin)
 - [Memory configuration reference](/reference/memory-config)
+- [Memory LanceDB](/plugins/memory-lancedb)

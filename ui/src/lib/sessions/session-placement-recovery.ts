@@ -5,6 +5,7 @@ import {
 } from "@openclaw/gateway-protocol";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { hasNonEmptyString as isNonEmptyString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { Value } from "typebox/value";
 import type { HumanMention } from "../chat/chat-types.ts";
 import { readHumanMentions } from "../chat/human-mentions.ts";
@@ -16,8 +17,10 @@ import {
   sessionPlacementRecoveryScopeStoragePrefix,
 } from "./session-placement-recovery-storage-key.ts";
 
+export type SessionPlacementStartMode = "dispatch" | "recover" | "retry";
+
 export type SessionPlacementTarget =
-  | { kind: "profile"; profileId: string; machineClass?: string }
+  | { kind: "profile"; profileId: string; os?: string; machineClass?: string }
   | { kind: "device"; deviceId: string }
   | { kind: "auto-device" };
 
@@ -27,8 +30,10 @@ export type SessionPlacementCreateParams = Omit<SessionCreateParams, "execNode">
   message: "";
   projectId?: string;
   visibility?: "draft";
-  worktree: true;
-};
+} & (
+    | { worktree: true; repository?: undefined }
+    | { repository: NonNullable<SessionCreateParams["repository"]>; worktree?: undefined }
+  );
 
 type SessionPlacementSubmission = {
   sessionKey: string;
@@ -62,7 +67,9 @@ const SESSION_PLACEMENT_ERROR_MAX_LENGTH = 4096;
 const PLACEMENT_CREATE_STRING_FIELDS = [
   "category",
   "displayName",
+  "titleSource",
   "model",
+  "agentRuntime",
   "contextWindow",
   "thinkingLevel",
   "worktreeBaseRef",
@@ -76,6 +83,8 @@ const PLACEMENT_CREATE_FIELDS = new Set<string>([
   "agentId",
   "message",
   "worktree",
+  "worktreeSource",
+  "repository",
   "incognito",
   "visibility",
   "permissionMode",
@@ -98,7 +107,23 @@ export function parseSessionPlacementCreateParams(
     record.key !== sessionKey ||
     record.agentId !== agentId ||
     record.message !== "" ||
-    record.worktree !== true ||
+    (record.worktreeSource !== undefined &&
+      (!Value.Check(SessionsCreateParamsSchema.properties.worktreeSource, record.worktreeSource) ||
+        record.worktree !== true ||
+        record.repository !== undefined ||
+        record.projectId !== undefined ||
+        record.cwd !== undefined ||
+        record.worktreeBaseRef !== undefined ||
+        record.catalogId !== undefined)) ||
+    (record.repository === undefined
+      ? record.worktree !== true
+      : !Value.Check(SessionsCreateParamsSchema.properties.repository, record.repository) ||
+        record.worktree !== undefined ||
+        record.projectId !== undefined ||
+        record.cwd !== undefined ||
+        record.worktreeBaseRef !== undefined ||
+        record.worktreeName !== undefined ||
+        record.catalogId !== undefined) ||
     (record.incognito !== undefined && record.incognito !== true) ||
     (record.visibility !== undefined && record.visibility !== "draft") ||
     (record.fastMode !== undefined &&
@@ -107,6 +132,8 @@ export function parseSessionPlacementCreateParams(
       !Value.Check(SessionPermissionModeSchema, record.permissionMode)) ||
     (record.toolOverrides !== undefined &&
       !Value.Check(SessionToolOverridesSchema, record.toolOverrides)) ||
+    (record.titleSource !== undefined &&
+      !Value.Check(SessionsCreateParamsSchema.properties.titleSource, record.titleSource)) ||
     (record.projectId !== undefined && record.cwd !== undefined) ||
     PLACEMENT_CREATE_STRING_FIELDS.some(
       (key) => record[key] !== undefined && !isNonEmptyString(record[key]),
@@ -130,14 +157,6 @@ function parseStoredSessionPlacementRecovery(
   }
 }
 
-function sessionPlacementRecoveryClaimsScope(
-  value: Partial<SessionPlacementRecovery>,
-  gatewayUrl: string,
-  recoveryScope: string,
-): boolean {
-  return value.gatewayUrl === gatewayUrl && value.recoveryScope === recoveryScope;
-}
-
 function parseSessionPlacementTarget(value: unknown): SessionPlacementTarget | null {
   if (!isRecord(value)) {
     return null;
@@ -145,9 +164,10 @@ function parseSessionPlacementTarget(value: unknown): SessionPlacementTarget | n
   if (
     value.kind === "profile" &&
     Object.keys(value).every(
-      (key) => key === "kind" || key === "profileId" || key === "machineClass",
+      (key) => key === "kind" || key === "profileId" || key === "os" || key === "machineClass",
     ) &&
     isNonEmptyString(value.profileId) &&
+    (value.os === undefined || (isNonEmptyString(value.os) && value.os.length <= 64)) &&
     (value.machineClass === undefined ||
       (isNonEmptyString(value.machineClass) && value.machineClass.length <= 128))
   ) {
@@ -184,7 +204,8 @@ function validateSessionPlacementRecovery(
     (value.attachments !== undefined && !Array.isArray(value.attachments)) ||
     !parseSessionPlacementTarget(value.target) ||
     !isNonEmptyString(value.agentId) ||
-    !sessionPlacementRecoveryClaimsScope(value, gatewayUrl, recoveryScope) ||
+    value.gatewayUrl !== gatewayUrl ||
+    value.recoveryScope !== recoveryScope ||
     (value.phase !== "creating" &&
       value.phase !== "dispatching" &&
       value.phase !== "sending" &&
@@ -295,6 +316,15 @@ function relocateSessionPlacementRecoveryRow(
   return null;
 }
 
+function withRecoveryStorage<T>(fallback: T, operation: (storage: Storage) => T): T {
+  try {
+    const storage = globalThis.sessionStorage;
+    return storage ? operation(storage) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 export function listSessionPlacementRecoveries(
   gatewayUrl: string,
   recoveryScope: string,
@@ -302,11 +332,7 @@ export function listSessionPlacementRecoveries(
   if (!gatewayUrl || !recoveryScope) {
     return [];
   }
-  try {
-    const storage = globalThis.sessionStorage;
-    if (!storage) {
-      return [];
-    }
+  return withRecoveryStorage<SessionPlacementRecovery[]>([], (storage) => {
     const recoveries = new Map<string, SessionPlacementRecovery>();
     for (const key of listSessionPlacementRecoveryStorageKeys(gatewayUrl, recoveryScope)) {
       const recovery = readOwnedSessionPlacementRecovery(storage, key, gatewayUrl, recoveryScope);
@@ -319,9 +345,7 @@ export function listSessionPlacementRecoveries(
     return [...recoveries.values()].toSorted((left, right) =>
       left.sessionKey.localeCompare(right.sessionKey),
     );
-  } catch {
-    return [];
-  }
+  });
 }
 
 export function migrateSessionPlacementRecoveryScope(
@@ -350,16 +374,10 @@ export function readSessionPlacementRecovery(
   if (!gatewayUrl || !recoveryScope || !sessionKey) {
     return null;
   }
-  try {
-    const storage = globalThis.sessionStorage;
-    if (!storage) {
-      return null;
-    }
+  return withRecoveryStorage(null, (storage) => {
     const key = sessionPlacementRecoveryExactStorageKey(gatewayUrl, recoveryScope, sessionKey);
     return readOwnedSessionPlacementRecovery(storage, key, gatewayUrl, recoveryScope, sessionKey);
-  } catch {
-    return null;
-  }
+  });
 }
 
 export function writeSessionPlacementRecovery(recovery: SessionPlacementRecovery): boolean {
@@ -373,19 +391,13 @@ export function writeSessionPlacementRecovery(recovery: SessionPlacementRecovery
   if (!gatewayUrl || !recoveryScope || !normalized) {
     return false;
   }
-  try {
-    const storage = globalThis.sessionStorage;
-    if (!storage) {
-      return false;
-    }
+  return withRecoveryStorage(false, (storage) => {
     const key = sessionPlacementRecoveryExactStorageKey(gatewayUrl, recoveryScope, sessionKey);
     storage.setItem(key, JSON.stringify(normalized));
     return Boolean(
       readOwnedSessionPlacementRecovery(storage, key, gatewayUrl, recoveryScope, sessionKey),
     );
-  } catch {
-    return false;
-  }
+  });
 }
 
 export function writeSessionPlacementRecoveryIfAvailable(
@@ -410,9 +422,8 @@ export function promoteSessionPlacementRecovery(
   if (previousSessionKey === recovery.sessionKey) {
     return writeSessionPlacementRecoveryIfAvailable(recovery);
   }
-  try {
-    const storage = globalThis.sessionStorage;
-    if (!storage || !previousSessionKey) {
+  return withRecoveryStorage(false, (storage) => {
+    if (!previousSessionKey) {
       return false;
     }
     const previousKey = sessionPlacementRecoveryExactStorageKey(
@@ -455,9 +466,7 @@ export function promoteSessionPlacementRecovery(
     return Boolean(
       relocateSessionPlacementRecoveryRow(storage, previousKey, previousRaw, recovery),
     );
-  } catch {
-    return false;
-  }
+  });
 }
 
 export function clearSessionPlacementRecovery(
@@ -469,11 +478,7 @@ export function clearSessionPlacementRecovery(
   if (!gatewayUrl || !recoveryScope) {
     return;
   }
-  try {
-    const storage = globalThis.sessionStorage;
-    if (!storage) {
-      return;
-    }
+  withRecoveryStorage(undefined, (storage) => {
     if (expectedSessionKey) {
       const key = sessionPlacementRecoveryExactStorageKey(
         gatewayUrl,
@@ -500,9 +505,7 @@ export function clearSessionPlacementRecovery(
       }
       removeSessionPlacementRecoveryRow(storage, key);
     }
-  } catch {
-    // Recovery state is best-effort to remove after the durable operation completes.
-  }
+  });
 }
 
 /** Paused records cannot be executed by older readers, which reject unknown phases. */
@@ -520,7 +523,7 @@ export function pauseSessionPlacementRecovery(
     ...recovery,
     phase: "paused",
     reason,
-    error: formatUiError(error).slice(0, SESSION_PLACEMENT_ERROR_MAX_LENGTH),
+    error: truncateUtf16Safe(formatUiError(error), SESSION_PLACEMENT_ERROR_MAX_LENGTH),
   };
   const persisted = persistent && writeSessionPlacementRecoveryIfAvailable(paused);
   if (persistent && !persisted) {
@@ -539,11 +542,10 @@ export function pauseSessionPlacementRecovery(
         recovery.messageId,
       );
     }
-    paused.error =
-      `Recovery could not be saved in this tab. Keep this page open.\n${paused.error}`.slice(
-        0,
-        SESSION_PLACEMENT_ERROR_MAX_LENGTH,
-      );
+    paused.error = truncateUtf16Safe(
+      `Recovery could not be saved in this tab. Keep this page open.\n${paused.error}`,
+      SESSION_PLACEMENT_ERROR_MAX_LENGTH,
+    );
   }
   return { recovery: paused, persisted };
 }

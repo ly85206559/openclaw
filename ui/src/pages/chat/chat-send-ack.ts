@@ -15,6 +15,8 @@ type ChatSendAckServerTiming = {
 export type ChatSendAck = {
   runId: string;
   status: ChatSendAckStatus;
+  stopReason?: "restart";
+  messageSeq?: number;
   serverTiming?: ChatSendAckServerTiming;
 };
 
@@ -23,15 +25,20 @@ function normalizeChatSendAckServerTiming(value: unknown): ChatSendAckServerTimi
     return undefined;
   }
   const record = value as Record<string, unknown>;
-  const receivedToAckMs = normalizeAckTimingValue(record.receivedToAckMs);
-  const loadSessionMs = normalizeAckTimingValue(record.loadSessionMs);
-  const prepareAttachmentsMs = normalizeAckTimingValue(record.prepareAttachmentsMs);
-  const timing: ChatSendAckServerTiming = {
-    ...(receivedToAckMs !== undefined ? { receivedToAckMs } : {}),
-    ...(loadSessionMs !== undefined ? { loadSessionMs } : {}),
-    ...(prepareAttachmentsMs !== undefined ? { prepareAttachmentsMs } : {}),
-  };
+  const timing: ChatSendAckServerTiming = {};
+  for (const key of ["receivedToAckMs", "loadSessionMs", "prepareAttachmentsMs"] as const) {
+    const duration = normalizeAckTimingValue(record[key]);
+    if (duration !== undefined) {
+      timing[key] = duration;
+    }
+  }
   return Object.keys(timing).length > 0 ? timing : undefined;
+}
+
+export function normalizeChatSendAckStatus(status: unknown): ChatSendAckStatus {
+  return status === "in_flight" || status === "ok" || status === "timeout" || status === "error"
+    ? status
+    : "started";
 }
 
 export function normalizeChatSendAck(payload: unknown, fallbackRunId: string): ChatSendAck {
@@ -41,15 +48,19 @@ export function normalizeChatSendAck(payload: unknown, fallbackRunId: string): C
   const record = payload as Record<string, unknown>;
   const runId =
     typeof record.runId === "string" && record.runId.trim() ? record.runId.trim() : fallbackRunId;
-  const status = record.status;
   const serverTiming = normalizeChatSendAckServerTiming(record.serverTiming);
+  const messageSeq =
+    typeof record.messageSeq === "number" &&
+    Number.isSafeInteger(record.messageSeq) &&
+    record.messageSeq > 0
+      ? record.messageSeq
+      : undefined;
   return {
     runId,
-    status:
-      status === "in_flight" || status === "ok" || status === "timeout" || status === "error"
-        ? status
-        : "started",
+    status: normalizeChatSendAckStatus(record.status),
     ...(serverTiming ? { serverTiming } : {}),
+    ...(messageSeq !== undefined ? { messageSeq } : {}),
+    ...(record.stopReason === "restart" ? { stopReason: "restart" as const } : {}),
   };
 }
 
@@ -70,8 +81,5 @@ export type ChatSendTimingEntry = {
   sendAttempts: number;
   sendState?: ChatQueueItem["sendState"];
   submittedAtMs: number;
-  requestStartedAtMs?: number;
-  ackAtMs?: number;
   ackStatus?: ChatSendAckStatus;
-  firstAssistantVisibleRecorded?: boolean;
 };

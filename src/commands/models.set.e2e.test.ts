@@ -2,8 +2,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createModelVisibilityPolicy } from "../agents/model-visibility-policy.js";
 import { registerModelsCli } from "../cli/models-cli.js";
+import type {
+  ConfigFileSnapshot,
+  OpenClawConfig,
+  TransformConfigFileParams,
+} from "../config/config.js";
 import { stampConfigWriteMetadata } from "../config/io.meta.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { defaultRuntime } from "../runtime.js";
 import { runRegisteredCli } from "../test-utils/command-runner.js";
 
@@ -14,22 +18,40 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../config/config.js", async () => {
   const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
-  return {
-    ...actual,
-    readConfigFileSnapshot: async () => ({
+  const readConfigFileSnapshot = async (): Promise<ConfigFileSnapshot> => {
+    const config = structuredClone(mocks.currentConfig);
+    return {
+      path: "/tmp/openclaw-models-set-fixture.json",
+      exists: true,
+      raw: JSON.stringify(config),
+      parsed: config,
       valid: true,
       hash: "config-hash",
-      sourceConfig: structuredClone(mocks.currentConfig),
-      runtimeConfig: structuredClone(mocks.currentConfig),
-      config: structuredClone(mocks.currentConfig),
-    }),
-    replaceConfigFile: async ({ nextConfig }: { nextConfig: Record<string, unknown> }) => {
+      sourceConfig: config,
+      resolved: config,
+      runtimeConfig: structuredClone(config),
+      config: structuredClone(config),
+      issues: [],
+      warnings: [],
+      legacyIssues: [],
+    };
+  };
+  return {
+    ...actual,
+    readConfigFileSnapshot,
+    transformConfigFile: async ({ base, transform }: TransformConfigFileParams<unknown>) => {
+      const snapshot = await readConfigFileSnapshot();
+      const { nextConfig, result } = await transform(
+        base === "runtime" ? snapshot.runtimeConfig : snapshot.sourceConfig,
+        { snapshot, previousHash: snapshot.hash ?? null, attempt: 0 },
+        {},
+      );
       mocks.writtenConfig = nextConfig;
+      return { nextConfig, result };
     },
   };
 });
 
-import { modelsSetImageCommand } from "./models/set-image.js";
 import { modelsSetCommand } from "./models/set.js";
 
 function mockConfigSnapshot(config: Record<string, unknown> = {}) {
@@ -101,27 +123,30 @@ describe("models set + fallbacks", () => {
   });
 
   it.each([
-    ["text", modelsSetCommand],
-    ["image", modelsSetImageCommand],
-  ])("rejects an unknown %s model provider without writing config", async (_kind, command) => {
-    mockConfigSnapshot({});
-    const runtime = makeRuntime();
+    ["text", "model"],
+    ["image", "imageModel"],
+  ] as const)(
+    "rejects an unknown %s model provider without writing config",
+    async (_kind, field) => {
+      mockConfigSnapshot({});
+      const runtime = makeRuntime();
 
-    await expect(command("no-such-provider/no-such-model", runtime)).rejects.toThrow(
-      'Unknown model provider "no-such-provider"',
-    );
+      await expect(
+        modelsSetCommand("no-such-provider/no-such-model", runtime, field),
+      ).rejects.toThrow('Unknown model provider "no-such-provider"');
 
-    expect(mocks.writtenConfig).toBeUndefined();
-  });
+      expect(mocks.writtenConfig).toBeUndefined();
+    },
+  );
 
   it.each([
-    ["text", modelsSetCommand],
-    ["image", modelsSetImageCommand],
-  ])("warns but saves an unknown %s model for a known provider", async (_kind, command) => {
+    ["text", "model"],
+    ["image", "imageModel"],
+  ] as const)("warns but saves an unknown %s model for a known provider", async (_kind, field) => {
     mockConfigSnapshot({});
     const runtime = makeRuntime();
 
-    await command("openai/not-in-the-local-catalog", runtime);
+    await modelsSetCommand("openai/not-in-the-local-catalog", runtime, field);
 
     expect(runtime.error).toHaveBeenCalledWith(
       expect.stringContaining(
@@ -140,9 +165,24 @@ describe("models set + fallbacks", () => {
     await modelsSetCommand("ollama/site-local-model", runtime);
 
     expect(runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining('Model "ollama/site-local-model" is not in the local model catalog'),
+      expect.stringContaining('Provider "ollama" has no local model catalog'),
     );
     expect(getWrittenConfig().agents?.defaults?.models).toHaveProperty("ollama/site-local-model");
+  });
+
+  it("does not ask to verify a model id when the provider plans no catalog rows", async () => {
+    mockConfigSnapshot({});
+    const runtime = makeRuntime();
+
+    await modelsSetCommand("openrouter/auto", runtime);
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'Provider "openrouter" has no local model catalog, so "openrouter/openrouter/auto" could not be checked offline.',
+      ),
+    );
+    expect(runtime.error).not.toHaveBeenCalledWith(expect.stringContaining("verify the model ID"));
+    expect(getWrittenConfig().agents?.defaults?.models).toHaveProperty("openrouter/auto");
   });
 
   it("does not make an unlisted model override invalid on a fresh config", async () => {
@@ -151,12 +191,7 @@ describe("models set + fallbacks", () => {
     await modelsSetCommand("clawrouter/google/gemini-3.5-flash", makeRuntime());
 
     const written = getWrittenConfig();
-    const persisted = stampConfigWriteMetadata(
-      written,
-      "2026-07-18T00:00:00.000Z",
-      "test",
-      mocks.currentConfig,
-    );
+    const persisted = stampConfigWriteMetadata(written, "test", mocks.currentConfig);
     const policy = createModelVisibilityPolicy({
       cfg: persisted,
       catalog: [],

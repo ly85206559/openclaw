@@ -20,17 +20,14 @@ import {
   waitForChatScrollIdle,
   waitForRequests,
 } from "./chat-flow.test-support.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 type ChatFlowTestApp = HTMLElement & { runtime?: { context: ApplicationContext } };
 
 suite.define(() => {
   it("keeps an unrelated retained transcript after another tab deletes a session", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const sessionA = "agent:main:session-a";
     const sessionB = "agent:main:session-b";
@@ -272,11 +269,7 @@ suite.define(() => {
   });
 
   it("keeps valid assistant history visible after a malformed transcript block", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const visibleAnswer = "The valid assistant answer remains visible.";
     const gateway = await installMockGateway(page, {
@@ -301,83 +294,66 @@ suite.define(() => {
   });
 
   it("shows persisted user messages after opening History and scrolling mixed history", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
-    const page = await context.newPage();
-    const baseTs = Date.now() - 100_000;
-    const currentSessionMessages = [
-      {
-        content: [{ text: "Current session placeholder", type: "text" }],
-        role: "assistant",
-        timestamp: baseTs - 1,
-      },
-    ];
-    const historyMessages = Array.from({ length: 70 }, (_, index) => ({
-      content: [
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const baseTs = Date.now() - 100_000;
+      const currentSessionMessages = [
         {
-          text: `${index % 2 === 0 ? "User history question" : "Assistant history answer"} ${index}\n${"history detail line\n".repeat(4)}`,
-          type: index % 2 === 0 ? "input_text" : "output_text",
+          content: [{ text: "Current session placeholder", type: "text" }],
+          role: "assistant",
+          timestamp: baseTs - 1,
         },
-      ],
-      role: index % 2 === 0 ? "user" : "assistant",
-      timestamp: baseTs + index,
-    }));
-    const gateway = await installMockGateway(page, {
-      historyMessages: currentSessionMessages,
-      methodResponses: {
-        "chat.startup": {
-          cases: [
+      ];
+      const historyMessages = Array.from({ length: 70 }, (_, index) => ({
+        content: [
+          {
+            text: `${index % 2 === 0 ? "User history question" : "Assistant history answer"} ${index}\n${"history detail line\n".repeat(4)}`,
+            type: index % 2 === 0 ? "input_text" : "output_text",
+          },
+        ],
+        role: index % 2 === 0 ? "user" : "assistant",
+        timestamp: baseTs + index,
+      }));
+      const gateway = await installMockGateway(page, {
+        // A stays fixed while B's shared history/startup snapshot grows below.
+        historyMessages: currentSessionMessages,
+        sessionTranscripts: {
+          "agent:main:session-a": { messages: currentSessionMessages },
+        },
+        deferredMethods: ["chat.history"],
+        methodResponses: {
+          "sessions.list": chatSessionListResponse([
             {
-              match: { sessionKey: "agent:main:session-b" },
-              response: {
-                messages: historyMessages,
-                sessionId: "control-ui-e2e-history-session-b",
-                thinkingLevel: null,
-              },
+              key: "agent:main:session-a",
+              sessionId: "control-ui-e2e-history-session-a",
+              kind: "direct",
+              label: "Session A",
+              updatedAt: 2,
             },
             {
-              match: { sessionKey: "agent:main:session-a" },
-              response: {
-                messages: currentSessionMessages,
-                sessionId: "control-ui-e2e-history-session-a",
-                thinkingLevel: null,
-              },
+              key: "agent:main:session-b",
+              sessionId: "control-ui-e2e-history-session-b",
+              kind: "direct",
+              label: "Session B",
+              updatedAt: 1,
             },
-          ],
+          ]),
         },
-        "sessions.list": chatSessionListResponse([
-          {
-            key: "agent:main:session-a",
-            sessionId: "control-ui-e2e-history-session-a",
-            kind: "direct",
-            label: "Session A",
-            updatedAt: 2,
-          },
-          {
-            key: "agent:main:session-b",
-            sessionId: "control-ui-e2e-history-session-b",
-            kind: "direct",
-            label: "Session B",
-            updatedAt: 1,
-          },
-        ]),
-      },
-      sessionKey: "agent:main:session-a",
-    });
+        sessionKey: "agent:main:session-a",
+      });
 
-    try {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-a"));
       await page.getByText("Current session placeholder").waitFor({ timeout: 10_000 });
 
+      // Keyboard navigation intent warms the short snapshot before startup expands it.
+      const sessionBLink = page.locator(
+        '.sidebar-recent-session[data-session-key="agent:main:session-b"] a.sidebar-recent-session__link',
+      );
+      await sessionBLink.focus();
+      await waitForRequests(gateway, "chat.history", 1, { sessionKey: "agent:main:session-b" });
+      await gateway.resolveDeferred("chat.history");
+      await gateway.deferNext("chat.startup", { sessionKey: "agent:main:session-b" });
       const startupCountBeforeSwitch = (await gateway.getRequests("chat.startup")).length;
-      await page
-        .locator(
-          '.sidebar-recent-session[data-session-key="agent:main:session-b"] a.sidebar-recent-session__link',
-        )
-        .click();
+      await sessionBLink.click();
       const startupRequests = await waitForRequests(
         gateway,
         "chat.startup",
@@ -388,6 +364,9 @@ suite.define(() => {
         sessionKey: "agent:main:session-b",
       });
       const activeThread = page.locator(".chat-pane-cache__pane--active .chat-thread");
+      await activeThread.getByText("Current session placeholder").waitFor({ timeout: 10_000 });
+      await gateway.setHistoryMessages(historyMessages);
+      await gateway.resolveDeferred("chat.startup");
       await activeThread.getByText("User history question 68").waitFor({
         timeout: 10_000,
       });
@@ -425,9 +404,7 @@ suite.define(() => {
           { timeout: 10_000 },
         )
         .toBe(true);
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
+    });
   });
 
   it("keeps evicted paginated history stable when returning to a session", async () => {
@@ -596,6 +573,7 @@ suite.define(() => {
       const activePane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
       const thread = activePane.locator(".chat-thread");
       await thread.hover();
+      const previousScrollHeight = await thread.evaluate((element) => element.scrollHeight);
       await page.mouse.wheel(0, -1_000_000);
       await expect
         .poll(() =>
@@ -606,6 +584,16 @@ suite.define(() => {
           ),
         )
         .toBe(140);
+      await expect
+        .poll(() =>
+          thread.evaluate(
+            (element, previousHeight) =>
+              element.scrollHeight > previousHeight && element.scrollTop > 0,
+            previousScrollHeight,
+          ),
+        )
+        .toBe(true);
+      await waitForChatScrollIdle(page);
       // Prepending preserves the visible anchor. A renewed upward gesture
       // reaches the newly loaded start instead of teleporting the reader.
       await page.mouse.wheel(0, -1_000_000);
@@ -740,11 +728,7 @@ suite.define(() => {
       await composer.waitFor({ state: "visible", timeout: 10_000 });
 
       await gateway.setOnline(false);
-      await page
-        .locator(
-          '.agent-chat__composer-underlaps[data-tone="warn"] .agent-chat__composer-status-band',
-        )
-        .waitFor({ timeout: 10_000 });
+      await page.locator(".agent-chat__input--offline").waitFor({ timeout: 10_000 });
 
       const prompt = "send this when the Gateway returns";
       const attachmentName = "offline-proof.txt";
@@ -843,6 +827,7 @@ suite.define(() => {
         {
           content: attachmentBase64,
           fileName: attachmentName,
+          origin: "file",
           mimeType: attachmentMimeType,
           type: "file",
         },
@@ -859,12 +844,6 @@ suite.define(() => {
       }
       await expectRequestCountStable(gateway, "chat.send", 1);
       const requestsAfterReconnect = await gateway.getRequests("chat.send");
-      await gateway.setHistoryMessages([
-        {
-          role: "user",
-          __openclaw: { idempotencyKey: `${runId}:user` },
-        },
-      ]);
       await gateway.emitChatFinal({ runId, text: "Delivered after reconnect." });
       await queue.waitFor({ state: "detached", timeout: 10_000 });
       await page.locator(".chat-thread").getByText(prompt).waitFor({ timeout: 10_000 });
@@ -874,11 +853,7 @@ suite.define(() => {
           return proof.attachment || proof.prompt || proof.runId === runId;
         })
         .toBe(false);
-      await page
-        .locator(
-          '.agent-chat__composer-underlaps[data-tone="warn"] .agent-chat__composer-status-band',
-        )
-        .waitFor({ state: "detached" });
+      await page.locator(".agent-chat__input--offline").waitFor({ state: "detached" });
       await expectRequestCountStable(gateway, "chat.send", 1);
       if (artifactDir) {
         await writeFile(
