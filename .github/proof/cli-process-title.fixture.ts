@@ -5,6 +5,12 @@ import path from "node:path";
 import { createInterface } from "node:readline";
 import { text } from "node:stream/consumers";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { withRegisteredChannelIngress } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
+import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
+import type { ChannelInboundTurnPlan } from "openclaw/plugin-sdk/channel-inbound";
+import type { GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
+import { discordPlugin } from "../../../extensions/discord/api.js";
+import { createDiscordMessageHandler, createNoopThreadBindingManager, setDiscordRuntime } from "../../../extensions/discord/runtime-api.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { buildPreparedCliRunContext } from "../../agents/cli-runner.test-helpers.js";
 import { executePreparedCliRun } from "../../agents/cli-runner/execute.js";
@@ -23,13 +29,21 @@ import {
 import { attachProgressNarratorToReplyOptions } from "./progress-narrator.js";
 import type { ProgressNarrationInput } from "./progress-narrator-model.js";
 
-const narrationModelMocks = vi.hoisted(() => ({ prepare: vi.fn(), generate: vi.fn() }));
-// Only process/event/projector/narrator consumption is claimed. Selection,
-// persistence, utility model and channel transport remain isolated test doubles.
+const narrationModelMocks = vi.hoisted(() => ({ prepare: vi.fn(), generate: vi.fn(), reply: vi.fn<NonNullable<ChannelInboundTurnPlan["replyResolver"]>>() }));
+// The actual registered channel owner, request authority and compositor remain
+// intact. Only agent selection/storage, utility model and REST transport are isolated.
 vi.mock("./progress-narrator-model.js", () => ({
   prepareNarrationModel: narrationModelMocks.prepare,
   generateNarrationWithUtilityModel: narrationModelMocks.generate,
 }));
+vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-inbound")>();
+  return {
+    ...actual,
+    dispatchChannelInboundTurn: (plan: ChannelInboundTurnPlan) =>
+      actual.dispatchChannelInboundTurn({ ...plan, replyResolver: narrationModelMocks.reply }),
+  };
+});
 
 const state = await setupAgentRunnerExecutionTestState();
 const executeAgentTurn = await getExecuteAgentTurnForTest();
@@ -77,27 +91,45 @@ describe("physical CLI process to registered failure narration", () => {
       stage("fixture-ready");
       const observedInput = createDeferred<ProgressNarrationInput>();
       const narrationDelivered = createDeferred<void>();
-      const controller = new AbortController();
       const receipts: Array<{ pid?: number; code: number | null; stderr: string; argv: string[] }> = [];
       onTestFinished(() => {
-        controller.abort();
         narrationModelMocks.prepare.mockReset();
         narrationModelMocks.generate.mockReset();
+        narrationModelMocks.reply.mockReset();
       });
       narrationModelMocks.prepare.mockResolvedValue({ provider: "openai", model: "test-utility" });
       narrationModelMocks.generate.mockImplementation(async ({ input }: { input: ProgressNarrationInput }) => {
         stage("narration-input", { activityNotes: input.activityNotes });
-        observedInput.resolve(input);
-        return { text: "The status check failed." };
+        const failedNote = input.activityNotes.find((note) => note.endsWith(": failed"));
+        if (failedNote) observedInput.resolve(input);
+        return { text: failedNote ? `Fixture failure narration: ${failedNote}` : "Fixture working." };
       });
-      const onNarrationUpdate = vi.fn(() => narrationDelivered.resolve());
-      const opts = attachProgressNarratorToReplyOptions({
-        cfg: { agents: { defaults: { utilityModel: "openai/test-utility" } } },
-        agentId: "main",
-        userMessage: "Check the build status",
-        opts: { onNarrationUpdate, abortSignal: controller.signal },
-      });
-      if (!opts) throw new Error("Expected registered narrator options");
+      let registeredOptions: GetReplyOptions | undefined;
+      const restReceipts: Array<{ method: string; route: string; content?: string }> = [];
+      const channelId = "101010101010101010";
+      const userId = "202020202020202020";
+      const fetchFixture: typeof fetch = async (input, init) => {
+        const url = new URL(input instanceof Request ? input.url : String(input));
+        if (url.origin !== "https://discord.com" || !url.pathname.startsWith(`/api/v10/channels/${channelId}/`)) {
+          throw new Error(`Unexpected proof transport request: ${url.origin}${url.pathname}`);
+        }
+        const method = init?.method ?? "GET";
+        const body = typeof init?.body === "string" ? JSON.parse(init.body) : {};
+        restReceipts.push({ method, route: url.pathname, content: body.content });
+        if (typeof body.content === "string" && body.content.includes("Fixture failure narration:")) {
+          narrationDelivered.resolve();
+        }
+        if (method === "POST" && url.pathname.endsWith("/messages")) {
+          return Response.json({ id: "303030303030303030", channel_id: channelId });
+        }
+        if ((method === "PATCH" || method === "DELETE") && url.pathname.includes("/messages/")) {
+          return new Response(null, { status: 204 });
+        }
+        if (method === "POST" && url.pathname.endsWith("/typing")) return new Response(null, { status: 204 });
+        throw new Error(`Unexpected proof route: ${method} ${url.pathname}`);
+      };
+      vi.stubGlobal("fetch", fetchFixture);
+      onTestFinished(() => vi.unstubAllGlobals());
 
       const execute: CliBackendExecute = async function* (context) {
         stage("native-spawn", { command: context.command, args: context.args });
@@ -151,30 +183,78 @@ describe("physical CLI process to registered failure narration", () => {
         stage("prepared-execution-complete");
         return { payloads: [{ text: result.text }], meta: {} };
       });
-      const outcome = await executeAgentTurn({
-        commandBody: "Check the build status", followupRun,
-        sessionCtx: { Provider: "webchat", MessageSid: "fixture-message" },
-        opts, typingSignals: createMockTypingSignaler(), ...createAgentTurnExecutionDefaults(),
+      await withOpenClawTestState({ prefix: "registered-discord-cli-proof-" }, async (testState) => {
+        const cfg = {
+          agents: { defaults: { workspace: testState.workspaceDir, utilityModel: "openai/test-utility" } },
+          messages: { inbound: { debounceMs: 0 }, ackReaction: "", statusReactions: { enabled: false } },
+          channels: { discord: {
+            enabled: true, token: "fixture-token", dm: { enabled: true },
+            dmPolicy: "allowlist" as const, allowFrom: [userId],
+            streaming: { mode: "progress" as const, progress: { narration: true, toolProgress: true, commandText: "details" as const } },
+          } },
+        };
+        await testState.writeConfig(cfg);
+        await withRegisteredChannelIngress({ plugin: discordPlugin, config: cfg, setRuntime: setDiscordRuntime }, async () => {
+          const replyComplete = createDeferred<void>();
+          narrationModelMocks.reply.mockImplementationOnce(async (ctx, replyOptions) => {
+            registeredOptions = replyOptions;
+            expect(replyOptions?.onNarrationUpdate).toBeTypeOf("function");
+            expect(replyOptions?.narrationHideCommandText).not.toBe(true);
+            const opts = attachProgressNarratorToReplyOptions({ cfg, agentId: "main", userMessage: "Check the build status", opts: replyOptions });
+            followupRun.run.config = cfg;
+            followupRun.run.sessionKey = ctx.SessionKey;
+            const outcome = await executeAgentTurn({
+              commandBody: "Check the build status", followupRun, sessionCtx: ctx,
+              opts, typingSignals: createMockTypingSignaler(), ...createAgentTurnExecutionDefaults(), sessionKey: ctx.SessionKey,
+            });
+            stage("turn-complete", { kind: outcome.kind, receipts: receipts.length, cliCalls: state.runCliAgentMock.mock.calls.length });
+            expect(outcome.kind).toBe("success");
+            expect(receipts).toHaveLength(1);
+            stage("await-registered-discord-narration");
+            await observedInput.promise;
+            await narrationDelivered.promise;
+            replyComplete.resolve();
+            return { text: "The status check failed." };
+          });
+          const client = {
+            fetchChannel: async (id: string) => ({ id, type: 1 }),
+            rest: { get: async () => ({}) },
+          } as unknown as Parameters<typeof createDiscordMessageHandler>[0]["client"];
+          const handler = createDiscordMessageHandler({
+            cfg, discordConfig: cfg.channels.discord, client, accountId: "default", token: "fixture-token",
+            botUserId: "404040404040404040", runtime: { log: console.info, error: (message) => {
+              stage("registered-discord-error", message);
+              replyComplete.reject(new Error(String(message)));
+            }, exit: (code) => { throw new Error(`Unexpected runtime exit ${code}`); } },
+            dmEnabled: true, dmPolicy: "allowlist", allowFrom: [userId], groupDmEnabled: false,
+            guildHistories: new Map(), historyLimit: 0, mediaMaxBytes: 10_000, textLimit: 2_000,
+            replyToMode: "off", threadBindings: createNoopThreadBindingManager("default"),
+          });
+          try {
+            stage("registered-discord-ingress");
+            await handler({
+              id: "505050505050505050", channel_id: channelId, content: "Check the build status",
+              author: { id: userId, username: "fixture-user", discriminator: "0", avatar: null, bot: false },
+              attachments: [], embeds: [], mentions: [], mention_roles: [], mention_everyone: false,
+              timestamp: new Date().toISOString(), edited_timestamp: null, components: [], pinned: false, type: 0, tts: false,
+            });
+            await replyComplete.promise;
+          } finally { await handler.deactivate(); }
+        });
       });
-      stage("turn-complete", { kind: outcome.kind, receipts: receipts.length,
-        cliCalls: state.runCliAgentMock.mock.calls.length });
-      expect(outcome.kind).toBe("success");
-      expect(receipts).toHaveLength(1);
-      stage("await-narration");
       const input = await observedInput.promise;
-      await narrationDelivered.promise;
       console.info("PHYSICAL_CLI_NARRATION_RECEIPT", JSON.stringify({
-        name, process: receipts, outcome: outcome.kind,
-        activityNotes: input.activityNotes, narrationUpdate: onNarrationUpdate.mock.calls[0]?.[0],
-        isolated: ["selection", "persistence", "utility-model", "channel-transport"],
+        name, process: receipts, registeredNarration: typeof registeredOptions?.onNarrationUpdate,
+        activityNotes: input.activityNotes, discordRest: restReceipts,
+        isolated: ["selection", "agent-persistence", "utility-model", "REST-transport"],
       }));
       expect(receipts).toHaveLength(1);
       expect(receipts[0]?.code).toBe(0);
       expect(receipts[0]?.pid).toBeGreaterThan(0);
       const native: unknown = JSON.parse(receipts[0]?.stderr ?? "");
       expect(native).toMatchObject({ nativeExit: 1, command: "/bin/sh -c false", nativeStdout: "", nativeStderr: "" });
-      expect(input.activityNotes).toEqual(["Check build status: failed"]);
-      expect(onNarrationUpdate).toHaveBeenCalledWith({ text: "The status check failed." });
+      expect(input.activityNotes).toContain("Check build status: failed");
+      expect(restReceipts.some((receipt) => receipt.content?.includes("Fixture failure narration:"))).toBe(true);
     },
   );
 });
