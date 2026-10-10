@@ -71,6 +71,9 @@ describe("physical CLI process to registered failure narration", () => {
       followupRun.run.timeoutMs = 30_000;
       const fixturePath = path.join(followupRun.run.workspaceDir, "native-cli-fixture.cjs");
       await fs.writeFile(fixturePath, fixtureSource);
+      const stage = (phase: string, detail?: unknown) =>
+        console.info("PHYSICAL_CLI_STAGE", JSON.stringify({ name, phase, detail }));
+      stage("fixture-ready");
       const observedInput = createDeferred<ProgressNarrationInput>();
       const narrationDelivered = createDeferred<void>();
       const controller = new AbortController();
@@ -82,6 +85,7 @@ describe("physical CLI process to registered failure narration", () => {
       });
       narrationModelMocks.prepare.mockResolvedValue({ provider: "openai", model: "test-utility" });
       narrationModelMocks.generate.mockImplementation(async ({ input }: { input: ProgressNarrationInput }) => {
+        stage("narration-input", { activityNotes: input.activityNotes });
         observedInput.resolve(input);
         return { text: "The status check failed." };
       });
@@ -95,6 +99,7 @@ describe("physical CLI process to registered failure narration", () => {
       if (!opts) throw new Error("Expected registered narrator options");
 
       const execute: CliBackendExecute = async function* (context) {
+        stage("native-spawn", { command: context.command, args: context.args });
         const child = spawn(context.command, context.args, {
           cwd: context.cwd, env: context.env, signal: context.abortSignal,
           killSignal: "SIGKILL", stdio: ["ignore", "pipe", "pipe"],
@@ -112,6 +117,7 @@ describe("physical CLI process to registered failure narration", () => {
           }
           const [code] = await completion;
           receipts.push({ pid: child.pid, code, stderr: await stderr, argv: [context.command, ...context.args] });
+          stage("native-complete", { code, pid: child.pid });
           if (code !== 0) throw new Error(`Fixture CLI exited with code ${code}`);
         } finally {
           lines.close();
@@ -120,6 +126,7 @@ describe("physical CLI process to registered failure narration", () => {
         }
       };
       state.runCliAgentMock.mockImplementationOnce(async (params: RunCliAgentParams) => {
+        stage("prepared-execution-entry");
         const context = buildPreparedCliRunContext({
           provider, model, runId: params.runId, workspaceDir: params.workspaceDir,
           backend: {
@@ -131,7 +138,14 @@ describe("physical CLI process to registered failure narration", () => {
         context.params = { ...context.params, ...params };
         context.backendResolved.bundleMcp = false;
         context.executionTarget = { kind: "plugin", execute };
-        const result = await executePreparedCliRun(context);
+        let result;
+        try {
+          result = await executePreparedCliRun(context);
+        } catch (error) {
+          stage("prepared-execution-error", error instanceof Error ? error.message : String(error));
+          throw error;
+        }
+        stage("prepared-execution-complete");
         return { payloads: [{ text: result.text }], meta: {} };
       });
       const outcome = await executeAgentTurn({
@@ -139,6 +153,11 @@ describe("physical CLI process to registered failure narration", () => {
         sessionCtx: { Provider: "webchat", MessageSid: "fixture-message" },
         opts, typingSignals: createMockTypingSignaler(), ...createAgentTurnExecutionDefaults(),
       });
+      stage("turn-complete", { kind: outcome.kind, receipts: receipts.length,
+        cliCalls: state.runCliAgentMock.mock.calls.length });
+      expect(outcome.kind).toBe("success");
+      expect(receipts).toHaveLength(1);
+      stage("await-narration");
       const input = await observedInput.promise;
       await narrationDelivered.promise;
       console.info("PHYSICAL_CLI_NARRATION_RECEIPT", JSON.stringify({
