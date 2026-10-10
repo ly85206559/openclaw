@@ -235,13 +235,12 @@ describe("physical CLI process to registered failure narration", () => {
           });
           try {
             stage("registered-discord-ingress");
-            await handler({
+            await Promise.all([replyComplete.promise, handler({
               id: "505050505050505050", channel_id: channelId, content: "Check the build status",
               author: { id: userId, username: "fixture-user", discriminator: "0", avatar: null, bot: false },
               attachments: [], embeds: [], mentions: [], mention_roles: [], mention_everyone: false,
               timestamp: new Date().toISOString(), edited_timestamp: null, components: [], pinned: false, type: 0, tts: false,
-            });
-            await replyComplete.promise;
+            })]);
           } finally { await handler.deactivate(); }
         });
       });

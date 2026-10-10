@@ -51,7 +51,7 @@ jobs:
           cp "${RUNNER_TEMP}/proof/registered-support.test-support.ts" "${SUPPORT_FILE}"
           cmp "${RUNNER_TEMP}/proof/fixture.test.ts" "${TEST_FILE}"
           set +e
-          /usr/bin/time -f '%e' -o "${RUNNER_TEMP}/proof/red-wall.txt" node scripts/run-vitest.mjs "${TEST_FILE}" --reporter=verbose > "${RUNNER_TEMP}/proof/red.log" 2>&1
+          /usr/bin/time -f '%e' -o "${RUNNER_TEMP}/proof/red-wall.txt" node scripts/run-vitest.mjs "${TEST_FILE}" --pool=forks --reporter=verbose > "${RUNNER_TEMP}/proof/red.log" 2>&1
           result=$?
           set -e
           cat "${RUNNER_TEMP}/proof/red.log"
@@ -81,7 +81,7 @@ jobs:
           cp "${RUNNER_TEMP}/proof/fixture.test.ts" "${TEST_FILE}"
           cp "${RUNNER_TEMP}/proof/registered-support.test-support.ts" "${SUPPORT_FILE}"
           cmp "${RUNNER_TEMP}/proof/fixture.test.ts" "${TEST_FILE}"
-          /usr/bin/time -f '%e' -o "${RUNNER_TEMP}/proof/green-wall.txt" node scripts/run-vitest.mjs "${TEST_FILE}" --reporter=verbose > "${RUNNER_TEMP}/proof/green.log" 2>&1
+          /usr/bin/time -f '%e' -o "${RUNNER_TEMP}/proof/green-wall.txt" node scripts/run-vitest.mjs "${TEST_FILE}" --pool=forks --reporter=verbose > "${RUNNER_TEMP}/proof/green.log" 2>&1
           cat "${RUNNER_TEMP}/proof/green.log"
           grep -q '3 passed' "${RUNNER_TEMP}/proof/green.log"
           test "$(grep -c PHYSICAL_CLI_NARRATION_RECEIPT "${RUNNER_TEMP}/proof/green.log")" = 3
