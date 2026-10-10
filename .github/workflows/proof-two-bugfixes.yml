@@ -127,6 +127,12 @@ jobs:
           /usr/bin/time -f '%e' -o "${RUNNER_TEMP}/proof/green-wall.txt" node scripts/run-vitest.mjs "${TEST_FILE}" src/auto-reply/reply/agent-runner-command-output.test.ts src/agents/cli-runner/summary-tracker.test.ts --reporter=verbose > "${RUNNER_TEMP}/proof/green.log" 2>&1
           cat "${RUNNER_TEMP}/proof/green.log"
           git diff --exit-code
+          cp "${RUNNER_TEMP}/proof/command-output.test.ts" "${OWNER_TEST_FILE}"
+          node scripts/run-vitest.mjs "${OWNER_TEST_FILE}" --reporter=verbose > "${RUNNER_TEMP}/proof/owner-after.log" 2>&1
+          cat "${RUNNER_TEMP}/proof/owner-after.log"
+          grep -q '11 passed' "${RUNNER_TEMP}/proof/owner-after.log"
+          git restore --source=HEAD --worktree -- "${OWNER_TEST_FILE}"
+          git diff --exit-code
           cp "${RUNNER_TEMP}/proof/instrumented-regression.test.ts" "${TEST_FILE}"
           /usr/bin/time -f '%e' -o "${RUNNER_TEMP}/proof/after-wall.txt" node scripts/run-vitest.mjs "${TEST_FILE}" -t 'keeps the authored title in narration' --reporter=verbose > "${RUNNER_TEMP}/proof/after.log" 2>&1
           cat "${RUNNER_TEMP}/proof/after.log"
