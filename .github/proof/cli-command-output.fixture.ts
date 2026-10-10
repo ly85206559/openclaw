@@ -17,6 +17,7 @@ describe("buildCommandOutputFromToolResultEvent", () => {
       expect(
         buildFromCliResult({
           name,
+          commandBearing: true,
           args: { command: "false", title: "Check build status" },
           isError: true,
           result: "command failed",
@@ -37,6 +38,7 @@ describe("buildCommandOutputFromToolResultEvent", () => {
   ])("keeps explicit titles and third-party names unchanged: $name", ({ expected, ...data }) => {
     expect(
       buildFromCliResult({
+        commandBearing: true,
         args: { command: "false", title: "Check build status" },
         isError: true,
         result: "command failed",
