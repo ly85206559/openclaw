@@ -27,6 +27,7 @@ import {
   type FallbackRunnerParams,
 } from "./agent-runner-execution.test-support.js";
 import { attachProgressNarratorToReplyOptions } from "./progress-narrator.js";
+import { prepareInternalGetReplyOptions } from "./get-reply.types.js";
 import type { ProgressNarrationInput } from "./progress-narrator-model.js";
 
 const narrationModelMocks = vi.hoisted(() => ({ prepare: vi.fn(), generate: vi.fn(), reply: vi.fn<NonNullable<ChannelInboundTurnPlan["replyResolver"]>>() }));
@@ -200,9 +201,11 @@ describe("physical CLI process to registered failure narration", () => {
             registeredOptions = replyOptions;
             expect(replyOptions?.onNarrationUpdate).toBeTypeOf("function");
             expect(replyOptions?.narrationHideCommandText).not.toBe(true);
-            const opts = attachProgressNarratorToReplyOptions({ cfg, agentId: "main", userMessage: "Check the build status", opts: replyOptions });
+            expect(ctx.Provider).toBe("discord");
+            const opts = attachProgressNarratorToReplyOptions({ cfg, agentId: "main", userMessage: "Check the build status", opts: prepareInternalGetReplyOptions(replyOptions, ctx) });
             followupRun.run.config = cfg;
             followupRun.run.sessionKey = ctx.SessionKey;
+            followupRun.run.messageProvider = "discord";
             const outcome = await executeAgentTurn({
               commandBody: "Check the build status", followupRun, sessionCtx: ctx,
               opts, typingSignals: createMockTypingSignaler(), ...createAgentTurnExecutionDefaults(), sessionKey: ctx.SessionKey,
