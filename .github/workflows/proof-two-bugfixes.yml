@@ -119,7 +119,7 @@ jobs:
           cmp "${RUNNER_TEMP}/proof/regression.test.ts" "${TEST_FILE}"
           cmp "${RUNNER_TEMP}/proof/diagnostics.test.ts" "${TARGETS_TEST_FILE}"
           pnpm exec oxlint --config .oxlintrc.json "${OWNER_FILE}" "${TEST_FILE}" "${TARGETS_TEST_FILE}"
-          /usr/bin/time -f '%e' -o "${RUNNER_TEMP}/proof/green-wall.txt" node scripts/run-vitest.mjs "${TEST_FILE}" "${TARGETS_TEST_FILE}" extensions/googlechat/src/monitor.reply-delivery.test.ts --reporter=verbose > "${RUNNER_TEMP}/proof/green.log" 2>&1
+          /usr/bin/time -f '%e' -o "${RUNNER_TEMP}/proof/green-wall.txt" node scripts/run-vitest.mjs "${TEST_FILE}" "${TARGETS_TEST_FILE}" extensions/googlechat/src/monitor.reply-delivery.test.ts --maxWorkers=1 --reporter=verbose > "${RUNNER_TEMP}/proof/green.log" 2>&1
           cat "${RUNNER_TEMP}/proof/green.log"
           grep -q 'GOOGLECHAT_TYPING_RECEIPT' "${RUNNER_TEMP}/proof/green.log"
           grep -q 'GOOGLECHAT_ERROR_READ_RECEIPT' "${RUNNER_TEMP}/proof/green.log"
