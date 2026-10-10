@@ -20,7 +20,10 @@ import {
   isPluginStateWorkerCommand,
   pluginStateWorkerOperations,
 } from "../plugin-state/plugin-state-worker-contract.js";
-import { readPluginMetadataStateRowSync } from "../plugins/installed-plugin-index-row.js";
+import {
+  readPluginMetadataStateRowSync,
+  readPluginMetadataStateRowsSync,
+} from "../plugins/installed-plugin-index-row.js";
 import {
   openClawStateDatabaseCache,
   retainOpenClawStateDatabase,
@@ -206,6 +209,14 @@ function createSharedStateWorkerBackend(
     );
   };
   return {
+    async prepare(command) {
+      if (command.type === "pluginState.executeOperation") {
+        if (!pluginState) {
+          pluginState = await import("../plugin-state/plugin-state.worker.js");
+        }
+        await pluginState.preparePluginStateOperation(command.input);
+      }
+    },
     [SQLITE_WORKER_PREPARE_COMMAND](commandType) {
       if (
         commandType.startsWith("deviceAuth.") ||
@@ -347,9 +358,20 @@ function createSharedStateWorkerBackend(
         return executeOpenClawStateLeaseCommand(command, open());
       }
       if (command.type === "plugins.metadata.read") {
+        const options = {
+          path: context.databasePath,
+          env: getSqliteWorkerStateContext().environment,
+        };
+        if ("stateKeys" in command.input) {
+          return readPluginMetadataStateRowsSync(
+            command.input.stateKeys,
+            options,
+            command.input.artifactPreservingReadOnly,
+          );
+        }
         return readPluginMetadataStateRowSync(
           command.input.selector,
-          { path: context.databasePath, env: getSqliteWorkerStateContext().environment },
+          options,
           command.input.artifactPreservingReadOnly,
         );
       }

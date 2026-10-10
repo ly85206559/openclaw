@@ -24,6 +24,13 @@ openclaw gateway restart --wait 30s
 Manual restart signals now use `SIGUSR2`. `SIGUSR1` starts Node's inspector and no longer restarts the Gateway. Update scripts that send the old signal; prefer `openclaw gateway restart` for service-aware restarts.
 </Warning>
 
+If restart cannot verify a live serving owner, it leaves the process untouched.
+Run `openclaw gateway status --deep`, fix the reported startup failure (for example,
+a stopped Tailscale backend when Serve is configured), then run
+`openclaw gateway start` to wait for readiness. A loaded service or a running PID
+alone does not prove that the Gateway is serving. Reinstallation is not a remedy
+for an unresolved startup dependency or unknown process ownership.
+
 `--safe` asks the running Gateway to preflight active work and schedule one coalesced restart after that work drains. The wait is bounded to 5 minutes; when the budget expires the restart is forced. `--safe` cannot combine with `--force` or `--wait`.
 
 `--skip-deferral` bypasses only the safe-restart active-work deferral gate. It can move the Gateway into shutdown even while active-work blockers are reported, but the close-stage pending-reply drain still applies before the process exits. It requires `--safe` — use it when a deferral is stuck on a runaway task and reply delivery can still be allowed to settle.
@@ -195,7 +202,7 @@ OPENCLAW_SUPERVISOR_MODE=external \
   openclaw database ownership claim --manager gateway-supervisor --json
 ```
 
-Before claiming, stop and verify every Gateway, CLI, Doctor, updater, and native app process older than 2026.8.1 that can write the shared state database. Processes from before the ownership contract ([#121069](https://github.com/openclaw/openclaw/pull/121069)) do not understand the ownership row and cannot be retroactively fenced. Claim only after every remaining writer uses ownership-aware code and carries `OPENCLAW_SUPERVISOR_MODE=external`.
+Before claiming, stop the Gateway through the external supervisor and stop any embedded agents. The CLI enforces this procedure: it refuses a live Gateway or embedded-agent owner and holds exclusive offline ownership while committing the claim. Also stop and verify every CLI, Doctor, updater, and native app process older than 2026.8.1 that can write the shared state database. Processes from before the ownership contract ([#121069](https://github.com/openclaw/openclaw/pull/121069)) do not understand the ownership row and cannot be retroactively fenced. Claim only after every remaining writer uses ownership-aware code and carries `OPENCLAW_SUPERVISOR_MODE=external`.
 
 The claim is idempotent for the same stable manager identifier and refuses a different manager. There is no automatic claim or unclaim path. Once claimed, unmarked writable shared-state opens fail before permissions, schema migration, additive repair, compaction, or other mutation. Read-only access remains available. This is protection against accidental unmarked same-user writers, not an authentication or lease protocol.
 

@@ -20,6 +20,7 @@ import { readSessionNodesGeneration } from "./session-accessor.sqlite-entry-revi
 import {
   deleteLegacySessionEntryRows,
   readExactSessionEntryRow,
+  readWrittenSessionEntryPostimage,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
 import { captureSessionEntryMaintenanceAgeChange } from "./session-accessor.sqlite-maintenance-age.js";
@@ -35,6 +36,7 @@ import type {
 } from "./session-accessor.sqlite-replacement-types.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import { readSessionTranscriptWatermarkInDatabase } from "./session-accessor.sqlite-transcript-watermark.js";
+import { readStagedSessionTranscriptAuthority } from "./session-transcript-authority.js";
 import type { SessionMaintenancePreservationSnapshot } from "./store-maintenance-preserve-snapshot.types.js";
 import type { SessionEntry } from "./types.js";
 
@@ -52,21 +54,39 @@ export function prepareSessionEntryReplacementPublication(
   const current = new Map<string, SessionEntry>();
   const projection = new Map<string, SessionEntryProjectionFacts>();
   const unavailableParticipantKeys = new Set<string>();
+  const written = new Map(
+    [...result.current].flatMap(([key, entry]) => {
+      const postimage = readWrittenSessionEntryPostimage(database, key, entry);
+      return postimage ? [[key, postimage] as const] : [];
+    }),
+  );
+  const readWritten =
+    written.size === 0
+      ? undefined
+      : prepareExactSessionEntryRowReads(database, [...written.keys()], "list", undefined, {
+          includeBoardPresence: true,
+          includeMembership: true,
+          projectParticipants: false,
+        });
   let readCommitted: ReturnType<typeof prepareExactSessionEntryRowReads> | undefined;
   for (const key of result.current.keys()) {
-    readCommitted ??= prepareExactSessionEntryRowReads(
-      database,
-      [...result.current.keys()],
-      "list",
-      undefined,
-      {
-        includeBoardPresence: true,
-        includeMembership: true,
-        onParticipantProjectionError: (sessionKey) => unavailableParticipantKeys.add(sessionKey),
-      },
-    );
-    // Read the final persisted bytes and side tables after assignment, alias moves and maintenance.
-    const committed = readCommitted(key);
+    const entry = written.get(key);
+    const row = entry ? readWritten?.(key)?.row : undefined;
+    if (!entry) {
+      readCommitted ??= prepareExactSessionEntryRowReads(
+        database,
+        [...result.current.keys()].filter((currentKey) => !written.has(currentKey)),
+        "list",
+        undefined,
+        {
+          includeBoardPresence: true,
+          includeMembership: true,
+          onParticipantProjectionError: (sessionKey) => unavailableParticipantKeys.add(sessionKey),
+        },
+      );
+    }
+    // Later assignment, alias moves and maintenance revoke the writer's exact postimage.
+    const committed = entry ? row && { entry, row } : readCommitted?.(key);
     if (!committed) {
       throw new Error(`Session publication lost its committed metadata: ${key}`);
     }
@@ -81,7 +101,7 @@ export function prepareSessionEntryReplacementPublication(
     if (unavailableParticipantKeys.has(key)) {
       continue;
     }
-    const { entry } = committed;
+    const projectedEntry = committed.entry;
     projection.set(
       key,
       freezeJsonSnapshot({
@@ -89,19 +109,19 @@ export function prepareSessionEntryReplacementPublication(
           key,
           isInternalSessionEffectsKey(key)
             ? null
-            : (normalizeOptionalString(entry.category) ?? null),
+            : (normalizeOptionalString(projectedEntry.category) ?? null),
           memberIds,
           {
-            ...(entry.participants ? { participants: entry.participants } : {}),
-            ...(entry.participantCount === undefined
+            ...(projectedEntry.participants ? { participants: projectedEntry.participants } : {}),
+            ...(projectedEntry.participantCount === undefined
               ? {}
-              : { participantCount: entry.participantCount }),
+              : { participantCount: projectedEntry.participantCount }),
           },
-          entry.sessionId,
+          projectedEntry.sessionId,
         ],
         hasBoard: committed.row.board_present === 1,
-        activitySummaryWatermark: readSessionActivitySummary(entry)
-          ? readSessionTranscriptWatermarkInDatabase(database, entry.sessionId)
+        activitySummaryWatermark: readSessionActivitySummary(projectedEntry)
+          ? readSessionTranscriptWatermarkInDatabase(database, projectedEntry.sessionId)
           : undefined,
       }),
     );
@@ -137,6 +157,7 @@ export function prepareSessionEntryReplacementPublication(
     });
   return {
     kind: "session-entry-replacements",
+    transcriptPublication: readStagedSessionTranscriptAuthority(database),
     pendingArchiveRecovery: result.pendingArchiveRecovery,
     membershipInvalidatedKeys: result.membershipInvalidatedKeys,
     sharingUnchangedKeys: [...current].flatMap(([key, entry]) =>
@@ -183,6 +204,7 @@ export function commitSessionEntryReplacementsInDatabase(
   input: SessionEntryReplacementCommit,
   beforeReplacements: () => void,
   refreshCandidates?: (sessionKeys: readonly string[]) => SessionMaintenancePreservationSnapshot,
+  onArchived?: (sessionKey: string, previous: SessionEntry, current: SessionEntry) => void,
 ): SessionEntryReplacementCommitted {
   if (input.labelClaim) {
     assertSessionCreationLabelAvailable(
@@ -279,7 +301,7 @@ export function commitSessionEntryReplacementsInDatabase(
           database,
           maintenance,
           () => preservation,
-          undefined,
+          onArchived,
           refreshCandidates,
         )
       : emptySessionEntryMaintenancePlan();
