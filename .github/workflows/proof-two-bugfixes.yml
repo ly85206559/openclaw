@@ -126,7 +126,7 @@ jobs:
           git diff --check "${BASE_SHA}" HEAD
           pnpm exec oxfmt --check "${OWNER_FILE}" "${OWNER_TEST_FILE}"
           pnpm exec oxlint --config .oxlintrc.json "${OWNER_FILE}" "${OWNER_TEST_FILE}"
-          /usr/bin/time -f '%e' -o "${RUNNER_TEMP}/proof/green-wall.txt" node scripts/run-vitest.mjs "${TEST_FILE}" src/auto-reply/reply/agent-runner-command-output.test.ts src/agents/cli-runner/summary-tracker.test.ts --reporter=verbose > "${RUNNER_TEMP}/proof/green.log" 2>&1
+          /usr/bin/time -f '%e' -o "${RUNNER_TEMP}/proof/green-wall.txt" node scripts/run-vitest.mjs "${TEST_FILE}" "${OWNER_TEST_FILE}" src/agents/cli-runner/tool-policy.test.ts src/agents/cli-runner/execute-events.command-progress.test.ts --reporter=verbose > "${RUNNER_TEMP}/proof/green.log" 2>&1
           cat "${RUNNER_TEMP}/proof/green.log"
           git diff --exit-code
           cp "${RUNNER_TEMP}/proof/command-output.test.ts" "${OWNER_TEST_FILE}"
