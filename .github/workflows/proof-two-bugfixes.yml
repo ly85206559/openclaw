@@ -54,7 +54,7 @@ jobs:
           set -euo pipefail
           node scripts/run-vitest.mjs "${TARGETS_TEST_FILE}" --reporter=verbose > "${RUNNER_TEMP}/proof/baseline-targets.log" 2>&1
           cat "${RUNNER_TEMP}/proof/baseline-targets.log"
-          grep -q 'Test Files  1 passed' "${RUNNER_TEMP}/proof/baseline-targets.log"
+          grep -q '37 passed' "${RUNNER_TEMP}/proof/baseline-targets.log"
           cp "${RUNNER_TEMP}/proof/regression.test.ts" "${TEST_FILE}"
           cp "${RUNNER_TEMP}/proof/diagnostics.test.ts" "${TARGETS_TEST_FILE}"
           pnpm exec oxfmt "${TEST_FILE}" "${TARGETS_TEST_FILE}"
