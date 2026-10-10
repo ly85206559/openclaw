@@ -191,7 +191,7 @@ describe("physical CLI process to registered failure narration", () => {
           channels: { discord: {
             enabled: true, token: "fixture-token", dm: { enabled: true },
             dmPolicy: "allowlist" as const, allowFrom: [userId],
-            streaming: { mode: "progress" as const, progress: { narration: true, toolProgress: true, commandText: "details" as const } },
+            streaming: { mode: "progress" as const, progress: { narration: true, toolProgress: true, commandText: "raw" as const } },
           } },
         };
         await testState.writeConfig(cfg);
