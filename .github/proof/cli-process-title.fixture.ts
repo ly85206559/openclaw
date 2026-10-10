@@ -8,6 +8,7 @@ import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { buildPreparedCliRunContext } from "../../agents/cli-runner.test-helpers.js";
 import { executePreparedCliRun } from "../../agents/cli-runner/execute.js";
+import { admitCliRunParams } from "../../agents/cli-runner/run-admission.js";
 import type { RunCliAgentParams } from "../../agents/cli-runner/types.js";
 import type { CliBackendExecute } from "../../plugins/cli-backend.types.js";
 import {
@@ -127,6 +128,8 @@ describe("physical CLI process to registered failure narration", () => {
       };
       state.runCliAgentMock.mockImplementationOnce(async (params: RunCliAgentParams) => {
         stage("prepared-execution-entry");
+        const admittedParams = await admitCliRunParams(params, params.agentId ?? "main");
+        stage("prepared-admission-complete");
         const context = buildPreparedCliRunContext({
           provider, model, runId: params.runId, workspaceDir: params.workspaceDir,
           backend: {
@@ -135,7 +138,7 @@ describe("physical CLI process to registered failure narration", () => {
             input: "stdin", output: "jsonl", jsonlDialect: "claude-stream-json",
           },
         });
-        context.params = { ...context.params, ...params };
+        context.params = { ...context.params, ...admittedParams };
         context.backendResolved.bundleMcp = false;
         context.executionTarget = { kind: "plugin", execute };
         let result;
