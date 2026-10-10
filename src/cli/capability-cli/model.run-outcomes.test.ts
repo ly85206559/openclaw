@@ -1,3 +1,4 @@
+import "../../test-utils/prepare-compiled-subprocesses.js";
 import { Command } from "commander";
 import { beforeEach, expect, it, vi } from "vitest";
 import { registerModelCapabilityCommands } from "./model.js";
@@ -13,6 +14,7 @@ const mocks = vi.hoisted(() => ({
     writeStdout: vi.fn(),
   },
   complete: vi.fn(),
+  callGateway: vi.fn(),
 }));
 
 vi.mock("../../runtime.js", async (importOriginal) => ({
@@ -23,6 +25,12 @@ vi.mock("../../runtime.js", async (importOriginal) => ({
 vi.mock("./shared.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./shared.js")>()),
   resolveLocalCapabilityRuntimeConfig: vi.fn(async () => ({})),
+}));
+
+// mock-isolation: Supply final Gateway run outcomes without opening a WebSocket connection.
+vi.mock("../../gateway/call.js", () => ({
+  callGateway: mocks.callGateway,
+  randomIdempotencyKey: () => "model-run-outcome-test",
 }));
 
 // mock-isolation: Keep local account secret reads out of this command diagnostic test.
@@ -44,6 +52,15 @@ vi.mock("../../agents/simple-completion-runtime.js", () => ({
 beforeEach(() => {
   vi.clearAllMocks();
 });
+
+async function runModel(...options: string[]) {
+  const program = new Command();
+  program.exitOverride();
+  registerModelCapabilityCommands(program);
+  return await program.parseAsync(["model", "run", "--prompt", "hello", "--json", ...options], {
+    from: "user",
+  });
+}
 
 it.each([
   {
@@ -98,13 +115,7 @@ it.each([
       stopReason,
       ...(errorMessage ? { errorMessage } : {}),
     });
-    const program = new Command();
-    program.exitOverride();
-    registerModelCapabilityCommands(program);
-
-    await expect(
-      program.parseAsync(["model", "run", "--prompt", "hello", "--json"], { from: "user" }),
-    ).rejects.toThrow("exit 1");
+    await expect(runModel()).rejects.toThrow("exit 1");
 
     expect(mocks.runtime.error.mock.calls.map((call) => call[0])).toEqual([error]);
     expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
@@ -119,11 +130,7 @@ it.each(["stop", "length"])(
       content: [{ type: "text", text: "complete answer" }],
       stopReason,
     });
-    const program = new Command();
-    program.exitOverride();
-    registerModelCapabilityCommands(program);
-
-    await program.parseAsync(["model", "run", "--prompt", "hello", "--json"], { from: "user" });
+    await runModel();
 
     expect(mocks.runtime.error).not.toHaveBeenCalled();
     expect(mocks.runtime.exit).not.toHaveBeenCalled();
@@ -131,6 +138,48 @@ it.each(["stop", "length"])(
       expect.objectContaining({
         ok: true,
         outputs: [{ text: "complete answer", mediaUrl: null }],
+      }),
+      2,
+    );
+  },
+);
+
+it.each([
+  { status: "error", detail: "stream failed", summary: "failed", expected: "stream failed" },
+  { status: "timeout", summary: "aborted", expected: "aborted" },
+  { status: "cancelled", expected: "Gateway model run cancelled." },
+])(
+  "rejects a Gateway model run with status $status",
+  async ({ status, detail, summary, expected }) => {
+    mocks.callGateway.mockResolvedValueOnce({
+      status,
+      summary,
+      result: {
+        payloads: [{ text: "partial answer" }],
+        meta: { ...(detail ? { error: { kind: "incomplete_turn", message: detail } } : {}) },
+      },
+    });
+    await expect(runModel("--gateway")).rejects.toThrow("exit 1");
+
+    expect(mocks.runtime.error).toHaveBeenCalledExactlyOnceWith(expected);
+    expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
+  },
+);
+
+it.each(["ok", "completed"])(
+  "keeps Gateway model output successful for status %s",
+  async (status) => {
+    mocks.callGateway.mockResolvedValueOnce({
+      status,
+      result: { payloads: [{ text: "complete answer" }] },
+    });
+    await runModel("--gateway");
+
+    expect(mocks.runtime.exit).not.toHaveBeenCalled();
+    expect(mocks.runtime.writeJson).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        ok: true,
+        outputs: [{ text: "complete answer", mediaUrl: undefined, mediaUrls: undefined }],
       }),
       2,
     );

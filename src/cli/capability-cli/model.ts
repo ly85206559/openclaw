@@ -13,6 +13,7 @@ import {
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import { collectTextContentBlocks } from "../../agents/content-blocks.js";
 import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
+import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import {
   normalizeThinkLevel,
   THINKING_LEVELS_HELP,
@@ -188,12 +189,8 @@ async function runModelRun(params: {
               },
             });
             const text = collectTextContentBlocks(result.content).join("").trim();
-            const providerErrorMessage = (result as { errorMessage?: unknown }).errorMessage;
-            const detail =
-              typeof providerErrorMessage === "string" && providerErrorMessage.trim()
-                ? `: ${providerErrorMessage.trim()}`
-                : "";
-            const target = `for provider "${prepared.selection.provider}" model "${prepared.selection.modelId}"${detail}.`;
+            const detail = result.errorMessage?.trim();
+            const target = `for provider "${prepared.selection.provider}" model "${prepared.selection.modelId}"${detail ? `: ${detail}` : ""}.`;
             if (!text) {
               // Keep AI runtime imports out of command registration and help loading.
               const { hasOnlyAssistantReasoningContent, isReasoningOnlyLengthAssistantTurn } =
@@ -252,16 +249,9 @@ async function runModelRun(params: {
   const sessionId = `model-run-${randomUUID()}`;
   const sessionKey = buildExplicitSessionIdSessionKey({ agentId, sessionId });
   const response: {
-    result?: {
-      payloads?: Array<{ text?: string; mediaUrl?: string | null; mediaUrls?: string[] }>;
-      meta?: {
-        agentMeta?: {
-          provider?: string;
-          model?: string;
-          fallbackAttempts?: Array<Record<string, unknown>>;
-        };
-      };
-    };
+    status?: string;
+    summary?: string;
+    result?: EmbeddedAgentRunResult;
   } = await callGateway({
     method: "agent",
     params: {
@@ -292,6 +282,13 @@ async function runModelRun(params: {
     mode: hasModelOverride ? GATEWAY_CLIENT_MODES.BACKEND : GATEWAY_CLIENT_MODES.CLI,
     ...(hasModelOverride ? { scopes: [ADMIN_SCOPE] } : {}),
   });
+  if (response.status && response.status !== "ok" && response.status !== "completed") {
+    throw new Error(
+      response.result?.meta?.error?.message ||
+        response.summary ||
+        `Gateway model run ${response.status}.`,
+    );
+  }
   return {
     ok: true,
     capability: "model.run",
