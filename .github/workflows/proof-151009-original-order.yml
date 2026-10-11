@@ -1,0 +1,145 @@
+name: PR 151009 original-order attribution probe
+
+on:
+  push:
+    branches: [codex/proof-151009-original-order-20261011]
+    paths: [.github/workflows/proof-151009-original-order.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  diagnostic:
+    if: github.repository == 'ly85206559/openclaw'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - cell: baseline
+            source: 69a2b5094badde281f943a399f1f36807d0acf80
+            tree: 9ff72c26c823dfa62f04f331f9b8c47b25dcebc9
+          - cell: tested-merge
+            source: 4be713527fbc5f6eb815294cd525f934404516a0
+            tree: 1ffa3020f48d9b0441319b3890bcade0276f96d7
+    env:
+      CI: "true"
+      SOURCE_SHA: ${{ matrix.source }}
+      SOURCE_TREE: ${{ matrix.tree }}
+      CELL: ${{ matrix.cell }}
+      NODE_OPTIONS: --max-old-space-size=8192
+      OPENCLAW_VITEST_MAX_WORKERS: "2"
+      OPENCLAW_VITEST_WORKER_CACHE: "1"
+      OPENCLAW_VITEST_FS_MODULE_CACHE_WRITER: "0"
+      OPENCLAW_NODE_COMPILE_CACHE_WRITER: "0"
+      NODE_COMPILE_CACHE_PORTABLE: "1"
+      OPENCLAW_CI_TEST_RUNTIME_POLICY: bun-compatible
+      FROZEN_TARGET: "false"
+      OPENCLAW_NODE_TEST_PLAN_CONCURRENCY: "1"
+      OPENCLAW_NODE_TEST_PLAN_CONTINUE_ON_FAILURE: "1"
+      OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: "[]"
+      OPENCLAW_VITEST_SHARD_NAME: changed-compact-large-43
+      OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "300000"
+      OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: H4sIAAAAAAAAA8VX247bNhD9F+3rjizJsmztW1DkoWjTBEnQFAiCxYgcyawpUiEpe40i/15QF8cXOXaAAn1Zwdo5h+TMmTnU538CplUpKhs8fQ4cWTfbiqNHWKGjHe6Bo8MCLcFOmw0ZG/aw0Nngy2MgFJMtp3foHBnVcVnDZgN41seCIamRh86gssyIxtmwW8PZ4PEk3pLZkoGa3FpzO6s1J2kBW7cGbARsaB8K5agy6IRW95Gc/rwP48/qDNH1cGuFVrAW1mmzB6n1pm3CPkU3MNahcW0DtfjxMRzKzcyQxP1MKE4vV8L6NYHUVhitalLOzqRmKLuC2QYZQWP038R+sNYUyXe4IdtKB4YabYU/74Hly2Ng12j4s8KagqcAK1JOMBjFM6RVWC3REYe1tv4RR8Fj4EQtVPW8oX3wFLA1qoo43CB4sCSJOW0gh3LFsoLnrMxY8lCRoj6bwDgWZZRkUbngDw0aBzHoEuKHQauQwzyO4zJPk+U8KYJvj7daoduUBaYNnaqf1DZ4+id4++71H7/8/urT85+/fnz94ePzm1d/PX96+/631+8/BE9BEny72ic984xJAaZVikxoSAoshBTudpaP9jXAwTMlt5J7DQcNGpSS5Pc0x0DzEucxLVfpPD9Oc5KzckkJ5SwtJtMcQ8mzLF9mcRIT3pFmoUqDd42XRraVUF7nyMkcRlUhFBeqOm/aMVoo61BKMMS04cB0XQsX2q9SOLoC6Z8gRUlszySBJLTnwciamWmVEzUdmrwmh8C1z+F5dF/y7gFOa2lDZggdgW5IMYk7YNofY/jnJLqm2o+dnRGu6+4tKVTsYmN9MNUFcT7Wf6h4P1vDUpsd9slo0P083m5EM7znwjK9JbOHtdabKxuf5jKt6vnAkmubsJcfcegX+Ukm0yrwgqmbblMNOrYO9U5dTOaBqTHUoBlXg6GUoacxZHVr2IUPDEiLihf6Zay+DyeznRrqI6AtxvorpVvF6PAKxjehoa8tWUfGZ8NJAuZre54GL19U3M56lQEvoJAa3bQJXUTTVnhjQGGEqm4E1+hNt1fYJHsp9e4QvSaUbh1yVJX0Mu58ZK0bmHKxKeRphNRVJVQ14wIrpa2fX2OTMa0cvZyrtu+NsUXQOFEic9e7ZOhxyzcz3bpCt4pDTVzg3XGGnB+sF0U/QvjVBSfT32WYboTUDhiy9fl2rENHs8Ms6H4CL+6JOqrTpHK7YctMN56sxcpHIZ+8UZ1bzugVncy7QQ3+5uM5+rUHZ19d855bBN8tJ8kgw7xgKSEmUXTsOek8X2KUpjHLadJzkgywzFd8nkZRiukdpnN60fiP7f3sdsmkvjCPsxBD3fUQrBeUIglKO3Eh2RugsC/JdHvcxO6toxpo62fS1NS8RXBXdNtwv0XTXpfceFvxxzBaQiNR0eH2PBJ1Ob114bmDYuLuk8GqSCnKOS4jZMc6nGOJhIs4jvJsUocZJIv5PF8mSMt0dYcMx5F7KsASpSyQbd7gy6f+6yt4Sq6q7Xxs96MGlVbCfw4MH1CAUuC5n01CS4nd2CyFvDDASYDu/lrBieEtA+pD153vGmIkmnOhTiO6oTapy6n4cFjhzFmuS62ngCOK29q6xDz4lB0UBcmxpogzxFVJScKKY01Fc8bKclVwXE7PtgzmC1zlUZpmZcH/J02N43LSqq8F+94X3op8brS559PmPKsD1c8WY4Bdr0cCMRZxmSyKlC1Oerzk+YotWMLjOJ32GoiTks0XWEaLgoJvX/4FgK6GFVMRAAA=
+    steps:
+      - name: Check out immutable proof instructions without persisted credentials
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - name: Freeze the original unmodified source and diagnostic inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          mkdir -p "$RUNNER_TEMP/lease-attribution"
+          git fetch --no-tags --depth=1 https://github.com/openclaw/openclaw.git "$SOURCE_SHA"
+          git checkout --detach "$SOURCE_SHA"
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test "$(git rev-parse HEAD^{tree})" = "$SOURCE_TREE"
+          test "$(git hash-object src/plugins/plugin-lifecycle-lease.test.ts)" = e7b9ebe4a1df8d9a9eaf4ed92c9f2618733a6bbb
+          git diff --exit-code
+          git diff --cached --exit-code
+          git show --no-patch --format='%H %P %T' HEAD > "$RUNNER_TEMP/lease-attribution/source.txt"
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { gunzipSync } from 'node:zlib';
+          import { writeFileSync } from 'node:fs';
+          import { createHash } from 'node:crypto';
+          const bytes = gunzipSync(Buffer.from(process.env.OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64, 'base64'));
+          const groups = JSON.parse(bytes);
+          assert.deepEqual(groups.map(group => group.includePatterns.length), [9, 1, 26, 6, 6, 2]);
+          assert.equal(groups[2].includePatterns[2], 'src/plugins/plugin-lifecycle-lease.test.ts');
+          writeFileSync(process.env.RUNNER_TEMP + '/lease-attribution/groups.json', bytes);
+          console.log('original-group-sha256=' + createHash('sha256').update(bytes).digest('hex'));
+          NODE
+      - name: Install the original pinned Node and pnpm
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.19.0
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
+      - name: Install frozen source dependencies in the secretless runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(node --version)" = v24.19.0
+          test "$(pnpm --version)" = 12.5.1
+          pnpm install --frozen-lockfile
+          git diff --exit-code
+          git diff --cached --exit-code
+      - name: Observe all six original serial groups without retries or fixture changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          export OPENCLAW_VITEST_FS_MODULE_CACHE_ROOT="$RUNNER_TEMP/vitest-original-cache"
+          export NODE_COMPILE_CACHE="$RUNNER_TEMP/node-original-cache"
+          set +e
+          { time -p node --import tsx scripts/ci-run-node-test-shard.mts; } > "$RUNNER_TEMP/lease-attribution/original.log" 2>&1
+          result=$?
+          set -e
+          printf '%s\n' "$result" > "$RUNNER_TEMP/lease-attribution/original.exit"
+          cat "$RUNNER_TEMP/lease-attribution/original.log"
+          # A completed diagnostic can retain test failures; it is not a green CI claim.
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { readFileSync, writeFileSync } from 'node:fs';
+          const dir = process.env.RUNNER_TEMP + '/lease-attribution';
+          const log = readFileSync(dir + '/original.log', 'utf8');
+          const exit = Number(readFileSync(dir + '/original.exit', 'utf8').trim());
+          assert.ok(exit === 0 || exit === 1, 'process/infrastructure failure is not completed attribution');
+          const matches = [...log.matchAll(/\[shard:completion\] (\{[^\n]+\})/g)];
+          assert.equal(matches.length, 1, 'missing owned-child completion receipt');
+          const completion = JSON.parse(matches[0][1]);
+          assert.equal(completion.version, 1);
+          assert.equal(completion.planned, 6);
+          assert.equal(completion.completed, 6);
+          assert.equal(completion.invocations, 6);
+          assert.equal(exit === 0, completion.failedInvocations === 0);
+          const receipt = {
+            cell: process.env.CELL, source: process.env.SOURCE_SHA, tree: process.env.SOURCE_TREE,
+            workflow: process.env.GITHUB_SHA, originalRun: 36394331485, originalJob: 108837532946,
+            authorHead: 'd2efd0713ff5cfd0ee8e3076f24924b33c1e02f4',
+            node: process.version, exit, completion,
+            limitation: 'Fresh hosted Linux runner, not the historical Blacksmith host/cache. Exact original group/config/include order, worker count and frozen fixture are retained. No timer repair, instrumentation, standalone replay, retry, upstream CI pass or causal conclusion is asserted.'
+          };
+          writeFileSync(dir + '/receipt.json', JSON.stringify(receipt, null, 2));
+          console.log(JSON.stringify(receipt));
+          NODE
+      - name: Verify the final source remained unchanged
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test "$(git rev-parse HEAD^{tree})" = "$SOURCE_TREE"
+          test "$(git hash-object src/plugins/plugin-lifecycle-lease.test.ts)" = e7b9ebe4a1df8d9a9eaf4ed92c9f2618733a6bbb
+          git diff --exit-code
+          git diff --cached --exit-code
+      - name: Retain diagnostic observations including failures
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: lease-attribution-${{ matrix.cell }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/lease-attribution/
+          if-no-files-found: error
+          retention-days: 7
