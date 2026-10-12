@@ -10,8 +10,8 @@ permissions:
 
 env:
   BASE_SHA: 03512be2f3df16d4ec861ed1bebeaa967c30da2d
-  PRODUCT_SHA: 883d3876e82edd27cb2d112f42e7620391a52cfd
-  FIXTURE_SHA256: 410099c2f32c424bbdc74f67f4751586b8c2fa876ab1774d433e1fdc451aabe1
+  PRODUCT_SHA: dc49c1a9384b576b1f2cdb7a966585bc9a94dca0
+  FIXTURE_SHA256: b49a30786603e839528aa90357e7a360d9cbe530ff31148593af9fcc6f7a5e0b
   RUNTIME_PROOF_SHA: 0ebfd52625fcec6661e76482ce72d8ada6a86885
   TEST_FILE: src/cli/capability-cli.image-resolution.test.ts
   ORIGINAL_TEST_FILE: src/cli/capability-cli.test.ts
@@ -20,13 +20,13 @@ env:
 
 jobs:
   baseline:
-    if: github.repository == 'ly85206559/openclaw' && github.event_name == 'workflow_dispatch'
+    if: github.repository == 'ly85206559/openclaw'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          fetch-depth: 5
+          fetch-depth: 6
           persist-credentials: false
       - name: Freeze reporter and exact new fixture before pure baseline checkout
         shell: bash
@@ -34,7 +34,7 @@ jobs:
           set -euo pipefail
           mkdir -p "${RUNNER_TEMP}/image-resolution-final"
           cp .github/proof/image-resolution-audit-reporter.mjs "${RUNNER_TEMP}/image-resolution-final/audit-reporter.mjs"
-          git fetch --depth=5 --no-tags https://github.com/ly85206559/openclaw.git "${PRODUCT_SHA}"
+          git fetch --depth=6 --no-tags https://github.com/ly85206559/openclaw.git "${PRODUCT_SHA}"
           git show "${PRODUCT_SHA}:${TEST_FILE}" > "${RUNNER_TEMP}/image-resolution-final/reviewed.test.ts"
           git fetch --depth=5 --no-tags https://github.com/openclaw/openclaw.git "${BASE_SHA}"
           git diff --exit-code "${BASE_SHA}" "${PRODUCT_SHA}" -- "${ORIGINAL_TEST_FILE}"
@@ -54,12 +54,12 @@ jobs:
           semantic-checks: true
           cache-mode: off
       - uses: ./.github/actions/setup-ripgrep
-      - name: Format only the new regression on the permitted host and retain exact executed bytes
+      - name: Check frozen regression formatting without changing fixture bytes
         shell: bash
         run: |
           set -euo pipefail
           { node --version; pnpm --version; rg --version; } | tee "${RUNNER_TEMP}/image-resolution-final/toolchain.txt"
-          pnpm exec oxfmt --write --threads=1 "${TEST_FILE}" > "${RUNNER_TEMP}/image-resolution-final/format.log" 2>&1
+          pnpm exec oxfmt --check --threads=1 "${TEST_FILE}" > "${RUNNER_TEMP}/image-resolution-final/format.log" 2>&1
           cat "${RUNNER_TEMP}/image-resolution-final/format.log"
           cp "${TEST_FILE}" "${RUNNER_TEMP}/image-resolution-final/formatted.test.ts"
           sha256sum "${TEST_FILE}" | tee "${RUNNER_TEMP}/image-resolution-final/formatted-fixture-sha256.txt"
@@ -133,7 +133,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          fetch-depth: 5
+          fetch-depth: 6
           persist-credentials: false
       - name: Freeze exact candidate and prove original suite and runtime inputs unchanged
         shell: bash
@@ -141,7 +141,7 @@ jobs:
           set -euo pipefail
           mkdir -p "${RUNNER_TEMP}/image-resolution-final"
           cp .github/proof/image-resolution-audit-reporter.mjs "${RUNNER_TEMP}/image-resolution-final/audit-reporter.mjs"
-          git fetch --depth=5 --no-tags https://github.com/ly85206559/openclaw.git "${PRODUCT_SHA}"
+          git fetch --depth=6 --no-tags https://github.com/ly85206559/openclaw.git "${PRODUCT_SHA}"
           git fetch --depth=5 --no-tags https://github.com/openclaw/openclaw.git "${BASE_SHA}"
           git checkout --detach "${PRODUCT_SHA}"
           test "$(git rev-parse HEAD)" = "${PRODUCT_SHA}"
@@ -220,6 +220,23 @@ jobs:
           console.log('CANDIDATE_GREEN', JSON.stringify({ suite:process.env.PROOF_SUITE, tests:expected, fixtureErrors:0 }));
           AUDIT
           done
+      - name: Compile the canonical config CLI test leaf including the typed provider fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          /usr/bin/time -f '%e' -o "${RUNNER_TEMP}/image-resolution-final/config-cli-types-wall.txt" \
+            node scripts/run-tsgo.mjs -p test/tsconfig/tsconfig.core.test.config-cli.json --pretty false \
+            > "${RUNNER_TEMP}/image-resolution-final/config-cli-types.log" 2>&1
+          cat "${RUNNER_TEMP}/image-resolution-final/config-cli-types.log"
+          printf 'Canonical config CLI test types completed with exit 0.\n' \
+            | tee "${RUNNER_TEMP}/image-resolution-final/config-cli-types-exit.txt"
+      - name: Retain critical exact-head receipts before the broad checker
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: image-resolution-critical-candidate-${{ github.run_id }}
+          path: ${{ runner.temp }}/image-resolution-final
+          retention-days: 30
       - name: Official checker on image-only candidate with explicit base and test types
         shell: bash
         run: |
