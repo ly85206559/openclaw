@@ -351,7 +351,6 @@ src/config/sessions/session-accessor.conformance.test.ts
 src/config/sessions/session-accessor.test.ts
 src/config/sessions/transcript.test.ts
 src/cron/isolated-agent/delivery-dispatch.double-announce.test.ts
-src/cron/isolated-agent/run-executor.ts
 src/cron/isolated-agent/run.test-harness.ts
 src/daemon/launchd.test.ts
 src/daemon/schtasks.startup-fallback.test.ts
@@ -542,6 +541,5 @@ ui/src/pages/chat/components/chat-message.test.ts
 ui/src/pages/chat/composer-persistence.ts
 ui/src/pages/chat/talk/gateway-relay.test.ts
 ui/src/pages/config/config-page.ts
-ui/src/pages/config/view.browser.test.ts
 ui/src/pages/sessions/sessions-page.ts
 ui/src/test-helpers/control-ui-e2e.ts
