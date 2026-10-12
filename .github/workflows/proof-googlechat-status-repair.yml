@@ -1,0 +1,139 @@
+name: Secretless Google Chat status repair proof
+
+on:
+  push:
+    branches: [codex/proof-googlechat-status-repair-20261012]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  paired-proof:
+    if: github.repository == 'ly85206559/openclaw'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CI: true
+      BASE_SHA: 418aa6a54a07dae347c32c03a3269d3fe81127ac
+      SOURCE_SHA: 5ebe25da3ba5d59d477310dd0c11a34fe5630f71
+      TRANSPORT_TEST: extensions/googlechat/src/api.fetchok.transport.test.ts
+      MEDIA_TEST: extensions/googlechat/src/targets.test.ts
+      DELIVERY_TEST: extensions/googlechat/src/monitor.reply-delivery.test.ts
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 26.8.2
+      - name: Freeze candidate fixtures and exact source identities
+        shell: bash
+        run: |
+          set -euo pipefail
+          proof_dir="$RUNNER_TEMP/googlechat-status-proof"
+          mkdir -p "$proof_dir"
+          cp "$TRANSPORT_TEST" "$proof_dir/frozen-transport.test.ts"
+          cp "$MEDIA_TEST" "$proof_dir/frozen-media.test.ts"
+          sha256sum "$proof_dir"/frozen-*.test.ts > "$proof_dir/frozen-fixture-hashes.txt"
+          git rev-parse HEAD HEAD^{tree} > "$proof_dir/carrier-identity.txt"
+          git -c core.hooksPath=/dev/null fetch --depth=1 https://github.com/openclaw/openclaw.git "$BASE_SHA"
+          git -c core.hooksPath=/dev/null fetch --depth=6 https://github.com/ly85206559/openclaw.git "$SOURCE_SHA"
+          test "$(git rev-parse "$BASE_SHA")" = "$BASE_SHA"
+          test "$(git rev-parse "$SOURCE_SHA")" = "$SOURCE_SHA"
+          git -c core.hooksPath=/dev/null checkout --detach "$BASE_SHA"
+          test "$(git rev-parse HEAD)" = "$BASE_SHA"
+          git rev-parse HEAD HEAD^{tree} > "$proof_dir/baseline-identity.txt"
+          git ls-tree HEAD extensions/googlechat/src/api.ts package.json pnpm-lock.yaml > "$proof_dir/baseline-owner-and-dependencies.txt"
+      - name: Install pinned dependencies in the secretless runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          proof_dir="$RUNNER_TEMP/googlechat-status-proof"
+          corepack enable
+          /usr/bin/time -f '%e' -o "$proof_dir/install-wall-seconds.txt" pnpm install --frozen-lockfile > "$proof_dir/install.stdout" 2> "$proof_dir/install.stderr"
+          node --version > "$proof_dir/toolchain.txt"
+          pnpm --version >> "$proof_dir/toolchain.txt"
+          corepack --version >> "$proof_dir/toolchain.txt"
+          git --version >> "$proof_dir/toolchain.txt"
+          uname -a >> "$proof_dir/toolchain.txt"
+          test -z "$(git status --porcelain)"
+      - name: Baseline native typing regression must collect five assertion failures
+        shell: bash
+        run: |
+          set -euo pipefail
+          proof_dir="$RUNNER_TEMP/googlechat-status-proof"
+          cp "$proof_dir/frozen-transport.test.ts" "$TRANSPORT_TEST"
+          cp "$proof_dir/frozen-media.test.ts" "$MEDIA_TEST"
+          cmp "$proof_dir/frozen-transport.test.ts" "$TRANSPORT_TEST"
+          cmp "$proof_dir/frozen-media.test.ts" "$MEDIA_TEST"
+          git diff --name-only > "$proof_dir/baseline-test-only-paths.txt"
+          diff -u <(printf '%s\n' "$TRANSPORT_TEST" "$MEDIA_TEST") "$proof_dir/baseline-test-only-paths.txt"
+          set +e
+          /usr/bin/time -f '%e' -o "$proof_dir/red-typing-wall-seconds.txt" node scripts/run-vitest.mjs "$TRANSPORT_TEST" -t 'only resends a typing reply after an authoritative 404' --maxWorkers=1 --reporter=verbose > "$proof_dir/red-typing.stdout" 2> "$proof_dir/red-typing.stderr"
+          exit_code=$?
+          set -e
+          printf '%s\n' "$exit_code" > "$proof_dir/red-typing-exit.txt"
+          cat "$proof_dir/red-typing.stdout" "$proof_dir/red-typing.stderr" > "$proof_dir/red-typing.log"
+          test "$exit_code" -eq 1
+          grep -Eq '5 failed.*2 passed' "$proof_dir/red-typing.log"
+          grep -q 'AssertionError' "$proof_dir/red-typing.log"
+          test "$(grep -c 'GOOGLECHAT_TYPING_RECEIPT' "$proof_dir/red-typing.log")" -eq 7
+      - name: Baseline media diagnostics must collect two assertion failures
+        shell: bash
+        run: |
+          set -euo pipefail
+          proof_dir="$RUNNER_TEMP/googlechat-status-proof"
+          set +e
+          /usr/bin/time -f '%e' -o "$proof_dir/red-media-wall-seconds.txt" node scripts/run-vitest.mjs "$MEDIA_TEST" -t 'cancels a stalled media error body|preserves redacted error-body read diagnostics' --maxWorkers=1 --reporter=verbose > "$proof_dir/red-media.stdout" 2> "$proof_dir/red-media.stderr"
+          exit_code=$?
+          set -e
+          printf '%s\n' "$exit_code" > "$proof_dir/red-media-exit.txt"
+          cat "$proof_dir/red-media.stdout" "$proof_dir/red-media.stderr" > "$proof_dir/red-media.log"
+          test "$exit_code" -eq 1
+          grep -Eq 'Tests[[:space:]]+2 failed' "$proof_dir/red-media.log"
+          grep -q 'AssertionError' "$proof_dir/red-media.log"
+          grep -q 'GOOGLECHAT_ERROR_READ_RECEIPT' "$proof_dir/red-media.log"
+          git restore --source="$BASE_SHA" -- "$TRANSPORT_TEST" "$MEDIA_TEST"
+          test -z "$(git status --porcelain)"
+          git rev-parse HEAD HEAD^{tree} > "$proof_dir/baseline-after-test-identity.txt"
+      - name: Exact repaired source passes the frozen fixtures and related owner tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          proof_dir="$RUNNER_TEMP/googlechat-status-proof"
+          git -c core.hooksPath=/dev/null checkout --detach "$SOURCE_SHA"
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test "$(git merge-base "$BASE_SHA" HEAD)" = "$BASE_SHA"
+          test "$(git rev-list --count "$BASE_SHA"..HEAD)" -eq 5
+          git diff --name-only "$BASE_SHA"...HEAD > "$proof_dir/candidate-paths.txt"
+          diff -u <(printf '%s\n' "$TRANSPORT_TEST" extensions/googlechat/src/api.ts "$MEDIA_TEST") "$proof_dir/candidate-paths.txt"
+          test "$(git rev-parse "$BASE_SHA:package.json")" = "$(git rev-parse "HEAD:package.json")"
+          test "$(git rev-parse "$BASE_SHA:pnpm-lock.yaml")" = "$(git rev-parse "HEAD:pnpm-lock.yaml")"
+          cmp "$proof_dir/frozen-transport.test.ts" "$TRANSPORT_TEST"
+          cmp "$proof_dir/frozen-media.test.ts" "$MEDIA_TEST"
+          git rev-parse HEAD HEAD^{tree} > "$proof_dir/candidate-identity.txt"
+          git ls-tree HEAD extensions/googlechat/src/api.ts package.json pnpm-lock.yaml > "$proof_dir/candidate-owner-and-dependencies.txt"
+          set +e
+          /usr/bin/time -f '%e' -o "$proof_dir/green-wall-seconds.txt" node scripts/run-vitest.mjs "$TRANSPORT_TEST" "$MEDIA_TEST" "$DELIVERY_TEST" --maxWorkers=1 --reporter=verbose > "$proof_dir/green.stdout" 2> "$proof_dir/green.stderr"
+          exit_code=$?
+          set -e
+          printf '%s\n' "$exit_code" > "$proof_dir/green-exit.txt"
+          cat "$proof_dir/green.stdout" "$proof_dir/green.stderr" > "$proof_dir/green.log"
+          test "$exit_code" -eq 0
+          test "$(grep -c 'GOOGLECHAT_TYPING_RECEIPT' "$proof_dir/green.log")" -eq 7
+          grep -q 'GOOGLECHAT_ERROR_READ_RECEIPT' "$proof_dir/green.log"
+          pnpm exec oxfmt --check extensions/googlechat/src/api.ts "$TRANSPORT_TEST" "$MEDIA_TEST" > "$proof_dir/format.stdout" 2> "$proof_dir/format.stderr"
+          node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.json extensions/googlechat/src/api.ts "$TRANSPORT_TEST" "$MEDIA_TEST" > "$proof_dir/lint.stdout" 2> "$proof_dir/lint.stderr"
+          git diff --check
+          test -z "$(git status --porcelain)"
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          git rev-parse HEAD HEAD^{tree} > "$proof_dir/candidate-after-test-identity.txt"
+      - name: Upload raw paired proof and receipts even when a prerequisite fails
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: googlechat-status-repair-${{ github.run_id }}
+          path: ${{ runner.temp }}/googlechat-status-proof
+          retention-days: 30
+          if-no-files-found: error
