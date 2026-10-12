@@ -1,4 +1,4 @@
-name: Secretless web_fetch JSON candidate proof
+name: Secretless web_fetch JSON remaining gates
 
 on:
   push:
@@ -42,17 +42,18 @@ jobs:
           node-version: 24.19.0
           semantic-checks: true
           cache-mode: off
-      - name: Exact fixture real HTTP regression and owner siblings
+      - name: Remaining owner siblings with isolated report destinations
         shell: bash
         run: |
           set -euo pipefail
           { node --version; pnpm --version; } | tee "${RUNNER_TEMP}/json-fidelity/toolchain.txt"
-          for lane in regression siblings; do
-            if [[ "$lane" = regression ]]; then
-              files=("${TEST_FILE}")
-            else
-              files=(src/agents/tools/web-fetch.headers.test.ts src/agents/tools/web-fetch-output-contract.test.ts src/agents/tools/web-fetch.test.ts)
-            fi
+          for lane in headers output-contract general; do
+            case "$lane" in
+              headers) files=(src/agents/tools/web-fetch.headers.test.ts);;
+              output-contract) files=(src/agents/tools/web-fetch-output-contract.test.ts);;
+              general) files=(src/agents/tools/web-fetch.test.ts);;
+            esac
+            export PROOF_TEST_FILE="${files[0]}"
             export PROOF_AUDIT_PATH="${RUNNER_TEMP}/json-fidelity/${lane}-audit.json"
             /usr/bin/time -f '%e' -o "${RUNNER_TEMP}/json-fidelity/${lane}-wall.txt" \
               node scripts/run-vitest.mjs "${files[@]}" --maxWorkers=1 \
@@ -66,11 +67,7 @@ jobs:
           const lane = process.env.LANE;
           const report = JSON.parse(fs.readFileSync(`${process.env.RUNNER_TEMP}/json-fidelity/${lane}.json`, 'utf8'));
           const audit = JSON.parse(fs.readFileSync(process.env.PROOF_AUDIT_PATH, 'utf8'));
-          const expected = lane === 'regression' ? [process.env.TEST_FILE] : [
-            'src/agents/tools/web-fetch.headers.test.ts',
-            'src/agents/tools/web-fetch-output-contract.test.ts',
-            'src/agents/tools/web-fetch.test.ts',
-          ];
+          const expected = [process.env.PROOF_TEST_FILE];
           assert.equal(report.success, true);
           assert.equal(report.numFailedTests, 0);
           assert.equal(report.numPendingTests, 0);
@@ -88,7 +85,6 @@ jobs:
             assert.ok(file.assertionResults.length > 0);
             for (const test of file.assertionResults) assert.equal(test.status, 'passed');
           }
-          if (lane === 'regression') assert.equal(report.numTotalTests, 6);
           console.log('CANDIDATE_GREEN', JSON.stringify({ lane, tests: report.numTotalTests, fixtureErrors: 0 }));
           AUDIT
           done
