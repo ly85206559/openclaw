@@ -1,0 +1,105 @@
+name: Secretless web_fetch JSON candidate proof
+
+on:
+  push:
+    branches: [codex/proof-web-fetch-json-fidelity-20261013]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  candidate:
+    if: github.repository == 'ly85206559/openclaw'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      BASE_SHA: 03512be2f3df16d4ec861ed1bebeaa967c30da2d
+      PRODUCT_SHA: 9886e568a67c669a830129497a9790f1a26902f4
+      TEST_FILE: src/agents/tools/web-fetch.json-fidelity.test.ts
+      GH_TOKEN: ''
+      GITHUB_TOKEN: ''
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Freeze audited reporter and exact product input
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/json-fidelity"
+          cp .github/proof/json-fidelity-audit-reporter.mjs "${RUNNER_TEMP}/json-fidelity/audit-reporter.mjs"
+          git fetch --no-tags https://github.com/ly85206559/openclaw.git "${PRODUCT_SHA}"
+          git checkout --detach "${PRODUCT_SHA}"
+          test "$(git rev-parse HEAD)" = "${PRODUCT_SHA}"
+          git rev-parse HEAD HEAD^{tree} | tee "${RUNNER_TEMP}/json-fidelity/candidate-source.txt"
+          git diff --name-only "${BASE_SHA}" HEAD | tee "${RUNNER_TEMP}/json-fidelity/product-paths.txt"
+          diff -u <(printf '%s\n' src/agents/tools/web-fetch.headers.test.ts src/agents/tools/web-fetch.json-fidelity.test.ts src/agents/tools/web-fetch.ts) "${RUNNER_TEMP}/json-fidelity/product-paths.txt"
+          printf '%s  %s\n' 8aee5fef2ee0c3bfb4633b177edba0245e48cb2ef417710319b52cf2564fd706 "${TEST_FILE}" | sha256sum --check
+          sha256sum "src/agents/tools/web-fetch.ts" "${TEST_FILE}" "${RUNNER_TEMP}/json-fidelity/audit-reporter.mjs" | tee "${RUNNER_TEMP}/json-fidelity/executed-sha256.txt"
+      - uses: ./.github/actions/setup-node-env
+        with:
+          node-version: 24.19.0
+          semantic-checks: true
+          cache-mode: off
+      - name: Exact fixture real HTTP regression and owner siblings
+        shell: bash
+        run: |
+          set -euo pipefail
+          { node --version; pnpm --version; } | tee "${RUNNER_TEMP}/json-fidelity/toolchain.txt"
+          for lane in regression siblings; do
+            if [[ "$lane" = regression ]]; then
+              files=("${TEST_FILE}")
+            else
+              files=(src/agents/tools/web-fetch.headers.test.ts src/agents/tools/web-fetch-output-contract.test.ts src/agents/tools/web-fetch.test.ts)
+            fi
+            export PROOF_AUDIT_PATH="${RUNNER_TEMP}/json-fidelity/${lane}-audit.json"
+            /usr/bin/time -f '%e' -o "${RUNNER_TEMP}/json-fidelity/${lane}-wall.txt" \
+              node scripts/run-vitest.mjs "${files[@]}" --maxWorkers=1 \
+              --reporter=verbose --reporter=json --reporter="${RUNNER_TEMP}/json-fidelity/audit-reporter.mjs" \
+              --outputFile="${RUNNER_TEMP}/json-fidelity/${lane}.json" \
+              > "${RUNNER_TEMP}/json-fidelity/${lane}.log" 2>&1
+            cat "${RUNNER_TEMP}/json-fidelity/${lane}.log"
+            LANE="$lane" node --input-type=module <<'AUDIT'
+          import assert from 'node:assert/strict';
+          import fs from 'node:fs';
+          const lane = process.env.LANE;
+          const report = JSON.parse(fs.readFileSync(`${process.env.RUNNER_TEMP}/json-fidelity/${lane}.json`, 'utf8'));
+          const audit = JSON.parse(fs.readFileSync(process.env.PROOF_AUDIT_PATH, 'utf8'));
+          const expected = lane === 'regression' ? [process.env.TEST_FILE] : [
+            'src/agents/tools/web-fetch.headers.test.ts',
+            'src/agents/tools/web-fetch-output-contract.test.ts',
+            'src/agents/tools/web-fetch.test.ts',
+          ];
+          assert.equal(report.success, true);
+          assert.equal(report.numFailedTests, 0);
+          assert.equal(report.numPendingTests, 0);
+          assert.equal(report.numTodoTests, 0);
+          assert.equal(report.numPassedTests, report.numTotalTests);
+          assert.equal(report.testResults.length, expected.length);
+          assert.equal(audit.reason, 'passed');
+          assert.equal(audit.moduleCount, expected.length);
+          assert.equal(audit.unhandledErrors, 0);
+          assert.equal(audit.suiteErrors, 0);
+          for (const name of expected) assert.equal(report.testResults.filter(file => file.name.endsWith(name)).length, 1);
+          for (const file of report.testResults) {
+            assert.equal(file.message, '');
+            assert.equal(file.status, 'passed');
+            assert.ok(file.assertionResults.length > 0);
+            for (const test of file.assertionResults) assert.equal(test.status, 'passed');
+          }
+          if (lane === 'regression') assert.equal(report.numTotalTests, 6);
+          console.log('CANDIDATE_GREEN', JSON.stringify({ lane, tests: report.numTotalTests, fixtureErrors: 0 }));
+          AUDIT
+          done
+      - name: Canonical build
+        run: pnpm build > "${RUNNER_TEMP}/json-fidelity/build.log" 2>&1
+      - name: Complete official checker
+        run: pnpm check > "${RUNNER_TEMP}/json-fidelity/check.log" 2>&1
+      - name: Retain raw receipts even on check or setup failure
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: json-fidelity-candidate-${{ github.run_id }}
+          path: ${{ runner.temp }}/json-fidelity
+          retention-days: 30
