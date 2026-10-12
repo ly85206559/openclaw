@@ -174,9 +174,9 @@ describe("UrbitSSEClient", () => {
       it.each([
         {
           ending: "CRLF",
-          chunks: ['id:1\r', '\ndata:{"id":1,"json":{"text":"split"}}\r', "\n\r", "\n"],
+          chunks: ["id:1\r", '\ndata:{"id":1,"json":{"text":"split"}}\r', "\n\r", "\n"],
         },
-        { ending: "CR", chunks: ['id:1\r', 'data:{"id":1,"json":{"text":"split"}}\r', "\r"] },
+        { ending: "CR", chunks: ["id:1\r", 'data:{"id":1,"json":{"text":"split"}}\r', "\r"] },
       ])("preserves $ending delimiters split across byte chunks", async ({ chunks }) => {
         const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123");
         const delivered: unknown[] = [];
