@@ -10,8 +10,8 @@ permissions:
 
 env:
   BASE_SHA: 03512be2f3df16d4ec861ed1bebeaa967c30da2d
-  PRODUCT_SHA: 5f191ee2d8b9bf06db485e373a841fef0a7a6c1b
-  FIXTURE_SHA256: 068125e96507abc7aed9bf5ca9665f796121d2af0a8bb9a693ef262c9c1d688a
+  PRODUCT_SHA: 883d3876e82edd27cb2d112f42e7620391a52cfd
+  FIXTURE_SHA256: 410099c2f32c424bbdc74f67f4751586b8c2fa876ab1774d433e1fdc451aabe1
   RUNTIME_PROOF_SHA: 0ebfd52625fcec6661e76482ce72d8ada6a86885
   TEST_FILE: src/cli/capability-cli.image-resolution.test.ts
   ORIGINAL_TEST_FILE: src/cli/capability-cli.test.ts
@@ -20,7 +20,7 @@ env:
 
 jobs:
   baseline:
-    if: github.repository == 'ly85206559/openclaw'
+    if: github.repository == 'ly85206559/openclaw' && github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -127,7 +127,7 @@ jobs:
           retention-days: 30
 
   candidate:
-    if: github.repository == 'ly85206559/openclaw' && github.event_name == 'workflow_dispatch'
+    if: github.repository == 'ly85206559/openclaw'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
