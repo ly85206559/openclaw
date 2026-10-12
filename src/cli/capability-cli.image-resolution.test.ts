@@ -16,9 +16,8 @@ const mocks = vi.hoisted(() => ({
     writeJson: vi.fn(),
     writeStdout: vi.fn(),
   },
-  resolveLocalCapabilityAgent: vi.fn<
-    typeof import("./capability-cli/shared.js").resolveLocalCapabilityAgent
-  >(),
+  resolveLocalCapabilityAgent:
+    vi.fn<typeof import("./capability-cli/shared.js").resolveLocalCapabilityAgent>(),
   generateImage: vi.fn<typeof import("../image-generation/runtime.js").generateImage>(),
 }));
 
