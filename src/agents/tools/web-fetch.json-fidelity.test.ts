@@ -99,40 +99,43 @@ describe("web_fetch JSON document fidelity over HTTP", () => {
     }
   });
 
-  it.each(RESPONSES)("preserves source literals from $path", async ({ path, extractor, patterns }) => {
-    const tool = createWebFetchTool({
-      config: {
-        plugins: { enabled: false },
-        tools: {
-          web: {
-            fetch: {
-              cacheTtlMinutes: 0,
-              ssrfPolicy: { allowedHostnames: ["127.0.0.1"] },
+  it.each(RESPONSES)(
+    "preserves source literals from $path",
+    async ({ path, extractor, patterns }) => {
+      const tool = createWebFetchTool({
+        config: {
+          plugins: { enabled: false },
+          tools: {
+            web: {
+              fetch: {
+                cacheTtlMinutes: 0,
+                ssrfPolicy: { allowedHostnames: ["127.0.0.1"] },
+              },
             },
           },
         },
-      },
-    });
-    if (!tool) {
-      throw new Error("expected enabled web_fetch tool");
-    }
-    const result = await tool.execute("json-fidelity", { url: `${baseUrl}${path}` });
-    const textBlock = result.content.find((block) => block.type === "text");
-    if (!textBlock || textBlock.type !== "text") {
-      throw new Error("expected model-visible web_fetch result");
-    }
-    // Decode only the result envelope; parsing its source document would round the oracle too.
-    const envelope: unknown = JSON.parse(textBlock.text);
-    if (!isRecord(envelope) || typeof envelope.text !== "string") {
-      throw new Error("expected wrapped source document");
-    }
-    expect(envelope).toMatchObject({
-      status: 200,
-      extractor,
-      truncated: false,
-    });
-    for (const pattern of patterns) {
-      expect(envelope.text).toMatch(pattern);
-    }
-  });
+      });
+      if (!tool) {
+        throw new Error("expected enabled web_fetch tool");
+      }
+      const result = await tool.execute("json-fidelity", { url: `${baseUrl}${path}` });
+      const textBlock = result.content.find((block) => block.type === "text");
+      if (!textBlock || textBlock.type !== "text") {
+        throw new Error("expected model-visible web_fetch result");
+      }
+      // Decode only the result envelope; parsing its source document would round the oracle too.
+      const envelope: unknown = JSON.parse(textBlock.text);
+      if (!isRecord(envelope) || typeof envelope.text !== "string") {
+        throw new Error("expected wrapped source document");
+      }
+      expect(envelope).toMatchObject({
+        status: 200,
+        extractor,
+        truncated: false,
+      });
+      for (const pattern of patterns) {
+        expect(envelope.text).toMatch(pattern);
+      }
+    },
+  );
 });

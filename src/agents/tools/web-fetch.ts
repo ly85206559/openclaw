@@ -722,7 +722,8 @@ async function fetchWebPayload(params: WebFetchRuntimeParams): Promise<Record<st
     ) {
       // Structured +json subtypes are single JSON documents; sequence formats are not.
       try {
-        text = JSON.stringify(JSON.parse(body), null, 2);
+        // Validate without rewriting numeric literals in the fetched document.
+        JSON.parse(body);
         extractor = "json";
       } catch {
         text = body;

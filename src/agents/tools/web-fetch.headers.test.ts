@@ -255,7 +255,7 @@ describe("web_fetch headers and response extraction", () => {
       | undefined;
     expect(details?.extractor).toBe("json");
     expect(details?.contentType).toBe("application/json-patch+json");
-    expect(details?.text).toContain('"patch": true');
+    expect(details?.text).toContain('{"patch":true}');
   });
 
   it("bypasses Firecrawl when runtime metadata marks Firecrawl inactive", async () => {
