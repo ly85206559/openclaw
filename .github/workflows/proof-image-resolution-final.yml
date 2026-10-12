@@ -1,0 +1,237 @@
+name: Secretless image resolution final regression and checker proof
+
+on:
+  push:
+    branches: [codex/proof-image-cli-resolution-20261013]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  BASE_SHA: 03512be2f3df16d4ec861ed1bebeaa967c30da2d
+  PRODUCT_SHA: 5f191ee2d8b9bf06db485e373a841fef0a7a6c1b
+  FIXTURE_SHA256: 068125e96507abc7aed9bf5ca9665f796121d2af0a8bb9a693ef262c9c1d688a
+  RUNTIME_PROOF_SHA: 0ebfd52625fcec6661e76482ce72d8ada6a86885
+  TEST_FILE: src/cli/capability-cli.image-resolution.test.ts
+  ORIGINAL_TEST_FILE: src/cli/capability-cli.test.ts
+  GH_TOKEN: ''
+  GITHUB_TOKEN: ''
+
+jobs:
+  baseline:
+    if: github.repository == 'ly85206559/openclaw'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 5
+          persist-credentials: false
+      - name: Freeze reporter and exact new fixture before pure baseline checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/image-resolution-final"
+          cp .github/proof/image-resolution-audit-reporter.mjs "${RUNNER_TEMP}/image-resolution-final/audit-reporter.mjs"
+          git fetch --depth=5 --no-tags https://github.com/ly85206559/openclaw.git "${PRODUCT_SHA}"
+          git show "${PRODUCT_SHA}:${TEST_FILE}" > "${RUNNER_TEMP}/image-resolution-final/reviewed.test.ts"
+          git fetch --depth=5 --no-tags https://github.com/openclaw/openclaw.git "${BASE_SHA}"
+          git diff --exit-code "${BASE_SHA}" "${PRODUCT_SHA}" -- "${ORIGINAL_TEST_FILE}"
+          git checkout --detach "${BASE_SHA}"
+          test "$(git rev-parse HEAD)" = "${BASE_SHA}"
+          cp "${RUNNER_TEMP}/image-resolution-final/reviewed.test.ts" "${TEST_FILE}"
+          printf '%s  %s\n' "${FIXTURE_SHA256}" "${TEST_FILE}" | sha256sum --check --strict
+          git rev-parse HEAD HEAD^{tree} | tee "${RUNNER_TEMP}/image-resolution-final/baseline-source.txt"
+          git diff --name-only | tee "${RUNNER_TEMP}/image-resolution-final/tracked-diff.txt"
+          test ! -s "${RUNNER_TEMP}/image-resolution-final/tracked-diff.txt"
+          sha256sum src/cli/capability-cli/image.ts "${TEST_FILE}" "${ORIGINAL_TEST_FILE}" "${RUNNER_TEMP}/image-resolution-final/audit-reporter.mjs" \
+            | tee "${RUNNER_TEMP}/image-resolution-final/executed-sha256.txt"
+          cp "${TEST_FILE}" "${RUNNER_TEMP}/image-resolution-final/executed.test.ts"
+      - uses: ./.github/actions/setup-node-env
+        with:
+          node-version: 24.19.0
+          semantic-checks: true
+          cache-mode: off
+      - uses: ./.github/actions/setup-ripgrep
+      - name: Check frozen regression formatting without changing it
+        shell: bash
+        run: |
+          set -euo pipefail
+          { node --version; pnpm --version; rg --version; } | tee "${RUNNER_TEMP}/image-resolution-final/toolchain.txt"
+          pnpm exec oxfmt --check --threads=1 "${TEST_FILE}" > "${RUNNER_TEMP}/image-resolution-final/format.log" 2>&1
+          cat "${RUNNER_TEMP}/image-resolution-final/format.log"
+      - name: Baseline must fail only the five intended assertions
+        shell: bash
+        env:
+          PROOF_AUDIT_PATH: ${{ runner.temp }}/image-resolution-final/baseline-audit.json
+        run: |
+          set -euo pipefail
+          set +e
+          /usr/bin/time -f '%e' -o "${RUNNER_TEMP}/image-resolution-final/baseline-wall.txt" \
+            pnpm test "${TEST_FILE}" --maxWorkers=1 --reporter=verbose --reporter=json \
+            --reporter="${RUNNER_TEMP}/image-resolution-final/audit-reporter.mjs" \
+            --outputFile="${RUNNER_TEMP}/image-resolution-final/baseline.json" \
+            > "${RUNNER_TEMP}/image-resolution-final/baseline.log" 2>&1
+          result=$?
+          set -e
+          cat "${RUNNER_TEMP}/image-resolution-final/baseline.log"
+          printf 'exit=%s\n' "$result" | tee "${RUNNER_TEMP}/image-resolution-final/baseline-exit.txt"
+          test "$result" = 1
+          node --input-type=module <<'AUDIT'
+          import assert from 'node:assert/strict';
+          import fs from 'node:fs';
+          const root = process.env.RUNNER_TEMP + '/image-resolution-final';
+          const report = JSON.parse(fs.readFileSync(root + '/baseline.json', 'utf8'));
+          const audit = JSON.parse(fs.readFileSync(process.env.PROOF_AUDIT_PATH, 'utf8'));
+          assert.equal(report.success, false);
+          assert.equal(report.numTotalTests, 7);
+          assert.equal(report.numFailedTests, 5);
+          assert.equal(report.numPassedTests, 2);
+          assert.equal(report.numPendingTests, 0);
+          assert.equal(report.numTodoTests, 0);
+          assert.equal(report.testResults.length, 1);
+          assert.ok(report.testResults[0].name.endsWith(process.env.TEST_FILE));
+          assert.equal(report.testResults[0].message, '');
+          assert.equal(audit.reason, 'failed');
+          assert.equal(audit.moduleCount, 1);
+          assert.equal(audit.unhandledErrors, 0);
+          assert.equal(audit.suiteErrors, 0);
+          const tests = report.testResults[0].assertionResults;
+          assert.equal(tests.length, 7);
+          assert.ok(tests.every(test => ['passed', 'failed'].includes(test.status)));
+          const failed = tests.filter(test => test.status === 'failed');
+          assert.deepEqual(failed.map(test => test.title).sort(), [
+            'rejects image generate resolution 1080p before dispatch',
+            'rejects image edit resolution 1080p before dispatch',
+            'rejects image generate resolution 8K before dispatch',
+            'rejects image edit resolution 8K before dispatch',
+            'forwards canonical image resolution 2K',
+          ].sort());
+          for (const test of failed) {
+            const message = test.failureMessages.join('\n');
+            assert.match(message, test.title.startsWith('rejects image ')
+              ? /promise resolved "undefined" instead of rejecting/
+              : /expected ' 2k ' to be '2K'/);
+          }
+          console.log('EXPECTED_BASELINE_RED', JSON.stringify({ tests:7, passed:2, failed:5, fixtureErrors:0 }));
+          AUDIT
+      - name: Retain raw baseline receipts even on setup or formatting failure
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: image-resolution-final-baseline-${{ github.run_id }}
+          path: ${{ runner.temp }}/image-resolution-final
+          retention-days: 30
+
+  candidate:
+    if: github.repository == 'ly85206559/openclaw'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 5
+          persist-credentials: false
+      - name: Freeze exact candidate and prove original suite and runtime inputs unchanged
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/image-resolution-final"
+          cp .github/proof/image-resolution-audit-reporter.mjs "${RUNNER_TEMP}/image-resolution-final/audit-reporter.mjs"
+          git fetch --depth=5 --no-tags https://github.com/ly85206559/openclaw.git "${PRODUCT_SHA}"
+          git fetch --depth=5 --no-tags https://github.com/openclaw/openclaw.git "${BASE_SHA}"
+          git checkout --detach "${PRODUCT_SHA}"
+          test "$(git rev-parse HEAD)" = "${PRODUCT_SHA}"
+          git cat-file -e "${BASE_SHA}^{commit}"
+          git diff --name-only "${BASE_SHA}" HEAD | tee "${RUNNER_TEMP}/image-resolution-final/product-paths.txt"
+          diff -u <(printf '%s\n' config/assertion-safety-baseline.txt "${TEST_FILE}" src/cli/capability-cli/image.ts) "${RUNNER_TEMP}/image-resolution-final/product-paths.txt"
+          git diff --exit-code "${BASE_SHA}" HEAD -- "${ORIGINAL_TEST_FILE}"
+          git cat-file -e "${RUNTIME_PROOF_SHA}^{commit}"
+          git diff --exit-code "${RUNTIME_PROOF_SHA}" HEAD -- src/cli/capability-cli/image.ts package.json pnpm-lock.yaml pnpm-workspace.yaml
+          printf '%s  %s\n' "${FIXTURE_SHA256}" "${TEST_FILE}" | sha256sum --check --strict
+          printf 'Reusing completed actual CLI and canonical build proof at %s; no runtime/build rerun.\n' "${RUNTIME_PROOF_SHA}" \
+            | tee "${RUNNER_TEMP}/image-resolution-final/runtime-proof-reuse.txt"
+          git rev-parse HEAD HEAD^{tree} | tee "${RUNNER_TEMP}/image-resolution-final/candidate-source.txt"
+          sha256sum src/cli/capability-cli/image.ts "${TEST_FILE}" "${ORIGINAL_TEST_FILE}" "${RUNNER_TEMP}/image-resolution-final/audit-reporter.mjs" \
+            | tee "${RUNNER_TEMP}/image-resolution-final/executed-sha256.txt"
+          cp "${TEST_FILE}" "${RUNNER_TEMP}/image-resolution-final/executed.test.ts"
+      - uses: ./.github/actions/setup-node-env
+        with:
+          node-version: 24.19.0
+          semantic-checks: true
+          cache-mode: off
+      - uses: ./.github/actions/setup-ripgrep
+      - name: Check image-only formatting and lint before the full checker
+        shell: bash
+        run: |
+          set -euo pipefail
+          { node --version; pnpm --version; rg --version; } | tee "${RUNNER_TEMP}/image-resolution-final/toolchain.txt"
+          pnpm check:changed --dry-run --base "${BASE_SHA}" --timed > "${RUNNER_TEMP}/image-resolution-final/changed-plan.log" 2>&1
+          cat "${RUNNER_TEMP}/image-resolution-final/changed-plan.log"
+          pnpm exec oxfmt --check --threads=1 "${TEST_FILE}" src/cli/capability-cli/image.ts > "${RUNNER_TEMP}/image-resolution-final/format.log" 2>&1
+          cat "${RUNNER_TEMP}/image-resolution-final/format.log"
+          /usr/bin/time -f '%e' -o "${RUNNER_TEMP}/image-resolution-final/image-lint-wall.txt" \
+            node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.core.json \
+            "${TEST_FILE}" src/cli/capability-cli/image.ts \
+            > "${RUNNER_TEMP}/image-resolution-final/image-lint.log" 2>&1
+          cat "${RUNNER_TEMP}/image-resolution-final/image-lint.log"
+          printf 'Source-owned image-only lint and format completed with exit 0.\n' \
+            | tee "${RUNNER_TEMP}/image-resolution-final/image-lint-exit.txt"
+      - name: New regression and untouched original suite must both pass without runner errors or skips
+        shell: bash
+        run: |
+          set -euo pipefail
+          for suite in resolution original; do
+            file="${TEST_FILE}"
+            expected=7
+            if [ "$suite" = original ]; then file="${ORIGINAL_TEST_FILE}"; expected=84; fi
+            export PROOF_AUDIT_PATH="${RUNNER_TEMP}/image-resolution-final/${suite}-audit.json"
+            /usr/bin/time -f '%e' -o "${RUNNER_TEMP}/image-resolution-final/${suite}-wall.txt" \
+              pnpm test "$file" --maxWorkers=1 --reporter=verbose --reporter=json \
+              --reporter="${RUNNER_TEMP}/image-resolution-final/audit-reporter.mjs" \
+              --outputFile="${RUNNER_TEMP}/image-resolution-final/${suite}.json" \
+              > "${RUNNER_TEMP}/image-resolution-final/${suite}.log" 2>&1
+            cat "${RUNNER_TEMP}/image-resolution-final/${suite}.log"
+            PROOF_SUITE="$suite" PROOF_FILE="$file" PROOF_EXPECTED="$expected" node --input-type=module <<'AUDIT'
+          import assert from 'node:assert/strict';
+          import fs from 'node:fs';
+          const root = process.env.RUNNER_TEMP + '/image-resolution-final';
+          const report = JSON.parse(fs.readFileSync(root + '/' + process.env.PROOF_SUITE + '.json', 'utf8'));
+          const audit = JSON.parse(fs.readFileSync(process.env.PROOF_AUDIT_PATH, 'utf8'));
+          const expected = Number(process.env.PROOF_EXPECTED);
+          assert.equal(report.success, true);
+          assert.equal(report.numTotalTests, expected);
+          assert.equal(report.numPassedTests, expected);
+          assert.equal(report.numFailedTests, 0);
+          assert.equal(report.numPendingTests, 0);
+          assert.equal(report.numTodoTests, 0);
+          assert.equal(report.testResults.length, 1);
+          assert.ok(report.testResults[0].name.endsWith(process.env.PROOF_FILE));
+          assert.equal(report.testResults[0].message, '');
+          assert.equal(audit.reason, 'passed');
+          assert.equal(audit.moduleCount, 1);
+          assert.equal(audit.unhandledErrors, 0);
+          assert.equal(audit.suiteErrors, 0);
+          assert.equal(report.testResults[0].assertionResults.length, expected);
+          for (const test of report.testResults[0].assertionResults) assert.equal(test.status, 'passed');
+          console.log('CANDIDATE_GREEN', JSON.stringify({ suite:process.env.PROOF_SUITE, tests:expected, fixtureErrors:0 }));
+          AUDIT
+          done
+      - name: Official checker on image-only candidate with explicit base and test types
+        shell: bash
+        run: |
+          set -euo pipefail
+          /usr/bin/time -f '%e' -o "${RUNNER_TEMP}/image-resolution-final/check-wall.txt" \
+            pnpm check --base "${BASE_SHA}" --include-test-types --timed \
+            > "${RUNNER_TEMP}/image-resolution-final/check.log" 2>&1
+          cat "${RUNNER_TEMP}/image-resolution-final/check.log"
+          printf 'Official pnpm check completed with exit 0; Knip is not part of this command and is not claimed.\n' \
+            | tee "${RUNNER_TEMP}/image-resolution-final/check-exit.txt"
+      - name: Retain raw candidate receipts even on setup or check failure
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: image-resolution-final-candidate-${{ github.run_id }}
+          path: ${{ runner.temp }}/image-resolution-final
+          retention-days: 30

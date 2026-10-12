@@ -1,8 +1,6 @@
 name: Secretless image resolution original CLI proof
 
 on:
-  push:
-    branches: [codex/proof-image-cli-resolution-20261013]
   workflow_dispatch:
 
 permissions:
