@@ -1,8 +1,6 @@
 name: Secretless web_fetch JSON remaining gates
 
 on:
-  push:
-    branches: [codex/proof-web-fetch-json-fidelity-20261013]
   workflow_dispatch:
 
 permissions:

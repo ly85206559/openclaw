@@ -1,0 +1,66 @@
+name: Secretless exact product official checkers
+
+on:
+  push:
+    branches: [codex/proof-web-fetch-json-fidelity-20261013]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  checker:
+    if: github.repository == 'ly85206559/openclaw'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: json
+            product: 9886e568a67c669a830129497a9790f1a26902f4
+          - name: tlon
+            product: b01a23563a9b4ee74940138b2c079ecf24ffebad
+          - name: image
+            product: 0ebfd52625fcec6661e76482ce72d8ada6a86885
+    env:
+      BASE_SHA: 03512be2f3df16d4ec861ed1bebeaa967c30da2d
+      PRODUCT_SHA: ${{ matrix.product }}
+      GH_TOKEN: ''
+      GITHUB_TOKEN: ''
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Pin the reviewed product and actual comparison base
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/official-checker"
+          git fetch --depth=3 --no-tags https://github.com/ly85206559/openclaw.git "${PRODUCT_SHA}"
+          git checkout --detach "${PRODUCT_SHA}"
+          test "$(git rev-parse HEAD)" = "${PRODUCT_SHA}"
+          test "$(git merge-base "${BASE_SHA}" HEAD)" = "${BASE_SHA}"
+          git rev-parse HEAD HEAD^{tree} | tee "${RUNNER_TEMP}/official-checker/source.txt"
+          git diff --name-only "${BASE_SHA}" HEAD | tee "${RUNNER_TEMP}/official-checker/product-paths.txt"
+      - name: Install required source-check utility on stock Ubuntu
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y ripgrep
+          rg --version | tee "${RUNNER_TEMP}/official-checker/ripgrep-version.txt"
+      - uses: ./.github/actions/setup-node-env
+        with:
+          node-version: 24.19.0
+          semantic-checks: true
+          cache-mode: off
+      - name: Full official checker including test types and explicit base
+        run: |
+          { node --version; pnpm --version; } | tee "${RUNNER_TEMP}/official-checker/toolchain.txt"
+          pnpm check --base "${BASE_SHA}" --include-test-types > "${RUNNER_TEMP}/official-checker/check.log" 2>&1
+      - name: Retain raw receipts even on checker or setup failure
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: official-checker-${{ matrix.name }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/official-checker
+          retention-days: 30
