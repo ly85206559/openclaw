@@ -1,0 +1,228 @@
+name: Secretless JSON native tested-parent attribution
+
+on:
+  push:
+    branches: [codex/proof-web-fetch-json-fidelity-20261013]
+    paths:
+      - .github/workflows/proof-json-native-parent-attribution.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  PARENT_SHA: 4f9d1a3d4d63d94d88712cc56fdc5394157bcf5e
+  MERGE_SHA: 7b1e8d59520b7e6e7f438014bb62bc6ead8dec1f
+  PRODUCT_SHA: 9886e568a67c669a830129497a9790f1a26902f4
+  GH_TOKEN: ''
+  GITHUB_TOKEN: ''
+
+jobs:
+  native-parent:
+    if: github.repository == 'ly85206559/openclaw'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: copilot-attempt
+            config: test/vitest/vitest.extensions.config.ts
+            project: extensions
+            file: extensions/copilot/src/attempt.test.ts
+            total: 85
+            failed: 75
+            unhandled: 1
+            mode: config-guard
+          - name: memory-reindex
+            config: test/vitest/vitest.extension-database-workers.config.ts
+            project: extension-database-workers
+            file: extensions/memory-core/src/memory/manager.reindex-recovery.test.ts
+            total: 23
+            failed: 11
+            mode: config-guard
+          - name: codex-dynamic-tool-build
+            config: test/vitest/vitest.extension-database-workers.config.ts
+            project: extension-database-workers
+            file: extensions/codex/src/app-server/dynamic-tool-build.test.ts
+            total: 82
+            failed: 59
+            mode: config-guard
+          - name: googlechat-transport
+            config: test/vitest/vitest.extension-messaging.config.ts
+            project: extension-messaging
+            file: extensions/googlechat/src/googlechat-session-target-case.transport.test.ts
+            total: 1
+            failed: 1
+            mode: config-guard
+          - name: codex-native-provenance-observation
+            config: test/vitest/vitest.extension-database-workers.config.ts
+            project: extension-database-workers
+            file: extensions/codex/src/app-server/native-provenance.test.ts
+            total: 2
+            mode: observation
+    env:
+      NATIVE_CONFIG: ${{ matrix.config }}
+      NATIVE_PROJECT: ${{ matrix.project }}
+      NATIVE_FILE: ${{ matrix.file }}
+      EXPECTED_TOTAL: ${{ matrix.total }}
+      EXPECTED_FAILED: ${{ matrix.failed }}
+      AUDIT_MODE: ${{ matrix.mode }}
+      EXPECTED_UNHANDLED: ${{ matrix.unhandled || 0 }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Pin the actual tested main parent and verify unchanged input blobs
+        shell: bash
+        run: |
+          set -euo pipefail
+          EVIDENCE_DIR="${RUNNER_TEMP}/native-parent-attribution"
+          printf 'EVIDENCE_DIR=%s\n' "$EVIDENCE_DIR" >> "$GITHUB_ENV"
+          mkdir -p "${EVIDENCE_DIR}"
+          git fetch --depth=2 --no-tags https://github.com/openclaw/openclaw.git "${MERGE_SHA}"
+          test "$(git show -s --format=%P "${MERGE_SHA}")" = "${PARENT_SHA} ${PRODUCT_SHA}"
+          git checkout --detach "${PARENT_SHA}"
+          test "$(git rev-parse HEAD)" = "${PARENT_SHA}"
+          test -z "$(git status --porcelain)"
+          git rev-parse HEAD HEAD^{tree} "${MERGE_SHA}" "${PRODUCT_SHA}" > "${EVIDENCE_DIR}/source.txt"
+          for file in "${NATIVE_FILE}" "${NATIVE_CONFIG}" src/config/runtime-snapshot.ts scripts/run-vitest.mjs scripts/run-vitest-child.mts scripts/run-vitest.mts test/setup.extensions.ts package.json pnpm-lock.yaml; do
+            parent_blob="$(git rev-parse "${PARENT_SHA}:${file}")"
+            merge_blob="$(git rev-parse "${MERGE_SHA}:${file}")"
+            printf '%s parent=%s merge=%s\n' "${file}" "${parent_blob}" "${merge_blob}" >> "${EVIDENCE_DIR}/input-blobs.txt"
+            test "${parent_blob}" = "${merge_blob}"
+          done
+      - name: Install real source-check utility on stock Ubuntu
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y ripgrep
+          rg --version > "${EVIDENCE_DIR}/ripgrep-version.txt"
+      - uses: ./.github/actions/setup-node-env
+        with:
+          node-version: 24.19.0
+          semantic-checks: true
+          cache-mode: off
+      - name: Prepare observer without changing source, tests, config, or ordering
+        shell: bash
+        run: |
+          set -euo pipefail
+          { node --version; pnpm --version; } > "${EVIDENCE_DIR}/toolchain.txt"
+          git status --porcelain > "${EVIDENCE_DIR}/post-setup-status.txt"
+          test ! -s "${EVIDENCE_DIR}/post-setup-status.txt"
+          cat > "${EVIDENCE_DIR}/audit-reporter.mjs" <<'NODE'
+          import fs from 'node:fs';
+          import path from 'node:path';
+          function diagnosticStrings(value, seen = new Set()) {
+            if (typeof value === 'string') return [value];
+            if (!value || typeof value !== 'object' || seen.has(value)) return [];
+            seen.add(value);
+            return Object.getOwnPropertyNames(value).flatMap((key) => diagnosticStrings(value[key], seen));
+          }
+          export default class NativeParentAudit {
+            processTimedOut = false;
+            onProcessTimeout() {
+              this.processTimedOut = true;
+              fs.writeFileSync(path.join(process.env.EVIDENCE_DIR, 'process-timeout.txt'), 'Vitest process timed out during shutdown\n');
+            }
+            onTestRunEnd(modules, errors, reason) {
+              const audit = {
+                reason,
+                processTimedOut: this.processTimedOut,
+                moduleCount: modules.length,
+                unhandledErrors: errors.map((error) => diagnosticStrings(error).join('\n')),
+                unhandledErrorCount: errors.length,
+                suiteErrorCount: modules.flatMap((module) => [module, ...module.children.allSuites()])
+                  .reduce((count, suite) => count + suite.errors().length, 0),
+              };
+              fs.writeFileSync(path.join(process.env.EVIDENCE_DIR, 'native-audit.json'), JSON.stringify(audit, null, 2) + '\n');
+            }
+          }
+          NODE
+      - name: Run the complete original file once through its original native config
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${PARENT_SHA}"
+          set +e
+          node scripts/run-vitest.mjs run --config "${NATIVE_CONFIG}" "${NATIVE_FILE}" \
+            --reporter=verbose --reporter=json --reporter="${EVIDENCE_DIR}/audit-reporter.mjs" \
+            --outputFile.json="${EVIDENCE_DIR}/native.json" > "${EVIDENCE_DIR}/native.log" 2>&1
+          status=$?
+          set -e
+          printf '%s\n' "${status}" > "${EVIDENCE_DIR}/native-exit.txt"
+          git status --porcelain > "${EVIDENCE_DIR}/post-run-status.txt"
+      - name: Audit actual failures and zero skips without equating timeouts with config errors
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import fs from 'node:fs';
+          import path from 'node:path';
+          const directory = process.env.EVIDENCE_DIR;
+          const read = (file) => fs.readFileSync(path.join(directory, file), 'utf8');
+          const native = JSON.parse(read('native.json'));
+          const audit = JSON.parse(read('native-audit.json'));
+          const status = Number(read('native-exit.txt').trim());
+          const total = Number(process.env.EXPECTED_TOTAL);
+          const guard = 'Runtime config is not prepared. Await captureRuntimeConfigAsyncReader()() first.';
+          assert.equal(read('post-run-status.txt').trim(), '', 'No source/fixture changes');
+          assert.equal(audit.moduleCount, 1, 'Exactly the original target file');
+          assert.equal(audit.unhandledErrorCount, Number(process.env.EXPECTED_UNHANDLED));
+          assert(audit.unhandledErrors.every((message) => message.includes(guard)), 'Only exact recorded inherited config errors');
+          assert.equal(audit.suiteErrorCount, 0, 'No suite-load/hook errors');
+          assert.equal(audit.processTimedOut, false, 'No process timeout');
+          assert.equal(fs.existsSync(path.join(directory, 'process-timeout.txt')), false, 'No late shutdown timeout');
+          assert.notEqual(audit.reason, 'interrupted');
+          assert.equal(native.testResults.length, 1);
+          assert.equal(native.testResults[0].name, path.resolve(process.env.NATIVE_FILE));
+          assert.equal(native.testResults[0].message, '', 'No file-load errors');
+          const cases = native.testResults[0].assertionResults;
+          assert.equal(cases.length, total);
+          assert.equal(native.numTotalTests, total);
+          assert.equal(native.numPendingTests, 0);
+          assert.equal(native.numTodoTests, 0);
+          assert(cases.every((test) => ['passed', 'failed'].includes(test.status)), 'Zero skipped/pending/todo tests');
+          const failed = cases.filter((test) => test.status === 'failed');
+          const configErrors = failed.filter((test) => test.failureMessages.some((message) => message.includes(guard)));
+          const timeouts = failed.filter((test) => test.failureMessages.some((message) => /(?:Test|Hook) timed out in \d+ms\./.test(message)));
+          const unknown = failed.filter((test) => !configErrors.includes(test) && !timeouts.includes(test));
+          assert.equal(native.numFailedTests, failed.length);
+          assert.equal(native.numPassedTests, total - failed.length);
+          assert.equal(cases.filter((test) => test.status === 'failed').length, failed.length);
+          assert.equal(status, failed.length ? 1 : 0, 'Native result and real process status agree');
+          const receipt = {
+            purpose: 'Actual pure main-parent diagnostic; not passing PR CI or maintainer acceptance',
+            parent: process.env.PARENT_SHA,
+            merge: process.env.MERGE_SHA,
+            product: process.env.PRODUCT_SHA,
+            mode: process.env.AUDIT_MODE,
+            config: process.env.NATIVE_CONFIG,
+            file: process.env.NATIVE_FILE,
+            total,
+            passed: total - failed.length,
+            failed: failed.length,
+            configErrors: configErrors.length,
+            timeouts: timeouts.length,
+            unattributedFailures: unknown.length,
+            realExit: status,
+            unhandledConfigErrors: audit.unhandledErrorCount,
+            zeroSkips: true,
+          };
+          fs.writeFileSync(path.join(directory, 'attribution.json'), JSON.stringify(receipt, null, 2) + '\n');
+          if (process.env.AUDIT_MODE === 'config-guard') {
+            assert.equal(failed.length, Number(process.env.EXPECTED_FAILED));
+            assert(configErrors.length > 0, 'The original config guard independently reproduces');
+            assert.equal(timeouts.length, 0, 'Timeout is not config attribution');
+          }
+          console.log(JSON.stringify(receipt, null, 2));
+          NODE
+      - name: Preserve per-file raw native results and incomplete diagnostic receipts
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: native-parent-${{ matrix.name }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/native-parent-attribution
+          retention-days: 30
