@@ -60,6 +60,7 @@ async function imageFixture() {
     provider: "openai",
     model: "gpt-image-1.5",
     attempts: [],
+    ignoredOverrides: [],
     images: [{ buffer: png, mimeType: "image/png", fileName: "output.png" }],
   });
   return { inputPath, outputPath, png };
