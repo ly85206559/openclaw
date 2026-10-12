@@ -75,8 +75,9 @@ jobs:
           set -e
           printf '%s\n' "$exit_code" > "$proof_dir/red-typing-exit.txt"
           cat "$proof_dir/red-typing.stdout" "$proof_dir/red-typing.stderr" > "$proof_dir/red-typing.log"
+          sed -E 's/\x1B\[[0-9;]*m//g' "$proof_dir/red-typing.log" > "$proof_dir/red-typing.plain.log"
           test "$exit_code" -eq 1
-          grep -Eq '5 failed.*2 passed' "$proof_dir/red-typing.log"
+          grep -Eq '5 failed.*2 passed' "$proof_dir/red-typing.plain.log"
           grep -q 'AssertionError' "$proof_dir/red-typing.log"
           test "$(grep -c 'GOOGLECHAT_TYPING_RECEIPT' "$proof_dir/red-typing.log")" -eq 7
       - name: Baseline media diagnostics must collect two assertion failures
@@ -90,8 +91,9 @@ jobs:
           set -e
           printf '%s\n' "$exit_code" > "$proof_dir/red-media-exit.txt"
           cat "$proof_dir/red-media.stdout" "$proof_dir/red-media.stderr" > "$proof_dir/red-media.log"
+          sed -E 's/\x1B\[[0-9;]*m//g' "$proof_dir/red-media.log" > "$proof_dir/red-media.plain.log"
           test "$exit_code" -eq 1
-          grep -Eq 'Tests[[:space:]]+2 failed' "$proof_dir/red-media.log"
+          grep -Eq 'Tests[[:space:]]+2 failed' "$proof_dir/red-media.plain.log"
           grep -q 'AssertionError' "$proof_dir/red-media.log"
           grep -q 'GOOGLECHAT_ERROR_READ_RECEIPT' "$proof_dir/red-media.log"
           git restore --source="$BASE_SHA" -- "$TRANSPORT_TEST" "$MEDIA_TEST"
