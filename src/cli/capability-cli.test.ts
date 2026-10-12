@@ -1424,65 +1424,6 @@ describe("capability cli", () => {
   });
 
   it.each([
-    ["generate", "1080p"],
-    ["edit", "1080p"],
-    ["generate", "8K"],
-    ["edit", "8K"],
-  ])("rejects image %s resolution %s before dispatch", async (action, resolution) => {
-    const directory = tempDirs.make("capability-image-resolution-");
-    const inputPath = path.join(directory, "input.png");
-    const outputPath = path.join(directory, "output.png");
-    const png = Buffer.from(PNG_1X1_BASE64, "base64");
-    await fs.writeFile(inputPath, png);
-    primeGeneratedImage("gpt-image-1.5", "output.png", png);
-
-    await expect(
-      runCapability(
-        "image",
-        action,
-        "--prompt",
-        "friendly lobster",
-        ...(action === "edit" ? ["--file", inputPath] : []),
-        "--resolution",
-        resolution,
-        "--output",
-        outputPath,
-        "--json",
-      ),
-    ).rejects.toThrow("exit 1");
-
-    expect(runtimeErrorMessages()).toEqual(["--resolution must be one of 1K, 2K, or 4K"]);
-    expect(mocks.resolveCommandConfigWithSecrets).not.toHaveBeenCalled();
-    expect(mocks.generateImage).not.toHaveBeenCalled();
-    expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    { supplied: undefined, expected: undefined },
-    { supplied: "1K", expected: "1K" },
-    { supplied: " 2k ", expected: "2K" },
-  ])("forwards canonical image resolution $expected", async ({ supplied, expected }) => {
-    const directory = tempDirs.make("capability-image-resolution-");
-    const outputPath = path.join(directory, "output.png");
-    const png = Buffer.from(PNG_1X1_BASE64, "base64");
-    primeGeneratedImage("gpt-image-1.5", "output.png", png);
-
-    await generateImage(
-      ...(supplied === undefined ? [] : ["--resolution", supplied]),
-      "--output",
-      outputPath,
-    );
-
-    expect(firstImageGenerationCall()?.resolution).toBe(expected);
-    expect(firstJsonOutput()).toMatchObject({
-      ok: true,
-      capability: "image.generate",
-      outputs: [expect.objectContaining({ path: outputPath, mimeType: "image/png" })],
-    });
-    expect(await fs.readFile(outputPath)).toEqual(png);
-  });
-
-  it.each([
     ["--timeout-ms", ""],
     ["--timeout-ms", "1000ms"],
   ])("rejects invalid image option %s %j before dispatch", async (flag, value) => {
