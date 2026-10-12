@@ -723,9 +723,10 @@ async function fetchWebPayload(params: WebFetchRuntimeParams): Promise<Record<st
       // Structured +json subtypes are single JSON documents; sequence formats are not.
       try {
         // Keep pretty-printing without rounding or normalizing numeric source tokens.
+        // Numeric reviver calls always include source context on supported runtimes.
         text = JSON.stringify(
-          JSON.parse(body, (_key, value, context) =>
-            typeof value === "number" ? JSON.rawJSON(context.source) : value,
+          JSON.parse(body, (_key, value: unknown, context?: { source: string }) =>
+            typeof value === "number" ? JSON.rawJSON(context!.source) : value,
           ),
           null,
           2,
