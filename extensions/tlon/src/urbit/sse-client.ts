@@ -268,14 +268,14 @@ export class UrbitSSEClient {
       buffer += text;
       bufferBytes = nextBytes;
     };
-    const consumeText = async (text: string) => {
-      if (text.length === 0) {
+    const consumeText = async (rawText: string) => {
+      if (rawText.length === 0) {
         return;
       }
       // Normalize SSE line endings without treating a split CRLF as two lines.
-      const startsWithPendingLineFeed = pendingCarriageReturn && text.startsWith("\n");
-      pendingCarriageReturn = text.endsWith("\r");
-      text = (startsWithPendingLineFeed ? text.slice(1) : text).replace(/\r\n?/g, "\n");
+      const startsWithPendingLineFeed = pendingCarriageReturn && rawText.startsWith("\n");
+      pendingCarriageReturn = rawText.endsWith("\r");
+      const text = (startsWithPendingLineFeed ? rawText.slice(1) : rawText).replace(/\r\n?/g, "\n");
       let offset = 0;
       if (pendingDelimiterNewline && text.length > 0) {
         pendingDelimiterNewline = false;
