@@ -39,9 +39,8 @@ for (const action of ["generate", "edit"]) {
     assert.equal(result.error, undefined, `${name}: CLI failed to launch`);
     assert.equal(result.signal, null, `${name}: CLI was terminated`);
     assert.equal(result.status, 1, `${name}: unexpected CLI exit`);
-    assert.ok(result.stderr.includes(expected), `${name}: expected real CLI validation error missing`);
-    const other = expected.startsWith("--resolution") ? "Model overrides must use the form" : "--resolution must be one of";
-    assert.ok(!result.stderr.includes(other), `${name}: wrong validation path`);
+    const envelope = JSON.parse(result.stdout);
+    assert.deepEqual(envelope, { ok: false, error: { type: "cli_error", message: expected } }, `${name}: wrong CLI JSON validation result`);
   }
 }
 assert.equal(receipts.length, 12);
