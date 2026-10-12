@@ -30,7 +30,6 @@ jobs:
             product: b01a23563a9b4ee74940138b2c079ecf24ffebad
     env:
       PRODUCT_SHA: ${{ matrix.product }}
-      EVIDENCE_DIR: ${{ runner.temp }}/changed-checker
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -39,6 +38,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          EVIDENCE_DIR="${RUNNER_TEMP}/changed-checker"
+          printf 'EVIDENCE_DIR=%s\n' "$EVIDENCE_DIR" >> "$GITHUB_ENV"
           mkdir -p "${EVIDENCE_DIR}"
           git fetch --depth=3 --no-tags https://github.com/ly85206559/openclaw.git "${PRODUCT_SHA}"
           git fetch --depth=1 --no-tags https://github.com/ly85206559/openclaw.git "${BASE_SHA}"
@@ -115,8 +116,6 @@ jobs:
     if: github.repository == 'ly85206559/openclaw'
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    env:
-      EVIDENCE_DIR: ${{ runner.temp }}/base-ui-chat-attribution
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -125,6 +124,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          EVIDENCE_DIR="${RUNNER_TEMP}/base-ui-chat-attribution"
+          printf 'EVIDENCE_DIR=%s\n' "$EVIDENCE_DIR" >> "$GITHUB_ENV"
           mkdir -p "${EVIDENCE_DIR}"
           git fetch --depth=1 --no-tags https://github.com/ly85206559/openclaw.git "${BASE_SHA}"
           git checkout --detach "${BASE_SHA}"

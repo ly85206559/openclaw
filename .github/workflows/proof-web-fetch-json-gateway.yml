@@ -31,7 +31,6 @@ jobs:
       GITHUB_TOKEN: ''
       SOURCE_SHA: ${{ matrix.source }}
       PROOF_MODE: ${{ matrix.mode }}
-      PROOF_OUTPUT_DIR: ${{ runner.temp }}/json-gateway-evidence
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -40,6 +39,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          PROOF_OUTPUT_DIR="${RUNNER_TEMP}/json-gateway-evidence"
+          printf 'PROOF_OUTPUT_DIR=%s\n' "$PROOF_OUTPUT_DIR" >> "$GITHUB_ENV"
           mkdir -p "${PROOF_OUTPUT_DIR}"
           cp .github/proof/web-fetch-json-gateway.mjs "${RUNNER_TEMP}/web-fetch-json-gateway.mjs"
           sha256sum "${RUNNER_TEMP}/web-fetch-json-gateway.mjs" > "${PROOF_OUTPUT_DIR}/proof-sha256.txt"
