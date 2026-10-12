@@ -1,0 +1,194 @@
+name: Secretless exact product changed checks and base attribution
+
+on:
+  push:
+    branches: [codex/proof-web-fetch-json-fidelity-20261013]
+    paths:
+      - .github/workflows/proof-discovery-changed-checks.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  BASE_SHA: 03512be2f3df16d4ec861ed1bebeaa967c30da2d
+  GH_TOKEN: ''
+  GITHUB_TOKEN: ''
+
+jobs:
+  changed-checker:
+    if: github.repository == 'ly85206559/openclaw'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: json
+            product: 9886e568a67c669a830129497a9790f1a26902f4
+          - name: tlon
+            product: b01a23563a9b4ee74940138b2c079ecf24ffebad
+    env:
+      PRODUCT_SHA: ${{ matrix.product }}
+      EVIDENCE_DIR: ${{ runner.temp }}/changed-checker
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Pin reviewed product and explicit comparison base
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "${EVIDENCE_DIR}"
+          git fetch --depth=3 --no-tags https://github.com/ly85206559/openclaw.git "${PRODUCT_SHA}"
+          git fetch --depth=1 --no-tags https://github.com/ly85206559/openclaw.git "${BASE_SHA}"
+          git checkout --detach "${PRODUCT_SHA}"
+          test "$(git rev-parse HEAD)" = "${PRODUCT_SHA}"
+          test "$(git merge-base "${BASE_SHA}" HEAD)" = "${BASE_SHA}"
+          git rev-parse HEAD HEAD^{tree} "${BASE_SHA}" | tee "${EVIDENCE_DIR}/source.txt"
+          git diff --name-only "${BASE_SHA}" HEAD | tee "${EVIDENCE_DIR}/product-paths.txt"
+          test -z "$(git status --porcelain)"
+      - name: Install actual source-check utility on stock Ubuntu
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y ripgrep
+          rg --version | tee "${EVIDENCE_DIR}/ripgrep-version.txt"
+      - uses: ./.github/actions/setup-node-env
+        with:
+          node-version: 24.19.0
+          semantic-checks: true
+          cache-mode: off
+      - name: Record toolchain and canonical changed-check plan
+        shell: bash
+        run: |
+          set -euo pipefail
+          { node --version; pnpm --version; } | tee "${EVIDENCE_DIR}/toolchain.txt"
+          test "$(git rev-parse HEAD)" = "${PRODUCT_SHA}"
+          git status --porcelain | tee "${EVIDENCE_DIR}/post-setup-status.txt"
+          test ! -s "${EVIDENCE_DIR}/post-setup-status.txt"
+          set +e
+          pnpm check:changed --base "${BASE_SHA}" --dry-run > "${EVIDENCE_DIR}/plan.log" 2>&1
+          status=$?
+          set -e
+          printf '%s\n' "${status}" > "${EVIDENCE_DIR}/plan-exit.txt"
+          exit "${status}"
+      - name: Independently run source-owned touched-file lint before possible inherited compiler failure
+        shell: bash
+        run: |
+          set -euo pipefail
+          case '${{ matrix.name }}' in
+            json)
+              tsconfig=config/tsconfig/oxlint.core.json
+              files=(src/agents/tools/web-fetch.ts src/agents/tools/web-fetch.headers.test.ts src/agents/tools/web-fetch.json-fidelity.test.ts)
+              ;;
+            tlon)
+              tsconfig=extensions/tsconfig.json
+              files=(extensions/tlon/src/urbit/sse-client.ts extensions/tlon/src/urbit/sse-client.connect-fail.transport.test.ts extensions/tlon/src/urbit/sse-client.test.ts)
+              ;;
+            *) exit 1 ;;
+          esac
+          pnpm exec oxfmt --check --threads=1 "${files[@]}" > "${EVIDENCE_DIR}/touched-format.log" 2>&1
+          node scripts/run-oxlint.mjs --tsconfig "$tsconfig" "${files[@]}" > "${EVIDENCE_DIR}/touched-lint.log" 2>&1
+          printf '0\n' > "${EVIDENCE_DIR}/touched-lint-exit.txt"
+      - name: Run the entire canonical selected plan without gate overrides
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          pnpm check:changed --base "${BASE_SHA}" --timed > "${EVIDENCE_DIR}/check.log" 2>&1
+          status=$?
+          set -e
+          printf '%s\n' "${status}" > "${EVIDENCE_DIR}/check-exit.txt"
+          git status --porcelain > "${EVIDENCE_DIR}/post-check-status.txt"
+          exit "${status}"
+      - name: Retain per-product raw receipts on success or failure
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: changed-checker-${{ matrix.name }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/changed-checker
+          retention-days: 30
+
+  base-ui-chat-attribution:
+    if: github.repository == 'ly85206559/openclaw'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      EVIDENCE_DIR: ${{ runner.temp }}/base-ui-chat-attribution
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Pin pure base without either product change
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "${EVIDENCE_DIR}"
+          git fetch --depth=1 --no-tags https://github.com/ly85206559/openclaw.git "${BASE_SHA}"
+          git checkout --detach "${BASE_SHA}"
+          test "$(git rev-parse HEAD)" = "${BASE_SHA}"
+          test -z "$(git status --porcelain)"
+          git rev-parse HEAD HEAD^{tree} | tee "${EVIDENCE_DIR}/source.txt"
+          git rev-parse HEAD:ui/src/pages/chat/chat-composer-disabled-banner.test.ts HEAD:test/tsconfig/tsconfig.core.test.ui-chat.json > "${EVIDENCE_DIR}/input-blobs.txt"
+      - name: Install actual source-check utility on stock Ubuntu
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y ripgrep
+          rg --version | tee "${EVIDENCE_DIR}/ripgrep-version.txt"
+      - uses: ./.github/actions/setup-node-env
+        with:
+          node-version: 24.19.0
+          semantic-checks: true
+          cache-mode: off
+      - name: Compile only the canonical base UI chat graph and audit its failure
+        shell: bash
+        run: |
+          set -euo pipefail
+          { node --version; pnpm --version; } | tee "${EVIDENCE_DIR}/toolchain.txt"
+          test "$(git rev-parse HEAD)" = "${BASE_SHA}"
+          git status --porcelain | tee "${EVIDENCE_DIR}/post-setup-status.txt"
+          test ! -s "${EVIDENCE_DIR}/post-setup-status.txt"
+          set +e
+          node scripts/run-tsgo-core-test-shards.mjs --ci-graphs-json '["core-test-ui-chat"]' > "${EVIDENCE_DIR}/compile.log" 2>&1
+          compiler_status=$?
+          set -e
+          printf '%s\n' "${compiler_status}" > "${EVIDENCE_DIR}/compiler-exit.txt"
+          export COMPILER_STATUS="${compiler_status}"
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import fs from 'node:fs';
+          import path from 'node:path';
+          const log = fs.readFileSync(path.join(process.env.EVIDENCE_DIR, 'compile.log'), 'utf8');
+          const diagnostics = [...log.matchAll(/^(.+)\((\d+),(\d+)\): error (TS\d+): ([^\r\n]*)/gm)]
+            .map(([raw, file, line, column, code, message]) => ({ raw, file, line: Number(line), column: Number(column), code, message }));
+          const receipt = {
+            purpose: 'Pure-base compiler failure attribution, not a passing typecheck',
+            base: process.env.BASE_SHA,
+            graph: 'core-test-ui-chat',
+            compilerExit: Number(process.env.COMPILER_STATUS),
+            diagnostics,
+          };
+          fs.writeFileSync(path.join(process.env.EVIDENCE_DIR, 'attribution.json'), JSON.stringify(receipt, null, 2) + '\n');
+          assert.equal(receipt.compilerExit, 2, 'Expected real TypeScript diagnostic exit 2');
+          assert.equal(diagnostics.length, 1, 'Expected exactly one source diagnostic');
+          assert.equal(diagnostics[0].file, 'ui/src/pages/chat/chat-composer-disabled-banner.test.ts');
+          assert.equal(diagnostics[0].line, 38);
+          assert.equal(diagnostics[0].column, 11);
+          assert.equal(diagnostics[0].code, 'TS2322');
+          assert.equal(diagnostics[0].message, "Type 'Mock<Procedure>' is not assignable to type 'undefined'.");
+          assert.match(log, /\[tsgo:core-test-ui-chat\] failed \(exit 2\)/);
+          assert.equal((log.match(/\berror TS\d+:/g) ?? []).length, 1, 'No other TypeScript errors');
+          assert.doesNotMatch(log, /(?:^|\n)(?:Error:|TypeError:|RangeError:|SyntaxError:|FATAL ERROR|node:internal)|ERR_MODULE_NOT_FOUND|ENOMEM|out of memory/i);
+          console.log(JSON.stringify(receipt, null, 2));
+          NODE
+      - name: Retain raw base attribution including unexpected failures
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: base-ui-chat-attribution-${{ github.run_id }}
+          path: ${{ runner.temp }}/base-ui-chat-attribution
+          retention-days: 30

@@ -1,0 +1,77 @@
+name: Secretless supported Gateway web_fetch JSON proof
+
+on:
+  push:
+    branches: [codex/proof-web-fetch-json-fidelity-20261013]
+    paths:
+      - .github/proof/web-fetch-json-gateway.mjs
+      - .github/workflows/proof-web-fetch-json-gateway.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  gateway:
+    if: github.repository == 'ly85206559/openclaw'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - mode: baseline
+            source: 03512be2f3df16d4ec861ed1bebeaa967c30da2d
+            repository: openclaw/openclaw
+          - mode: candidate
+            source: 9886e568a67c669a830129497a9790f1a26902f4
+            repository: ly85206559/openclaw
+    env:
+      GH_TOKEN: ''
+      GITHUB_TOKEN: ''
+      SOURCE_SHA: ${{ matrix.source }}
+      PROOF_MODE: ${{ matrix.mode }}
+      PROOF_OUTPUT_DIR: ${{ runner.temp }}/json-gateway-evidence
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Freeze the reviewed proof and pin exact original or product source
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "${PROOF_OUTPUT_DIR}"
+          cp .github/proof/web-fetch-json-gateway.mjs "${RUNNER_TEMP}/web-fetch-json-gateway.mjs"
+          sha256sum "${RUNNER_TEMP}/web-fetch-json-gateway.mjs" > "${PROOF_OUTPUT_DIR}/proof-sha256.txt"
+          git fetch --depth=1 --no-tags "https://github.com/${{ matrix.repository }}.git" "${SOURCE_SHA}"
+          git checkout --detach "${SOURCE_SHA}"
+          test "$(git rev-parse HEAD)" = "${SOURCE_SHA}"
+          test -z "$(git status --porcelain)"
+          git rev-parse HEAD HEAD^{tree} > "${PROOF_OUTPUT_DIR}/source.txt"
+          sha256sum src/agents/tools/web-fetch.ts pnpm-lock.yaml > "${PROOF_OUTPUT_DIR}/source-sha256.txt"
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.19.0
+      - name: Install frozen dependencies and build fresh canonical CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          corepack enable
+          pnpm install --frozen-lockfile > "${PROOF_OUTPUT_DIR}/install.log" 2>&1
+          { node --version; pnpm --version; } > "${PROOF_OUTPUT_DIR}/toolchain.txt"
+          pnpm build > "${PROOF_OUTPUT_DIR}/build.log" 2>&1
+      - name: Exercise the supported CLI Gateway and registered HTTP tool boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          /usr/bin/time -f '%e' -o "${PROOF_OUTPUT_DIR}/wall-seconds.txt" \
+            node "${RUNNER_TEMP}/web-fetch-json-gateway.mjs" \
+            > "${PROOF_OUTPUT_DIR}/proof.log" 2>&1
+          cat "${PROOF_OUTPUT_DIR}/proof.log"
+      - name: Preserve raw receipts on success or setup failure
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: json-gateway-${{ matrix.mode }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/json-gateway-evidence
+          retention-days: 30
