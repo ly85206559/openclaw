@@ -1,0 +1,138 @@
+name: Secretless Google Chat conflict refresh
+
+on:
+  push:
+    branches: [codex/proof-googlechat-conflict-20261012]
+    paths: [.github/workflows/proof-googlechat-conflict.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  proof:
+    if: github.repository == 'ly85206559/openclaw'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      BASE_SHA: d4c5024f6be95b143e7604e607f535764e525b49
+      BASE_TREE: 881d7fa329ecd222002d276d2a8d02630571568f
+      TARGET_SHA: 5d3a145afd0ce48c695db568a8f1e6f353e75932
+      TARGET_TREE: 088d97985edf35c8b1f860aecffc0886533fecda
+      TEST_FILE: extensions/googlechat/src/api.fetchok.transport.test.ts
+      TARGETS_TEST_FILE: extensions/googlechat/src/targets.test.ts
+      OWNER_FILE: extensions/googlechat/src/api.ts
+      CI: "true"
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - name: Freeze original main and candidate assertions
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          mkdir -p "$RUNNER_TEMP/proof"
+          git fetch --depth=2 --no-tags https://github.com/ly85206559/openclaw.git "$TARGET_SHA"
+          git fetch --depth=1 --no-tags https://github.com/openclaw/openclaw.git "$BASE_SHA"
+          git show "$TARGET_SHA:$TEST_FILE" > "$RUNNER_TEMP/proof/transport.fixture.ts"
+          git show "$TARGET_SHA:$TARGETS_TEST_FILE" > "$RUNNER_TEMP/proof/targets.fixture.ts"
+          test "$(git hash-object "$RUNNER_TEMP/proof/transport.fixture.ts")" = 118f4aab7585877b92f46d0870485d9857ac1bc9
+          test "$(git hash-object "$RUNNER_TEMP/proof/targets.fixture.ts")" = 3d9e345c10fa2c5f6404c477ae89b9e67007e393
+          git diff --exit-code "$BASE_SHA" "$TARGET_SHA" -- package.json pnpm-lock.yaml
+          git checkout --detach "$BASE_SHA"
+          test "$(git rev-parse HEAD^{tree})" = "$BASE_TREE"
+          git rev-parse HEAD HEAD^{tree} > "$RUNNER_TEMP/proof/baseline-source.txt"
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 26.8.2
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
+      - name: Install source-pinned isolated dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(node --version)" = v26.8.2
+          test "$(pnpm --version)" = 12.9.0
+          pnpm install --frozen-lockfile
+          git diff --exit-code
+          node --version > "$RUNNER_TEMP/proof/node-version.txt"
+          pnpm --version > "$RUNNER_TEMP/proof/pnpm-version.txt"
+      - name: Collected current-main RED with identical assertions
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp "$RUNNER_TEMP/proof/transport.fixture.ts" "$TEST_FILE"
+          cp "$RUNNER_TEMP/proof/targets.fixture.ts" "$TARGETS_TEST_FILE"
+          test "$(git hash-object "$OWNER_FILE")" = fff38bf8ac4ed5a8cf2fb9c9973fd09fc3908227
+          export OPENCLAW_VITEST_FS_MODULE_CACHE_PATH="$RUNNER_TEMP/proof/cache-red"
+          export NODE_COMPILE_CACHE="$RUNNER_TEMP/proof/node-red"
+          set +e
+          /usr/bin/time -f '%e' -o "$RUNNER_TEMP/proof/typing-red-wall.txt" node scripts/run-vitest.mjs "$TEST_FILE" -t 'only resends a typing reply after an authoritative 404' --maxWorkers=1 --reporter=verbose > "$RUNNER_TEMP/proof/typing-red.log" 2>&1
+          typing_exit=$?
+          /usr/bin/time -f '%e' -o "$RUNNER_TEMP/proof/media-red-wall.txt" node scripts/run-vitest.mjs "$TARGETS_TEST_FILE" -t 'cancels a stalled media error body|preserves redacted error-body read diagnostics' --maxWorkers=1 --reporter=verbose > "$RUNNER_TEMP/proof/media-red.log" 2>&1
+          media_exit=$?
+          set -e
+          printf '%s\n' "$typing_exit" > "$RUNNER_TEMP/proof/typing-red.exit"
+          printf '%s\n' "$media_exit" > "$RUNNER_TEMP/proof/media-red.exit"
+          cat "$RUNNER_TEMP/proof/typing-red.log" "$RUNNER_TEMP/proof/media-red.log"
+          test "$typing_exit" = 1
+          test "$media_exit" = 1
+          grep -q '5 failed' "$RUNNER_TEMP/proof/typing-red.log"
+          grep -q '2 passed' "$RUNNER_TEMP/proof/typing-red.log"
+          grep -q 'GOOGLECHAT_TYPING_RECEIPT' "$RUNNER_TEMP/proof/typing-red.log"
+          grep -q 'terminated' "$RUNNER_TEMP/proof/typing-red.log"
+          grep -q '2 failed' "$RUNNER_TEMP/proof/media-red.log"
+          grep -q 'AssertionError' "$RUNNER_TEMP/proof/media-red.log"
+          grep -q 'GOOGLECHAT_ERROR_READ_RECEIPT' "$RUNNER_TEMP/proof/media-red.log"
+          git restore --source=HEAD --worktree -- "$TEST_FILE" "$TARGETS_TEST_FILE"
+          git diff --exit-code
+      - name: Freeze exact candidate with unchanged fixtures
+        shell: bash
+        run: |
+          set -euo pipefail
+          git checkout --detach "$TARGET_SHA"
+          test "$(git rev-parse HEAD^{tree})" = "$TARGET_TREE"
+          test "$(git hash-object "$OWNER_FILE")" = 4c71708465515cc2c72db1837b72550120e601ec
+          cmp "$RUNNER_TEMP/proof/transport.fixture.ts" "$TEST_FILE"
+          cmp "$RUNNER_TEMP/proof/targets.fixture.ts" "$TARGETS_TEST_FILE"
+          git diff --check "$BASE_SHA" HEAD
+          git rev-parse HEAD HEAD^{tree} > "$RUNNER_TEMP/proof/candidate-source.txt"
+      - name: Focused candidate GREEN and per-file wall costs
+        shell: bash
+        run: |
+          set -euo pipefail
+          export OPENCLAW_VITEST_FS_MODULE_CACHE_PATH="$RUNNER_TEMP/proof/cache-green"
+          export NODE_COMPILE_CACHE="$RUNNER_TEMP/proof/node-green"
+          for file in "$TEST_FILE" "$TARGETS_TEST_FILE" extensions/googlechat/src/monitor.reply-delivery.test.ts; do
+            label="$(basename "$file" .ts)"
+            /usr/bin/time -f '%e' -o "$RUNNER_TEMP/proof/$label-green-wall.txt" pnpm test "$file" --maxWorkers=1 --reporter=verbose > "$RUNNER_TEMP/proof/$label-green.log" 2>&1
+            cat "$RUNNER_TEMP/proof/$label-green.log"
+          done
+          grep -q 'GOOGLECHAT_TYPING_RECEIPT' "$RUNNER_TEMP/proof/api.fetchok.transport.test-green.log"
+          grep -q 'GOOGLECHAT_ERROR_READ_RECEIPT' "$RUNNER_TEMP/proof/targets.test-green.log"
+          git diff --exit-code
+      - name: Touched format, lint and extension type lanes
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm exec oxfmt --check "$OWNER_FILE" "$TEST_FILE" "$TARGETS_TEST_FILE"
+          node scripts/run-oxlint.mjs --tsconfig tsconfig.extensions.json "$OWNER_FILE" "$TEST_FILE" "$TARGETS_TEST_FILE"
+          node scripts/run-tsgo.mjs -p tsconfig.extensions.json --incremental --tsBuildInfoFile "$RUNNER_TEMP/proof/extensions.tsbuildinfo" > "$RUNNER_TEMP/proof/types.log" 2>&1
+          cat "$RUNNER_TEMP/proof/types.log"
+          git diff --exit-code
+          git rev-parse HEAD HEAD^{tree} > "$RUNNER_TEMP/proof/final-source.txt"
+      - name: Validate proof workflow at its own frozen head
+        shell: bash
+        run: |
+          set -euo pipefail
+          git checkout --detach "$GITHUB_SHA"
+          pnpm check:workflows > "$RUNNER_TEMP/proof/workflows.log" 2>&1
+          cat "$RUNNER_TEMP/proof/workflows.log"
+          git diff --exit-code
+          printf 'complete\n' > "$RUNNER_TEMP/proof/proof-complete.txt"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: googlechat-conflict-${{ github.run_id }}
+          path: ${{ runner.temp }}/proof/
+          if-no-files-found: error
+          retention-days: 7
