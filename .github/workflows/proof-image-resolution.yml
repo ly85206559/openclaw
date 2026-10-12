@@ -1,8 +1,6 @@
 name: Secretless image resolution baseline proof
 
 on:
-  push:
-    branches: [codex/proof-image-cli-resolution-20261013]
   workflow_dispatch:
 
 permissions:
@@ -91,7 +89,14 @@ jobs:
             'rejects image edit resolution 8K before dispatch',
             'forwards canonical image resolution 2K',
           ].sort());
-          for (const test of failed) assert.match(test.failureMessages.join('\n'), /AssertionError/);
+          for (const test of failed) {
+            const message = test.failureMessages.join('\n');
+            if (test.title.startsWith('rejects image ')) {
+              assert.match(message, /promise resolved "undefined" instead of rejecting/);
+            } else {
+              assert.match(message, /expected ' 2k ' to be '2K'/);
+            }
+          }
           console.log('EXPECTED_BASELINE_RED', JSON.stringify({ tests:report.numTotalTests, failed:5, fixtureErrors:0 }));
           AUDIT
       - name: Canonical build for the actual supported CLI
