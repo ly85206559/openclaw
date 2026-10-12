@@ -1,8 +1,6 @@
 name: Secretless Tlon SSE baseline proof
 
 on:
-  push:
-    branches: [codex/proof-tlon-sse-framing-20261013]
   workflow_dispatch:
 
 permissions:
