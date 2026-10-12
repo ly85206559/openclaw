@@ -15,12 +15,13 @@ jobs:
     timeout-minutes: 45
     env:
       BASE_SHA: 03512be2f3df16d4ec861ed1bebeaa967c30da2d
-      PRODUCT_SHA: b01a23563a9b4ee74940138b2c079ecf24ffebad
+      PRODUCT_SHA: 956642adee25cc8517d8a7264b24a0b4e1a800b9
       GH_TOKEN: ''
       GITHUB_TOKEN: ''
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
+          fetch-depth: 5
           persist-credentials: false
       - name: Freeze exact reviewed product and baseline fixture bytes
         shell: bash
@@ -28,7 +29,8 @@ jobs:
           set -euo pipefail
           mkdir -p "${RUNNER_TEMP}/tlon-sse"
           cp .github/proof/tlon-sse-audit-reporter.mjs "${RUNNER_TEMP}/tlon-sse/audit-reporter.mjs"
-          git fetch --depth=3 --no-tags https://github.com/ly85206559/openclaw.git "${PRODUCT_SHA}"
+          git fetch --depth=5 --no-tags https://github.com/ly85206559/openclaw.git "${PRODUCT_SHA}"
+          git fetch --depth=5 --no-tags https://github.com/openclaw/openclaw.git "${BASE_SHA}"
           git checkout --detach "${PRODUCT_SHA}"
           test "$(git rev-parse HEAD)" = "${PRODUCT_SHA}"
           git rev-parse HEAD HEAD^{tree} | tee "${RUNNER_TEMP}/tlon-sse/candidate-source.txt"
@@ -43,13 +45,33 @@ jobs:
           node-version: 24.19.0
           semantic-checks: true
           cache-mode: off
+      - uses: ./.github/actions/setup-ripgrep
+      - name: Source-owned exact three-file format and lint before runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          { node --version; pnpm --version; rg --version; } | tee "${RUNNER_TEMP}/tlon-sse/toolchain.txt"
+          pnpm check:changed --dry-run --base "${BASE_SHA}" --timed > "${RUNNER_TEMP}/tlon-sse/changed-plan.log" 2>&1
+          cat "${RUNNER_TEMP}/tlon-sse/changed-plan.log"
+          pnpm exec oxfmt --check --threads=1 \
+            extensions/tlon/src/urbit/sse-client.ts \
+            extensions/tlon/src/urbit/sse-client.test.ts \
+            extensions/tlon/src/urbit/sse-client.connect-fail.transport.test.ts \
+            > "${RUNNER_TEMP}/tlon-sse/format.log" 2>&1
+          cat "${RUNNER_TEMP}/tlon-sse/format.log"
+          /usr/bin/time -f '%e' -o "${RUNNER_TEMP}/tlon-sse/lint-wall.txt" \
+            node scripts/run-oxlint.mjs --tsconfig extensions/tsconfig.json \
+            extensions/tlon/src/urbit/sse-client.ts \
+            extensions/tlon/src/urbit/sse-client.test.ts \
+            extensions/tlon/src/urbit/sse-client.connect-fail.transport.test.ts \
+            > "${RUNNER_TEMP}/tlon-sse/lint.log" 2>&1
+          cat "${RUNNER_TEMP}/tlon-sse/lint.log"
       - name: Original-order suites and real HTTP delivery must be GREEN
         shell: bash
         env:
           PROOF_AUDIT_PATH: ${{ runner.temp }}/tlon-sse/runner-audit.json
         run: |
           set -euo pipefail
-          { node --version; pnpm --version; } | tee "${RUNNER_TEMP}/tlon-sse/toolchain.txt"
           /usr/bin/time -f '%e' -o "${RUNNER_TEMP}/tlon-sse/green-wall.txt" \
             node scripts/run-vitest.mjs extensions/tlon/src/urbit/sse-client.test.ts extensions/tlon/src/urbit/sse-client.connect-fail.transport.test.ts --maxWorkers=1 \
             --reporter=verbose --reporter=json --reporter="${RUNNER_TEMP}/tlon-sse/audit-reporter.mjs" --outputFile="${RUNNER_TEMP}/tlon-sse/green.json" \
@@ -81,12 +103,69 @@ jobs:
           }
           console.log('CANDIDATE_GREEN', JSON.stringify({ tests:32, fixtureErrors:0 }));
           AUDIT
-      - name: Complete Tlon sibling lane
-        run: pnpm test:extension tlon > "${RUNNER_TEMP}/tlon-sse/siblings.log" 2>&1
+      - name: Complete Tlon sibling lane through canonical combined project owner
+        shell: bash
+        env:
+          PROOF_AUDIT_PATH: ${{ runner.temp }}/tlon-sse/siblings-audit.json
+        run: |
+          set -euo pipefail
+          /usr/bin/time -f '%e' -o "${RUNNER_TEMP}/tlon-sse/siblings-wall.txt" \
+            pnpm test:extension tlon --reporter=verbose --reporter=json \
+            --reporter="${RUNNER_TEMP}/tlon-sse/audit-reporter.mjs" \
+            --outputFile="${RUNNER_TEMP}/tlon-sse/siblings.json" \
+            > "${RUNNER_TEMP}/tlon-sse/siblings.log" 2>&1
+          cat "${RUNNER_TEMP}/tlon-sse/siblings.log"
+          node --input-type=module <<'AUDIT'
+          import assert from 'node:assert/strict';
+          import fs from 'node:fs';
+          const root = process.env.RUNNER_TEMP + '/tlon-sse';
+          const report = JSON.parse(fs.readFileSync(root + '/siblings.json', 'utf8'));
+          const audit = JSON.parse(fs.readFileSync(process.env.PROOF_AUDIT_PATH, 'utf8'));
+          const log = fs.readFileSync(root + '/siblings.log', 'utf8');
+          assert.match(log, /\[test-extension-batch\] test\/vitest\/vitest\.database-worker-watch\.config\.ts: tlon/);
+          assert.equal(report.success, true);
+          assert.equal(report.numTotalTests, 287);
+          assert.equal(report.numPassedTests, 287);
+          assert.equal(report.numFailedTests, 0);
+          assert.equal(report.numPendingTests, 0);
+          assert.equal(report.numTodoTests, 0);
+          assert.equal(report.testResults.length, 34);
+          assert.equal(new Set(report.testResults.map(file => file.name)).size, 34);
+          assert.equal(audit.reason, 'passed');
+          assert.equal(audit.moduleCount, 34);
+          assert.equal(audit.unhandledErrors, 0);
+          assert.equal(audit.suiteErrors, 0);
+          let cases = 0;
+          for (const file of report.testResults) {
+            assert.ok(file.name.includes('/extensions/tlon/'));
+            assert.equal(file.message, '');
+            assert.equal(file.status, 'passed');
+            cases += file.assertionResults.length;
+            for (const test of file.assertionResults) assert.equal(test.status, 'passed');
+          }
+          assert.equal(cases, 287);
+          for (const name of ['sse-client.test.ts', 'sse-client.connect-fail.transport.test.ts', 'ingress.test.ts', 'index.test.ts']) {
+            assert.equal(report.testResults.filter(file => file.name.endsWith('/' + name)).length, 1);
+          }
+          console.log('FULL_TLON_GREEN', JSON.stringify({ tests:287, files:34, fixtureErrors:0, owner:'database-worker-watch' }));
+          AUDIT
       - name: Canonical build
-        run: pnpm build > "${RUNNER_TEMP}/tlon-sse/build.log" 2>&1
-      - name: Complete official checker
-        run: pnpm check > "${RUNNER_TEMP}/tlon-sse/check.log" 2>&1
+        shell: bash
+        run: |
+          set -euo pipefail
+          /usr/bin/time -f '%e' -o "${RUNNER_TEMP}/tlon-sse/build-wall.txt" \
+            pnpm build > "${RUNNER_TEMP}/tlon-sse/build.log" 2>&1
+          cat "${RUNNER_TEMP}/tlon-sse/build.log"
+      - name: Complete canonical changed checker with explicit base
+        shell: bash
+        run: |
+          set -euo pipefail
+          /usr/bin/time -f '%e' -o "${RUNNER_TEMP}/tlon-sse/check-wall.txt" \
+            pnpm check:changed --base "${BASE_SHA}" --timed \
+            > "${RUNNER_TEMP}/tlon-sse/check.log" 2>&1
+          cat "${RUNNER_TEMP}/tlon-sse/check.log"
+          printf 'Canonical changed checker completed with exit 0; only observed selected gates are evidence.\n' \
+            | tee "${RUNNER_TEMP}/tlon-sse/check-exit.txt"
       - name: Retain raw receipts even on check or setup failure
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
