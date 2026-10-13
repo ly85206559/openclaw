@@ -11,6 +11,11 @@ on:
         type: choice
         options: [baseline, candidate]
         default: baseline
+      proof_phase:
+        description: Checks-only recovery reuses the completed exact-head Teams process proof
+        type: choice
+        options: [full, checks-only]
+        default: full
       source_sha:
         description: Exact source SHA; candidate mode requires the selected product head
         type: string
@@ -32,6 +37,7 @@ jobs:
       PROOF_MODE: ${{ github.event.inputs.mode || 'baseline' }}
       SOURCE_SHA: ${{ github.event.inputs.source_sha || 'cc397809fb666caf37f19d0dfa9a8edfec90c87c' }}
       LANE: ${{ matrix.lane }}
+      PROOF_PHASE: ${{ github.event.inputs.proof_phase || 'full' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -47,6 +53,12 @@ jobs:
           [[ "$SOURCE_SHA" =~ ^[a-f0-9]{40}$ ]]
           if [[ "$PROOF_MODE" == baseline ]]; then
             test "$SOURCE_SHA" = cc397809fb666caf37f19d0dfa9a8edfec90c87c
+            test "$PROOF_PHASE" = full
+          fi
+          if [[ "$PROOF_PHASE" == checks-only ]]; then
+            test "$PROOF_MODE" = candidate
+            test "$LANE" = teams
+            test "$SOURCE_SHA" = 17bf6fcb6279b72bc4821cbe636c3888b383d66f
           fi
           printf 'PROOF_OUTPUT_DIR=%s\n' "$RUNNER_TEMP/round2-$LANE-$PROOF_MODE" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
@@ -86,7 +98,7 @@ jobs:
         working-directory: source
         run: pnpm install --frozen-lockfile
       - name: Observe primary regression and original siblings
-        if: env.PROOF_MODE == 'candidate'
+        if: env.PROOF_MODE == 'candidate' && env.PROOF_PHASE == 'full'
         working-directory: source
         shell: bash
         run: |
@@ -106,10 +118,11 @@ jobs:
           cp ../proof-tooling/.github/workflows/round2-boundary-proof.yml .github/workflows/round2-boundary-proof.yml
           pnpm check:workflows
       - name: Canonical CI artifact build for supported process entry
+        if: env.PROOF_PHASE == 'full'
         working-directory: source
         run: pnpm build:ci-artifacts
       - name: Real video CLI to loopback-only bundled provider
-        if: matrix.lane == 'video'
+        if: matrix.lane == 'video' && env.PROOF_PHASE == 'full'
         working-directory: source
         shell: bash
         run: |
@@ -126,13 +139,13 @@ jobs:
             --repo "$task_repo" --pnpm "$task_pnpm" --evidence-dir "$PROOF_OUTPUT_DIR/real-cli" \
             --mode "$task_mode" --expected-head "$SOURCE_SHA"
       - name: Real registered web_fetch through Gateway HTTP
-        if: matrix.lane == 'web'
+        if: matrix.lane == 'web' && env.PROOF_PHASE == 'full'
         working-directory: source
         run: node --import ./scripts/tsx.mjs ../proof-tooling/.proof/round2/web-fence-gateway-proof.mjs
         env:
           PROOF_OUTPUT_DIR: ${{ env.PROOF_OUTPUT_DIR }}/real-gateway
       - name: Real shipped Teams CLI through synthetic Graph HTTP
-        if: matrix.lane == 'teams'
+        if: matrix.lane == 'teams' && env.PROOF_PHASE == 'full'
         working-directory: source
         shell: bash
         run: |
@@ -155,14 +168,23 @@ jobs:
         run: |
           set -euo pipefail
           read -r -a paths <<< "$CHECK_PATHS"
-          node scripts/check-changed.mjs --dry-run -- "${paths[@]}" > "$PROOF_OUTPUT_DIR/official-changed-plan.txt"
+          if [[ "$LANE" == teams ]]; then
+            comparison_base=d97a40cbb9409db7022eb98fe7b10f80f3c6e6a7
+            git fetch --no-tags --depth=1 origin "$comparison_base"
+            test "$(git rev-parse "$comparison_base^{commit}")" = "$comparison_base"
+            git cat-file -e "$comparison_base:config/assertion-safety-baseline.txt"
+            node scripts/check-changed.mjs --base "$comparison_base" --dry-run -- "${paths[@]}" > "$PROOF_OUTPUT_DIR/official-changed-plan.txt"
+            printf '%s\n' "$comparison_base" > "$PROOF_OUTPUT_DIR/comparison-base.txt"
+          else
+            node scripts/check-changed.mjs --dry-run -- "${paths[@]}" > "$PROOF_OUTPUT_DIR/official-changed-plan.txt"
+          fi
           pnpm exec oxfmt --check "${paths[@]}"
           node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.core.json "${paths[@]}"
           pnpm tsgo:core
           node scripts/run-tsgo.mjs -p "$TYPE_LEAF" --pretty false
           case "$LANE" in
             teams)
-              node --import ./scripts/tsx.mjs scripts/check-assertion-safety-ratchet.mts --base cc397809fb666caf37f19d0dfa9a8edfec90c87c
+              node --import ./scripts/tsx.mjs scripts/check-assertion-safety-ratchet.mts --base "$comparison_base"
               node scripts/run-oxlint.mjs --tsconfig test/tsconfig/tsconfig.test.root.json test/msteams-read-target.integration.test.ts
               pnpm test src/commands/message-format.test.ts -- --maxWorkers=1
               ;;

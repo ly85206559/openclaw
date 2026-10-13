@@ -22,14 +22,20 @@ const expectedFailures = {
       "preserves literal code through HTTP text extraction for /markdown-tilde",
       "preserves literal code through HTTP text extraction for /markdown-long",
       "preserves literal code through HTTP text extraction for /markdown-false-close",
-    ] : []),
-    "preserves literal code through HTTP text extraction for /markdown-unclosed",
+      "preserves literal code through HTTP text extraction for /markdown-unclosed",
+    ] : [
+      "preserves Markdown content through HTTP text extraction for /markdown-unclosed",
+      "preserves Markdown content through HTTP text extraction for /markdown-inline-fence-prose",
+    ]),
   ],
 }[lane];
 assert.ok(expectedFailures, "known lane required");
 const assertions = report.testResults.flatMap((suite) => suite.assertionResults);
 assert.ok(assertions.length > expectedFailures.length, "original sibling controls must execute");
 assert.equal(report.numTotalTests, assertions.length, "complete native test inventory required");
+if (lane === "web" && mode === "candidate") {
+  assert.equal(assertions.length, 7, "EOF, inline prose, and all original HTTP siblings required");
+}
 assert.equal(report.numPendingTests, 0, "no skips/todo");
 assert.ok(report.testResults.length > 0, "native suite inventory required");
 for (const suite of report.testResults) {
