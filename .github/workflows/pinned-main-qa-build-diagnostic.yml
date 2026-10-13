@@ -1,0 +1,77 @@
+name: Pinned main qaRuntime build diagnostic
+
+on:
+  push:
+    branches: [codex/proof-easy-boundaries-20261013]
+    paths: [.github/workflows/pinned-main-qa-build-diagnostic.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  main-build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      SOURCE_SHA: abc6c4bb7cda57ef5f49bcc9ddc1aff920f6104b
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: openclaw/openclaw
+          ref: ${{ env.SOURCE_SHA }}
+          persist-credentials: false
+          path: source
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24.19.0"
+      - uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+          package_json_file: source/package.json
+      - name: Bind the actual tested main parent without product patches
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/pinned-main-qa-build"
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          git rev-parse HEAD 'HEAD^{tree}' > "$RUNNER_TEMP/pinned-main-qa-build/source-binding.txt"
+          git status --porcelain > "$RUNNER_TEMP/pinned-main-qa-build/initial-status.txt"
+          test ! -s "$RUNNER_TEMP/pinned-main-qa-build/initial-status.txt"
+          sha256sum package.json pnpm-lock.yaml tsdown.config.ts scripts/build-all.mts scripts/tsdown-build.mts src/state/openclaw-state-db-cache.ts src/infra/sqlite-terminal-open-latch.ts src/state/openclaw-quarantine-store.ts > "$RUNNER_TEMP/pinned-main-qa-build/input-sha256.txt"
+          node --version
+          pnpm --version
+      - name: Canonical frozen installation
+        working-directory: source
+        run: pnpm install --frozen-lockfile
+      - name: Observe the unchanged qaRuntime build and retain its real exit
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          env -i HOME="$HOME" PATH="$PATH" PNPM_HOME="$PNPM_HOME" CI=true NO_COLOR=1 TERM=dumb \
+            node --import ./scripts/tsx.mjs scripts/build-all.mts qaRuntime \
+            > "$RUNNER_TEMP/pinned-main-qa-build/build.log" 2>&1
+          result=$?
+          set -e
+          printf '%s\n' "$result" > "$RUNNER_TEMP/pinned-main-qa-build/build-exit-code.txt"
+          cat "$RUNNER_TEMP/pinned-main-qa-build/build.log"
+          exit "$result"
+      - name: Check that source inputs were not modified
+        if: always()
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          git status --porcelain > "$RUNNER_TEMP/pinned-main-qa-build/final-status.txt"
+          git diff --exit-code
+          sha256sum --check "$RUNNER_TEMP/pinned-main-qa-build/input-sha256.txt"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pinned-main-qa-build-${{ github.run_id }}
+          path: ${{ runner.temp }}/pinned-main-qa-build
+          if-no-files-found: error
