@@ -1,5 +1,5 @@
 import { Type } from "typebox";
-import { normalizeImageGenerationResolution } from "../../image-generation/normalization.js";
+import { normalizeImageGenerationResolution } from "../../image-generation/resolution.js";
 import type {
   ImageGenerationOpenAIOptions,
   ImageGenerationProvider,

@@ -2,7 +2,7 @@ import path from "node:path";
 import { detectMime } from "@openclaw/media-core/mime";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
-import { normalizeImageGenerationResolution } from "../../image-generation/normalization.js";
+import { normalizeImageGenerationResolution } from "../../image-generation/resolution.js";
 import { createEnumOptionParser } from "../../shared/enum-option.js";
 import { collectOption } from "../program/helpers.js";
 import { isMissingMediaUnderstandingProvider } from "./media-understanding-result.js";
