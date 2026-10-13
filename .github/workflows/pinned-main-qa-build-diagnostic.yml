@@ -1,10 +1,12 @@
-name: Pinned main qaRuntime build diagnostic
+name: Pinned main failure diagnostic
 
 on:
-  push:
-    branches: [codex/proof-easy-boundaries-20261013]
-    paths: [.github/workflows/pinned-main-qa-build-diagnostic.yml]
   workflow_dispatch:
+    inputs:
+      phase:
+        type: choice
+        options: [qa-runtime, session-types]
+        default: qa-runtime
 
 permissions:
   contents: read
@@ -15,6 +17,7 @@ jobs:
     timeout-minutes: 20
     env:
       SOURCE_SHA: abc6c4bb7cda57ef5f49bcc9ddc1aff920f6104b
+      DIAGNOSTIC_PHASE: ${{ inputs.phase }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -39,20 +42,30 @@ jobs:
           git rev-parse HEAD 'HEAD^{tree}' > "$RUNNER_TEMP/pinned-main-qa-build/source-binding.txt"
           git status --porcelain > "$RUNNER_TEMP/pinned-main-qa-build/initial-status.txt"
           test ! -s "$RUNNER_TEMP/pinned-main-qa-build/initial-status.txt"
-          sha256sum package.json pnpm-lock.yaml tsdown.config.ts scripts/build-all.mts scripts/tsdown-build.mts src/state/openclaw-state-db-cache.ts src/infra/sqlite-terminal-open-latch.ts src/state/openclaw-quarantine-store.ts > "$RUNNER_TEMP/pinned-main-qa-build/input-sha256.txt"
+          sha256sum package.json pnpm-lock.yaml tsdown.config.ts scripts/build-all.mts scripts/tsdown-build.mts src/state/openclaw-state-db-cache.ts src/infra/sqlite-terminal-open-latch.ts src/state/openclaw-quarantine-store.ts src/config/sessions/session-actor-storage-binding.test.ts src/state/openclaw-agent-execution.ts test/tsconfig/tsconfig.core.test.agents-sessions.json > "$RUNNER_TEMP/pinned-main-qa-build/input-sha256.txt"
+          case "$DIAGNOSTIC_PHASE" in
+            qa-runtime|session-types) ;;
+            *) exit 2 ;;
+          esac
           node --version
           pnpm --version
       - name: Canonical frozen installation
         working-directory: source
         run: pnpm install --frozen-lockfile
-      - name: Observe the unchanged qaRuntime build and retain its real exit
+      - name: Observe the selected unchanged command and retain its real exit
         working-directory: source
         shell: bash
         run: |
           set -euo pipefail
+          case "$DIAGNOSTIC_PHASE" in
+            qa-runtime) command=(node --import ./scripts/tsx.mjs scripts/build-all.mts qaRuntime) ;;
+            session-types) command=(node scripts/run-tsgo.mjs -p test/tsconfig/tsconfig.core.test.agents-sessions.json --pretty false) ;;
+            *) exit 2 ;;
+          esac
+          printf '%s\n' "$DIAGNOSTIC_PHASE" > "$RUNNER_TEMP/pinned-main-qa-build/phase.txt"
           set +e
           env -i HOME="$HOME" PATH="$PATH" PNPM_HOME="$PNPM_HOME" CI=true NO_COLOR=1 TERM=dumb \
-            node --import ./scripts/tsx.mjs scripts/build-all.mts qaRuntime \
+            "${command[@]}" \
             > "$RUNNER_TEMP/pinned-main-qa-build/build.log" 2>&1
           result=$?
           set -e
@@ -72,6 +85,6 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: pinned-main-qa-build-${{ github.run_id }}
+          name: pinned-main-${{ inputs.phase }}-${{ github.run_id }}
           path: ${{ runner.temp }}/pinned-main-qa-build
           if-no-files-found: error
