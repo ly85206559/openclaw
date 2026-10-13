@@ -127,6 +127,8 @@ async function runCli(current, env) {
   };
   await fs.writeFile(path.join(caseDir, "stdout.txt"), result.stdout);
   await fs.writeFile(path.join(caseDir, "stderr.txt"), result.stderr);
+  result.externalFixtureEvents = (await fs.readFile(eventsPath, "utf8")).trim().split("\n").filter(Boolean).map(JSON.parse);
+  result.graphRequests = receipt.requests.filter((request) => request.case === current.name);
   receipt.cases.push(result);
   assert.equal(result.managedError, undefined);
   assert.equal(result.spawnError, undefined);
@@ -136,14 +138,21 @@ async function runCli(current, env) {
   assert.equal(result.exitSignal, null);
   assert.equal(result.cleanup.childCloseObserved, true);
   assert.deepEqual(result.cleanup.outputClosed, { stdout: true, stderr: true });
-  result.externalFixtureEvents = (await fs.readFile(eventsPath, "utf8")).trim().split("\n").filter(Boolean).map(JSON.parse);
   const tokenCalls = result.externalFixtureEvents.filter((event) => event.kind === "external-token-fixture");
   const graphCalls = result.externalFixtureEvents.filter((event) => event.kind === "external-graph-origin-fixture");
   const publicHooks = result.externalFixtureEvents.filter((event) => event.kind === "public-ssrf-runtime-hook");
-  assert.ok(publicHooks.length > 0, "shipped plugin must use the actual public SSRF module edge");
+  const publicExports = result.externalFixtureEvents.filter((event) => event.kind === "public-ssrf-export-resolved");
+  const actualLoads = result.externalFixtureEvents.filter((event) => event.kind === "public-ssrf-actual-facade-loaded");
   assert.equal(tokenCalls.length, 1, "real Teams SDK token adapter must reach the fixture once");
   assert.equal(graphCalls.length, 1, "real Teams Graph request must cross the public transport fixture once");
-  const requests = receipt.requests.filter((request) => request.case === current.name);
+  const graphPid = graphCalls[0].pid;
+  assert.equal(tokenCalls[0].pid, graphPid);
+  const graphHooks = publicHooks.filter((event) => event.pid === graphPid);
+  assert.ok(graphHooks.length > 0, "actual Graph caller must use the verified public SSRF module edge");
+  assert.ok(publicExports.some((event) => event.pid === graphPid && event.original === graphHooks[0].original));
+  assert.ok(actualLoads.some((event) => event.pid === graphPid && event.original === graphHooks[0].original &&
+    event.actual === graphHooks[0].actual), "actual Graph caller must retain the unchanged public facade");
+  const requests = result.graphRequests;
   assert.equal(requests.length, 1, "each real CLI command must perform one Graph HTTP read");
   assert.equal(requests[0].responseClosedEarly, false);
   assert.equal(requests[0].aborted, false);

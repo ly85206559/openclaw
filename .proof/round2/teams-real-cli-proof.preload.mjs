@@ -56,35 +56,42 @@ Object.defineProperty(App.prototype, "tokenProvider", {
 });
 writeEvent({ kind: "preload", sdkVersion: sdkPackage.version, sdkModule, entry: process.argv[1] });
 
-// This public SDK edge remains external in the shipped CJS plugin. The wrapper
-// preserves every other export and calls the actual SSRF/response-release owner.
+// Later native plugin alias resolvers short-circuit bare specifiers. Intercept
+// only the physical URL selected by this verified public package export instead.
+const hostRequire = createRequire(pathToFileURL(path.join(repo, "package.json")));
+const hostPackage = JSON.parse(fs.readFileSync(path.join(repo, "package.json"), "utf8"));
+const publicSpecifier = "openclaw/plugin-sdk/ssrf-runtime";
+const publicExport = hostPackage.exports["./plugin-sdk/ssrf-runtime"];
+assert.equal(publicExport.default, "./dist/plugin-sdk/ssrf-runtime.js");
+const publicModule = hostRequire.resolve(publicSpecifier);
+assert.equal(fs.realpathSync(publicModule), fs.realpathSync(path.resolve(repo, publicExport.default)));
+const publicUrl = pathToFileURL(fs.realpathSync(publicModule)).href;
+const actualUrl = new URL(publicUrl);
+actualUrl.searchParams.set("teams-proof-actual", "1");
+writeEvent({ kind: "public-ssrf-export-resolved", specifier: publicSpecifier, original: publicUrl,
+  actual: actualUrl.href });
+// The query loads the unchanged facade once, retaining its canonical underlying
+// imports; the bridge replaces only the external origin and re-exports the rest.
 const bridge = `
-import * as actual from ORIGINAL;
-export * from ORIGINAL;
-import { fetchGraphFixture } from PRELOAD;
+import * as actual from ${JSON.stringify(actualUrl.href)};
+export * from ${JSON.stringify(actualUrl.href)};
+import { fetchGraphFixture } from ${JSON.stringify(import.meta.url)};
 export const fetchWithSsrFGuard = (params) => fetchGraphFixture(actual, params);
 `;
-const bridgeSources = new Map();
 registerHooks({
-  resolve(specifier, context, nextResolve) {
-    if (specifier !== "openclaw/plugin-sdk/ssrf-runtime") {
-      return nextResolve(specifier, context);
-    }
-    const resolved = nextResolve(specifier, context);
-    assert.equal(new URL(resolved.url).protocol, "file:");
-    writeEvent({ kind: "public-ssrf-runtime-hook", specifier, original: resolved.url,
-      parent: context.parentURL, conditions: context.conditions });
-    const source = bridge.replaceAll("ORIGINAL", JSON.stringify(resolved.url))
-      .replaceAll("PRELOAD", JSON.stringify(import.meta.url));
-    const url = `data:text/javascript,${encodeURIComponent(source)}`;
-    bridgeSources.set(url, source);
-    return { url, format: "module", shortCircuit: true };
-  },
   load(url, context, nextLoad) {
-    const source = bridgeSources.get(url);
-    return source === undefined
-      ? nextLoad(url, context)
-      : { source, format: "module", shortCircuit: true };
+    if (url === publicUrl) {
+      writeEvent({ kind: "public-ssrf-runtime-hook", specifier: publicSpecifier,
+        original: publicUrl, actual: actualUrl.href, format: context.format });
+      return { source: bridge, format: "module", shortCircuit: true };
+    }
+    if (url === actualUrl.href) {
+      const loaded = nextLoad(url, context);
+      writeEvent({ kind: "public-ssrf-actual-facade-loaded", original: publicUrl,
+        actual: actualUrl.href, format: loaded.format });
+      return loaded;
+    }
+    return nextLoad(url, context);
   },
 });
 
