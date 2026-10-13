@@ -1,0 +1,130 @@
+name: Secretless Google Chat fixture recovery proof
+
+on:
+  push:
+    branches: [codex/proof-googlechat-fixture-20261013-am]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fixture-recovery:
+    if: github.repository == 'ly85206559/openclaw'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      CI: true
+      BASE_SHA: f307d64378846f0a98747eeda93d8dd46d056a4b
+      MAIN_SHA: f2b90298e053ffc98ba538255c33fe4cf3ea7a45
+      SOURCE_SHA: 9fd2c77e0b569d1639d145cbda5795d230eb43d5
+      SESSION_TEST: extensions/googlechat/src/googlechat-session-target-case.transport.test.ts
+      TRANSPORT_TEST: extensions/googlechat/src/api.fetchok.transport.test.ts
+      MEDIA_TEST: extensions/googlechat/src/targets.test.ts
+      DELIVERY_TEST: extensions/googlechat/src/monitor.reply-delivery.test.ts
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.19.0
+      - name: Freeze exact inputs and failed fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          proof_dir="$RUNNER_TEMP/googlechat-fixture-proof"
+          mkdir -p "$proof_dir"
+          git rev-parse HEAD HEAD^{tree} > "$proof_dir/carrier-identity.txt"
+          git -c core.hooksPath=/dev/null fetch --depth=1 https://github.com/openclaw/openclaw.git "$BASE_SHA"
+          git -c core.hooksPath=/dev/null fetch --depth=1 https://github.com/openclaw/openclaw.git "$MAIN_SHA"
+          git -c core.hooksPath=/dev/null fetch --depth=8 https://github.com/ly85206559/openclaw.git "$SOURCE_SHA"
+          git show "$BASE_SHA:$SESSION_TEST" > "$proof_dir/baseline-fixture.ts"
+          git show "$SOURCE_SHA:$SESSION_TEST" > "$proof_dir/candidate-fixture.ts"
+          git show "$MAIN_SHA:$SESSION_TEST" > "$proof_dir/canonical-fixture.ts"
+          cmp "$proof_dir/candidate-fixture.ts" "$proof_dir/canonical-fixture.ts"
+          test "$(git rev-parse "$SOURCE_SHA:extensions/googlechat/src/api.ts")" = 4c71708465515cc2c72db1837b72550120e601ec
+          git diff "$BASE_SHA" "$SOURCE_SHA" -- "$SESSION_TEST" > "$proof_dir/canonical-fixture-repair.diff"
+          sha256sum "$proof_dir"/*fixture.ts > "$proof_dir/fixture-hashes.txt"
+          git -c core.hooksPath=/dev/null checkout --detach "$BASE_SHA"
+          test "$(git rev-parse HEAD)" = "$BASE_SHA"
+          git rev-parse HEAD HEAD^{tree} > "$proof_dir/baseline-identity.txt"
+      - name: Install source-pinned baseline dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          proof_dir="$RUNNER_TEMP/googlechat-fixture-proof"
+          corepack enable
+          /usr/bin/time -f '%e' -o "$proof_dir/baseline-install-wall.txt" pnpm install --frozen-lockfile > "$proof_dir/baseline-install.stdout" 2> "$proof_dir/baseline-install.stderr"
+          node --version > "$proof_dir/toolchain.txt"
+          pnpm --version >> "$proof_dir/toolchain.txt"
+          git --version >> "$proof_dir/toolchain.txt"
+          test -z "$(git status --porcelain)"
+      - name: Original fixture collects the runtime-config preparation failure
+        shell: bash
+        env:
+          OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: ${{ runner.temp }}/baseline-fixture-modules
+          NODE_COMPILE_CACHE: ${{ runner.temp }}/baseline-fixture-node
+        run: |
+          set -euo pipefail
+          proof_dir="$RUNNER_TEMP/googlechat-fixture-proof"
+          set +e
+          /usr/bin/time -f '%e' -o "$proof_dir/baseline-test-wall.txt" node scripts/run-vitest.mjs "$SESSION_TEST" --maxWorkers=2 --reporter=verbose > "$proof_dir/baseline-test.stdout" 2> "$proof_dir/baseline-test.stderr"
+          exit_code=$?
+          set -e
+          printf '%s\n' "$exit_code" > "$proof_dir/baseline-test-exit.txt"
+          cat "$proof_dir/baseline-test.stdout" "$proof_dir/baseline-test.stderr" > "$proof_dir/baseline-test.log"
+          sed -E 's/\x1B\[[0-9;]*m//g' "$proof_dir/baseline-test.log" > "$proof_dir/baseline-test.plain.log"
+          test "$exit_code" -eq 1
+          grep -Eq 'Tests[[:space:]]+1 failed' "$proof_dir/baseline-test.plain.log"
+          grep -q 'Runtime config is not prepared' "$proof_dir/baseline-test.plain.log"
+          grep -q 'delivers to the canonical mixed-case space recorded by the session' "$proof_dir/baseline-test.plain.log"
+          test -z "$(git status --porcelain)"
+          git rev-parse HEAD HEAD^{tree} > "$proof_dir/baseline-after-test-identity.txt"
+      - name: Verify repaired source and install its pinned dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          proof_dir="$RUNNER_TEMP/googlechat-fixture-proof"
+          git -c core.hooksPath=/dev/null checkout --detach "$SOURCE_SHA"
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          git merge-base --is-ancestor "$MAIN_SHA" HEAD
+          git diff --name-only "$MAIN_SHA"...HEAD > "$proof_dir/candidate-paths.txt"
+          diff -u <(printf '%s\n' "$TRANSPORT_TEST" extensions/googlechat/src/api.ts "$MEDIA_TEST") "$proof_dir/candidate-paths.txt"
+          cmp "$proof_dir/candidate-fixture.ts" "$SESSION_TEST"
+          /usr/bin/time -f '%e' -o "$proof_dir/candidate-install-wall.txt" pnpm install --frozen-lockfile > "$proof_dir/candidate-install.stdout" 2> "$proof_dir/candidate-install.stderr"
+          git rev-parse HEAD HEAD^{tree} > "$proof_dir/candidate-identity.txt"
+          git ls-tree HEAD extensions/googlechat/src/api.ts "$SESSION_TEST" package.json pnpm-lock.yaml > "$proof_dir/candidate-owner-and-dependencies.txt"
+          test -z "$(git status --porcelain)"
+      - name: Canonical session entry and native HTTP owners pass on exact source
+        shell: bash
+        env:
+          OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: ${{ runner.temp }}/candidate-fixture-modules
+          NODE_COMPILE_CACHE: ${{ runner.temp }}/candidate-fixture-node
+        run: |
+          set -euo pipefail
+          proof_dir="$RUNNER_TEMP/googlechat-fixture-proof"
+          set +e
+          /usr/bin/time -f '%e' -o "$proof_dir/candidate-test-wall.txt" node scripts/run-vitest.mjs "$SESSION_TEST" "$TRANSPORT_TEST" "$MEDIA_TEST" "$DELIVERY_TEST" --maxWorkers=1 --reporter=verbose > "$proof_dir/candidate-test.stdout" 2> "$proof_dir/candidate-test.stderr"
+          exit_code=$?
+          set -e
+          printf '%s\n' "$exit_code" > "$proof_dir/candidate-test-exit.txt"
+          cat "$proof_dir/candidate-test.stdout" "$proof_dir/candidate-test.stderr" > "$proof_dir/candidate-test.log"
+          test "$exit_code" -eq 0
+          test "$(grep -c 'GOOGLECHAT_TYPING_RECEIPT' "$proof_dir/candidate-test.log")" -eq 7
+          grep -q 'GOOGLECHAT_ERROR_READ_RECEIPT' "$proof_dir/candidate-test.log"
+          grep -q 'delivers to the canonical mixed-case space recorded by the session' "$proof_dir/candidate-test.log"
+          pnpm exec oxfmt --check extensions/googlechat/src/api.ts "$TRANSPORT_TEST" "$MEDIA_TEST" "$SESSION_TEST" > "$proof_dir/format.stdout" 2> "$proof_dir/format.stderr"
+          node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.json extensions/googlechat/src/api.ts "$TRANSPORT_TEST" "$MEDIA_TEST" "$SESSION_TEST" > "$proof_dir/lint.stdout" 2> "$proof_dir/lint.stderr"
+          git diff --check
+          test -z "$(git status --porcelain)"
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          git rev-parse HEAD HEAD^{tree} > "$proof_dir/candidate-after-test-identity.txt"
+      - name: Upload only logs, fixtures, receipts and identities
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: googlechat-fixture-${{ github.run_id }}
+          path: ${{ runner.temp }}/googlechat-fixture-proof
+          retention-days: 30
+          if-no-files-found: error
