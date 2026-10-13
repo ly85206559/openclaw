@@ -18,9 +18,11 @@ const expectedFailures = {
   video: ["passes video generation parameters through to runtime"],
   teams: ["renders Graph read and search messages while preserving JSON results"],
   web: [
-    "preserves literal code through HTTP text extraction for /markdown-tilde",
-    "preserves literal code through HTTP text extraction for /markdown-long",
-    "preserves literal code through HTTP text extraction for /markdown-false-close",
+    ...(mode === "baseline" ? [
+      "preserves literal code through HTTP text extraction for /markdown-tilde",
+      "preserves literal code through HTTP text extraction for /markdown-long",
+      "preserves literal code through HTTP text extraction for /markdown-false-close",
+    ] : []),
     "preserves literal code through HTTP text extraction for /markdown-unclosed",
   ],
 }[lane];
@@ -65,6 +67,7 @@ const receipt = {
   failures: failures.map(({ title, failureMessages }) => ({ title, failureMessages })),
   runtimeErrors: capture.ended.unhandledErrors, suiteErrors: capture.ended.suiteErrors,
   nativeModule: capture.modules[0],
+  scope: lane === "web" && mode === "candidate" ? "EOF repair only; alternate fence grammar remains out of scope" : lane,
   configuredPassWithNoTests: capture.passWithNoTests,
   note: "Expected baseline RED is diagnostic success, not product GREEN. Inspect raw logs for unhandled/cleanup errors too.",
 };

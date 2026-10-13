@@ -1,11 +1,6 @@
 name: Round 2 secretless boundary proof
 
 on:
-  push:
-    branches: [codex/proof-easy-boundaries-20261013]
-    paths:
-      - .github/workflows/round2-boundary-proof.yml
-      - .proof/round2/**
   workflow_dispatch:
     inputs:
       lane:

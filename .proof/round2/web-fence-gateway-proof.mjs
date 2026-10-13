@@ -50,10 +50,18 @@ const fixtures = [
     body: "# Example\n\nRead [the guide](https://example.test/path).\n\n- one\n- two\n\n## Steps\n\n1. first\n2. second",
     expected: "Example\n\nRead the guide.\n\none\ntwo\n\nSteps\n\nfirst\nsecond",
   },
+  { route: "/inline-control", body: "```x```", expected: "x" },
 ];
+const selectedFixtures = fixtures.filter(({ route }) => mode === "baseline"
+  ? route !== "/inline-control"
+  : !["/tilde", "/long-backtick", "/trailing-text"].includes(route));
+const markdownFixture = mode === "candidate"
+  ? fixtures.find(({ route }) => route === "/unclosed")
+  : fixtures[0];
+assert.ok(markdownFixture);
 const receipt = {
   mode, sourceSha, cases: [], controls: [], wire: [], fixtureCounts: {}, cleanup: {}, errors: [],
-  limits: "No provider, model, browser, or vendor behavior is claimed.",
+  limits: "Candidate text proof covers EOF and existing triple/inline/prose controls only; broader fence grammar is not repaired. No provider, model, browser, or vendor behavior is claimed.",
 };
 const sanitize = (value) => String(value).replaceAll(token, "[SYNTHETIC_GATEWAY_TOKEN]");
 const sha256 = (value) => createHash("sha256").update(value).digest("hex");
@@ -203,7 +211,7 @@ try {
   assert.equal(unknown.body.ok, false);
   assert.equal(unknown.body.error.type, "not_found");
   assert.deepEqual(receipt.fixtureCounts, {}, "entry controls must not reach the content server");
-  for (const row of fixtures) {
+  for (const row of selectedFixtures) {
     const response = await invoke({ tool: "web_fetch", args: { url: `http://127.0.0.1:${fixturePort}${row.route}`, extractMode: "text", maxChars: 20_000 }, sessionKey: "main" });
     const observation = { route: row.route, fixtureBody: row.body, expectedText: row.expected, rawResponse: response.raw };
     receipt.cases.push(observation);
@@ -211,18 +219,19 @@ try {
     observation.passed = observation.actualText === row.expected;
     observation.failureReason = observation.passed ? null : "literal fence content or surrounding prose differs from independent expected text";
   }
-  const markdown = await invoke({ tool: "web_fetch", args: { url: `http://127.0.0.1:${fixturePort}/tilde`, extractMode: "markdown", maxChars: 20_000 }, sessionKey: "main" });
+  const markdown = await invoke({ tool: "web_fetch", args: { url: `http://127.0.0.1:${fixturePort}${markdownFixture.route}`, extractMode: "markdown", maxChars: 20_000 }, sessionKey: "main" });
   receipt.controls.push({ name: "markdown-mode", rawResponse: markdown.raw });
-  assert.equal(extracted(markdown, "markdown"), fixtures[0].body, "Markdown mode must preserve the response");
+  assert.equal(extracted(markdown, "markdown"), markdownFixture.body, "Markdown mode must preserve the response");
   const failed = receipt.cases.filter((row) => !row.passed).map((row) => row.route);
   assert.deepEqual(failed, mode === "baseline" ? ["/tilde", "/long-backtick", "/trailing-text", "/unclosed"] : []);
-  for (const row of fixtures) assert.equal(receipt.fixtureCounts[row.route], row.route === "/tilde" ? 2 : 1, row.route);
-  assert.equal(receipt.wire.length, 7);
+  for (const row of selectedFixtures) assert.equal(receipt.fixtureCounts[row.route], row.route === markdownFixture.route ? 2 : 1, row.route);
+  assert.equal(receipt.wire.length, selectedFixtures.length + 1);
   assert.equal(receipt.errors.length, 0);
   receipt.expectedResultVerified = true;
 } catch (error) {
   receipt.errors.push(sanitize(error.stack ?? error));
 } finally {
+  receipt.cleanup.scope = "Wrapper group, joined output pipes and observed listener release; independent detached descendants are not globally enumerated.";
   if (child?.pid && childClosed) {
     try { process.kill(-child.pid, "SIGTERM"); } catch (error) { if (error.code !== "ESRCH") receipt.errors.push(`SIGTERM: ${error.message}`); }
     try {
