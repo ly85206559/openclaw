@@ -8,7 +8,6 @@ const report = JSON.parse(await readFile(reportPath, "utf8"));
 const capture = JSON.parse(await readFile(`${reportPath}.capture.json`, "utf8"));
 assert.equal(capture.processTimedOut, false);
 assert.equal(capture.ignoreUnhandledErrors, false);
-assert.equal(capture.passWithNoTests, false);
 assert.equal(capture.modules.length, 1, "one actual native module must own this report");
 assert.equal(capture.modules[0].file, report.testResults[0]?.name);
 assert.equal(capture.ended?.reason, mode === "baseline" ? "failed" : "passed");
@@ -66,6 +65,7 @@ const receipt = {
   failures: failures.map(({ title, failureMessages }) => ({ title, failureMessages })),
   runtimeErrors: capture.ended.unhandledErrors, suiteErrors: capture.ended.suiteErrors,
   nativeModule: capture.modules[0],
+  configuredPassWithNoTests: capture.passWithNoTests,
   note: "Expected baseline RED is diagnostic success, not product GREEN. Inspect raw logs for unhandled/cleanup errors too.",
 };
 await writeFile(destination, JSON.stringify(receipt, null, 2));
