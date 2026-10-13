@@ -180,7 +180,7 @@ try {
   const capture = (stream, chunk) => {
     if (stream === "stdout") stdout += chunk.toString();
     else stderr += chunk.toString();
-    if (`${stdout}\n${stderr}`.includes("gateway ready")) signalReady();
+    if (/\[gateway\] ready(?:\r?\n|$)/u.test(`${stdout}\n${stderr}`)) signalReady();
   };
   child.stdout.on("data", (chunk) => capture("stdout", chunk));
   child.stderr.on("data", (chunk) => capture("stderr", chunk));
