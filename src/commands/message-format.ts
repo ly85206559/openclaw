@@ -1,3 +1,4 @@
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import {
   getTerminalTableWidth,
@@ -93,10 +94,12 @@ function renderMessageList(messages: unknown[], opts: FormatOpts, emptyLabel: st
       firstNonemptyString(authorObj, "username") ||
       firstNonemptyString(msg, "user");
     if (!author) {
-      const from = msg.from as
-        | { user?: Record<string, unknown>; application?: Record<string, unknown> }
-        | undefined;
-      author = firstNonemptyString(from?.user ?? from?.application, "displayName", "id");
+      const from = asOptionalObjectRecord(msg.from);
+      author = firstNonemptyString(
+        asOptionalObjectRecord(from?.user ?? from?.application),
+        "displayName",
+        "id",
+      );
     }
     const time = firstNonemptyString(msg, "timestamp", "ts", "createdAt");
     const text = firstNonemptyString(msg, "content", "text");
@@ -330,7 +333,7 @@ export function formatMessageCliText(
         ? (payload as { messages?: unknown; pins?: unknown })[read ? "messages" : "pins"]
         : undefined;
     if (read && !Array.isArray(messages)) {
-      const message = (payload as { message?: unknown } | undefined)?.message;
+      const message = asOptionalObjectRecord(payload)?.message;
       if (message && typeof message === "object") {
         messages = [message];
       }
@@ -350,7 +353,7 @@ export function formatMessageCliText(
     const results = (payload as { results?: unknown }).results;
     let list = extractDiscordSearchResultsMessages(results);
     if (list === null) {
-      const messages = (payload as { messages?: unknown }).messages;
+      const messages = asOptionalObjectRecord(payload)?.messages;
       if (Array.isArray(messages)) {
         list = messages;
       }
