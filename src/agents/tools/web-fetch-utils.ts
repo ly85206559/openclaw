@@ -255,9 +255,12 @@ export function markdownToText(markdown: string): string {
     const afterOpen = open + 3;
     const close = markdown.indexOf("```", afterOpen);
     const firstLineEnd = markdown.indexOf("\n", afterOpen);
-    if (close === -1 && firstLineEnd === -1) {
-      text += markdown.slice(open).replaceAll("\0", "\0\0");
-      break;
+    if (close === -1) {
+      const lineStart = markdown.lastIndexOf("\n", open) + 1;
+      if (firstLineEnd === -1 || !/^[ \t]*$/.test(markdown.slice(lineStart, open))) {
+        text += markdown.slice(open).replaceAll("\0", "\0\0");
+        break;
+      }
     }
     const contentEnd = close === -1 ? markdown.length : close;
     const contentStart =
