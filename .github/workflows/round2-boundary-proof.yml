@@ -86,6 +86,7 @@ jobs:
         working-directory: source
         run: pnpm install --frozen-lockfile
       - name: Observe primary regression and original siblings
+        if: env.PROOF_MODE == 'candidate'
         working-directory: source
         shell: bash
         run: |
@@ -104,10 +105,10 @@ jobs:
         run: |
           cp ../proof-tooling/.github/workflows/round2-boundary-proof.yml .github/workflows/round2-boundary-proof.yml
           pnpm check:workflows
-      - name: Canonical build for supported process entry
+      - name: Canonical CI artifact build for supported process entry
         if: matrix.lane != 'teams'
         working-directory: source
-        run: pnpm build
+        run: pnpm build:ci-artifacts
       - name: Real video CLI to loopback-only bundled provider
         if: matrix.lane == 'video'
         working-directory: source
