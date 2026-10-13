@@ -5,6 +5,16 @@ const [reportPath, exitCodeText, mode, lane, destination] = process.argv.slice(2
 assert.equal(process.env.GITHUB_ACTIONS, "true", "secretless Actions only");
 assert.ok(mode === "baseline" || mode === "candidate");
 const report = JSON.parse(await readFile(reportPath, "utf8"));
+const capture = JSON.parse(await readFile(`${reportPath}.capture.json`, "utf8"));
+assert.equal(capture.processTimedOut, false);
+assert.equal(capture.ignoreUnhandledErrors, false);
+assert.equal(capture.passWithNoTests, false);
+assert.equal(capture.modules.length, 1, "one actual native module must own this report");
+assert.equal(capture.modules[0].file, report.testResults[0]?.name);
+assert.equal(capture.ended?.reason, mode === "baseline" ? "failed" : "passed");
+assert.equal(capture.ended?.unhandledErrors, 0, "canonical reporter must observe no runtime errors");
+assert.equal(capture.ended?.suiteErrors, 0, "canonical reporter must observe no suite-load errors");
+assert.equal(capture.ended?.failedModules, mode === "baseline" ? 1 : 0);
 const expectedFailures = {
   video: ["passes video generation parameters through to runtime"],
   teams: ["renders Graph read and search messages while preserving JSON results"],
@@ -54,7 +64,8 @@ const receipt = {
   passed: assertions.filter((test) => test.status === "passed").length,
   failed: failures.length, skipped: 0, regressionGate: mode === "baseline" ? "RED" : "GREEN",
   failures: failures.map(({ title, failureMessages }) => ({ title, failureMessages })),
-  runtimeErrors: "Native JSON has no runtime-error count; raw stdout/stderr require independent inspection.",
+  runtimeErrors: capture.ended.unhandledErrors, suiteErrors: capture.ended.suiteErrors,
+  nativeModule: capture.modules[0],
   note: "Expected baseline RED is diagnostic success, not product GREEN. Inspect raw logs for unhandled/cleanup errors too.",
 };
 await writeFile(destination, JSON.stringify(receipt, null, 2));

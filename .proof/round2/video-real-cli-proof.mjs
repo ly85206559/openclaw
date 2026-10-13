@@ -1,6 +1,6 @@
 // Proof-only runner. Execute exclusively in reviewed secretless Linux Actions.
 import assert from "node:assert/strict";
-import { spawn, execFileSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
@@ -59,6 +59,9 @@ let tempDirs;
 let taskRoot;
 let reservation;
 let activeCase;
+let runManagedCommand;
+let hasUnjoinedWork;
+let retainTemporaryInputs = false;
 const sockets = new Set();
 const syntheticKey = "openclaw-proof-not-a-real-api-key";
 const expectedIgnored = [{ key: "size", value: "4k" }, { key: "watermark", value: true }];
@@ -69,67 +72,83 @@ async function runCli(name, args, env) {
   const controller = new AbortController();
   const signal = AbortSignal.any([stop.signal, controller.signal, AbortSignal.timeout(120_000)]);
   const started = performance.now();
-  const child = spawn(values.pnpm, ["--silent", "openclaw", ...args], {
-    cwd: repo,
-    env,
-    stdio: ["ignore", "pipe", "pipe"],
-    detached: true,
-    signal,
-  });
-  const stopOwnedGroup = () => {
-    if (!child.pid) { return; }
-    try { process.kill(-child.pid, "SIGKILL"); }
-    catch (error) {
-      if (error.code !== "ESRCH") { receipt.cleanupErrors.push(describeError(error)); }
-    }
-  };
-  signal.addEventListener("abort", stopOwnedGroup, { once: true });
   const stdout = [];
   const stderr = [];
   let capturedBytes = 0;
   let spawnError;
-  for (const [stream, chunks] of [[child.stdout, stdout], [child.stderr, stderr]]) {
-    stream.on("data", (chunk) => {
-      chunks.push(chunk);
-      capturedBytes += chunk.length;
-      if (capturedBytes > 4 * 1024 * 1024) {
-        controller.abort(new Error("CLI proof output exceeded 4 MiB"));
-      }
+  let managedError;
+  let managedExitCode;
+  let exitCode = null;
+  let exitSignal = null;
+  let childCloseObserved = false;
+  const outputClosed = { stdout: false, stderr: false };
+  try {
+    managedExitCode = await runManagedCommand({
+      bin: values.pnpm,
+      args: ["--silent", "openclaw", ...args],
+      cwd: repo,
+      env,
+      stdio: ["ignore", "pipe", "pipe"],
+      shell: false,
+      signal,
+      requireProcessTreeExit: true,
+      waitForCleanupRelease: true,
+      onReady(child) {
+        for (const [streamName, stream, chunks] of [["stdout", child.stdout, stdout], ["stderr", child.stderr, stderr]]) {
+          stream.once("close", () => { outputClosed[streamName] = true; });
+          stream.on("data", (chunk) => {
+            chunks.push(chunk);
+            capturedBytes += chunk.length;
+            if (capturedBytes > 4 * 1024 * 1024) {
+              controller.abort(new Error("CLI proof output exceeded 4 MiB"));
+            }
+          });
+        }
+        child.once("error", (error) => { spawnError = error; });
+        child.once("exit", (code, receivedSignal) => {
+          exitCode = code;
+          exitSignal = receivedSignal;
+        });
+        child.once("close", () => { childCloseObserved = true; });
+      },
     });
+  } catch (error) {
+    managedError = error;
+    retainTemporaryInputs ||= hasUnjoinedWork(error);
   }
-  child.on("error", (error) => { spawnError = error; });
-  const outcome = await new Promise((resolve) => child.once("close", (exitCode, exitSignal) => {
-    resolve({ exitCode, exitSignal, elapsedMs: Math.round(performance.now() - started) });
-  }));
-  signal.removeEventListener("abort", stopOwnedGroup);
   const result = {
-    name, args, ...outcome,
+    name, args, exitCode, exitSignal, managedExitCode,
+    elapsedMs: Math.round(performance.now() - started),
     stdout: Buffer.concat(stdout).toString("utf8"),
     stderr: Buffer.concat(stderr).toString("utf8"),
     aborted: signal.aborted,
+    ...(signal.aborted ? { abortReason: describeError(signal.reason) } : {}),
     ...(spawnError ? { spawnError: describeError(spawnError) } : {}),
-    childGroupSurvivedExit: false,
+    ...(managedError ? { managedError: {
+      ...describeError(managedError), code: managedError.code,
+      processTreeState: managedError.processTreeState,
+      unjoinedWork: hasUnjoinedWork(managedError),
+    } } : {}),
+    cleanup: {
+      owner: "scripts/lib/managed-child-process.mts:runManagedCommand",
+      completed: !managedError,
+      childCloseObserved,
+      outputClosed,
+      scope: "managed wrapper group, output closure, and any acknowledged cleanup handoff",
+      limitation: "pnpm is not a managed custody participant; independent detached descendants are not globally enumerated",
+    },
   };
-  if (child.pid) {
-    try {
-      process.kill(-child.pid, 0);
-      result.childGroupSurvivedExit = true;
-      process.kill(-child.pid, "SIGKILL");
-    } catch (error) {
-      if (error.code !== "ESRCH") {
-        receipt.cleanupErrors.push(describeError(error));
-      }
-    }
-  }
   await fs.mkdir(path.join(evidenceDir, name));
   await fs.writeFile(path.join(evidenceDir, name, "stdout.txt"), result.stdout);
   await fs.writeFile(path.join(evidenceDir, name, "stderr.txt"), result.stderr);
   receipt.cases.push(result);
+  assert.equal(result.managedError, undefined, `${name}: canonical command finalization failed`);
+  assert.equal(result.managedExitCode, 0, `${name}: supported managed CLI must complete`);
   assert.equal(result.exitCode, 0, `${name}: supported CLI must complete`);
   assert.equal(result.exitSignal, null, `${name}: unexpected child signal`);
   assert.equal(result.aborted, false, `${name}: proof deadline/abort`);
   assert.equal(result.spawnError, undefined, `${name}: process setup failed`);
-  assert.equal(result.childGroupSurvivedExit, false, `${name}: CLI leaked a child process group`);
+  assert.deepEqual(result.cleanup.outputClosed, { stdout: true, stderr: true }, `${name}: child output did not close`);
   return result;
 }
 
@@ -154,12 +173,14 @@ try {
     "src/video-generation/runtime.ts", "src/video-generation/normalization.ts",
     "extensions/zai/video-generation-provider.ts", "test/fixtures/media-playback.ts",
     "src/test-utils/port-claims.ts", "test/helpers/temp-dir.ts", "pnpm-lock.yaml",
+    "scripts/lib/managed-child-process.mts", "scripts/lib/managed-cleanup-handoff.mts",
   ]) {
     receipt.sourceHashes[file] = sha256(await fs.readFile(path.join(repo, file)));
   }
   const { createTempDirTracker } = await import(pathToFileURL(path.join(repo, "test/helpers/temp-dir.ts")));
   const { reserveTestPortListener } = await import(pathToFileURL(path.join(repo, "src/test-utils/port-claims.ts")));
   const { createPlaybackMediaFixture } = await import(pathToFileURL(path.join(repo, "test/fixtures/media-playback.ts")));
+  ({ runManagedCommand, hasUnjoinedWork } = await import(pathToFileURL(path.join(repo, "scripts/lib/managed-child-process.mts"))));
   const media = createPlaybackMediaFixture("mp4");
   assert.equal(media.subarray(4, 8).toString("ascii"), "ftyp");
   receipt.mediaFixture = { bytes: media.length, sha256: sha256(media), source: "createPlaybackMediaFixture(mp4)" };
@@ -326,7 +347,10 @@ try {
       receipt.portClaimReleased = true;
     } catch (error) { receipt.cleanupErrors.push(describeError(error)); }
   }
-  if (tempDirs) {
+  if (tempDirs && retainTemporaryInputs) {
+    receipt.retainedTemporaryRoot = taskRoot;
+    receipt.cleanupErrors.push({ message: "canonical cleanup reported unjoined work; temporary inputs retained" });
+  } else if (tempDirs) {
     try {
       tempDirs.cleanup();
       assert.equal(tempDirs.dirs.size, 0);

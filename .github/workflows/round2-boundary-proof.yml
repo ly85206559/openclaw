@@ -42,7 +42,9 @@ jobs:
         with:
           persist-credentials: false
           path: proof-tooling
-          sparse-checkout: .proof/round2
+          sparse-checkout: |
+            .proof/round2
+            .github/workflows
       - name: Validate exact source identity
         shell: bash
         run: |
@@ -62,7 +64,6 @@ jobs:
           node-version: "26"
       - uses: pnpm/action-setup@v4
         with:
-          version: 12.9.0
           run_install: false
           package_json_file: source/package.json
       - name: Bind source and regression fixture
@@ -96,12 +97,18 @@ jobs:
           set -euo pipefail
           start=$(date +%s)
           set +e
-          pnpm test "$PRIMARY_TEST" -- --maxWorkers=1 --reporter=json --outputFile.json="$PROOF_OUTPUT_DIR/native-tests.json" > "$PROOF_OUTPUT_DIR/tests.stdout.log" 2> "$PROOF_OUTPUT_DIR/tests.stderr.log"
+          pnpm test "$PRIMARY_TEST" -- --maxWorkers=1 --reporter=default --reporter=json --reporter=./scripts/lib/vitest-report-capture.mts --outputFile.json="$PROOF_OUTPUT_DIR/native-tests.json" > "$PROOF_OUTPUT_DIR/tests.stdout.log" 2> "$PROOF_OUTPUT_DIR/tests.stderr.log"
           code=$?
           set -e
           printf '%s\n' "$code" > "$PROOF_OUTPUT_DIR/test-exit-code.txt"
           printf '%s\n' "$(( $(date +%s) - start ))" > "$PROOF_OUTPUT_DIR/test-wall-seconds.txt"
           node ../proof-tooling/.proof/round2/audit-tests.mjs "$PROOF_OUTPUT_DIR/native-tests.json" "$code" "$PROOF_MODE" "$LANE" "$PROOF_OUTPUT_DIR/test-audit.json"
+      - name: Validate proof workflow using the canonical checker
+        if: matrix.lane == 'teams'
+        working-directory: source
+        run: |
+          cp ../proof-tooling/.github/workflows/round2-boundary-proof.yml .github/workflows/round2-boundary-proof.yml
+          pnpm check:workflows
       - name: Canonical build for supported process entry
         if: matrix.lane != 'teams'
         working-directory: source
