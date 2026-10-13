@@ -1,0 +1,47 @@
+diff --git a/src/agents/tools/web-fetch-visibility.tool-extraction.test.ts b/src/agents/tools/web-fetch-visibility.tool-extraction.test.ts
+index 2d7df36f6c5..ffe72769279 100644
+--- a/src/agents/tools/web-fetch-visibility.tool-extraction.test.ts
++++ b/src/agents/tools/web-fetch-visibility.tool-extraction.test.ts
+@@ -7,8 +7,16 @@ import { createWebFetchTool } from "./web-fetch.js";
+ const MARKDOWN_CODE =
+   "# Example\n\n- Read [the guide](https://example.com).\n\n```text\n# comment\n- literal\n1. literal\n[label](https://example.com)\n![alt](image.png)\n`value`\n```";
+ 
+-const PAGES: Record<string, string> = {
++const MARKDOWN_PAGES: Record<string, string> = {
+   "/markdown-code": MARKDOWN_CODE,
++  "/markdown-tilde": "~~~text\n# literal\n- literal\n[label](https://example.com)\n~~~",
++  "/markdown-long": "````text\n# literal\n```\n- literal\n````",
++  "/markdown-false-close": "```text\n# literal\n```not-a-close\n- literal\n```",
++  "/markdown-unclosed": "```text\n# literal\n- literal",
++};
++
++const PAGES: Record<string, string> = {
++  ...MARKDOWN_PAGES,
+   "/implicit-nested-siblings":
+     "<ul><li hidden><ul><li>A<li>B</li></ul>Secret</li></ul><p>Visible</p>",
+   "/unmatched-container": "<p hidden>Before</div>Secret</p><p>Visible</p>",
+@@ -31,7 +39,7 @@ async function startPageServer(): Promise<{ server: Server; baseUrl: string }> {
+       return;
+     }
+     res.writeHead(200, {
+-      "content-type": `${req.url === "/markdown-code" ? "text/markdown" : "text/html"}; charset=utf-8`,
++      "content-type": `${Object.hasOwn(MARKDOWN_PAGES, req.url ?? "") ? "text/markdown" : "text/html"}; charset=utf-8`,
+     });
+     res.end(page);
+   });
+@@ -120,4 +128,15 @@ describe("web_fetch visibility through the real tool execute path", () => {
+       );
+     },
+   );
++
++  it.each([
++    ["/markdown-tilde", "# literal\n- literal\n[label](https://example.com)"],
++    ["/markdown-long", "# literal\n```\n- literal"],
++    ["/markdown-false-close", "# literal\n```not-a-close\n- literal"],
++    ["/markdown-unclosed", "# literal\n- literal"],
++  ])("preserves literal code through HTTP text extraction for %s", async (path, expected) => {
++    const result = JSON.parse(await extract(path, "text")) as { extractor: string; text: string };
++    expect(result.extractor).toBe("cf-markdown");
++    expect(result.text).toContain(expected);
++  });
+ });

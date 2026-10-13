@@ -1,0 +1,170 @@
+name: Round 2 secretless boundary proof
+
+on:
+  push:
+    branches: [codex/proof-easy-boundaries-20261013]
+    paths:
+      - .github/workflows/round2-boundary-proof.yml
+      - .proof/round2/**
+  workflow_dispatch:
+    inputs:
+      lane:
+        type: choice
+        options: [video, teams, web, all]
+        default: all
+      mode:
+        type: choice
+        options: [baseline, candidate]
+        default: baseline
+      source_sha:
+        description: Exact source SHA; candidate mode requires the selected product head
+        type: string
+        default: cc397809fb666caf37f19d0dfa9a8edfec90c87c
+
+permissions:
+  contents: read
+
+jobs:
+  proof:
+    name: ${{ matrix.lane }} ${{ github.event.inputs.mode || 'baseline' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        lane: ${{ fromJSON(github.event.inputs.lane == 'video' && '["video"]' || github.event.inputs.lane == 'teams' && '["teams"]' || github.event.inputs.lane == 'web' && '["web"]' || '["video","teams","web"]') }}
+    env:
+      PROOF_MODE: ${{ github.event.inputs.mode || 'baseline' }}
+      SOURCE_SHA: ${{ github.event.inputs.source_sha || 'cc397809fb666caf37f19d0dfa9a8edfec90c87c' }}
+      LANE: ${{ matrix.lane }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          path: proof-tooling
+          sparse-checkout: .proof/round2
+      - name: Validate exact source identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_SHA" =~ ^[a-f0-9]{40}$ ]]
+          if [[ "$PROOF_MODE" == baseline ]]; then
+            test "$SOURCE_SHA" = cc397809fb666caf37f19d0dfa9a8edfec90c87c
+          fi
+          printf 'PROOF_OUTPUT_DIR=%s\n' "$RUNNER_TEMP/round2-$LANE-$PROOF_MODE" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          persist-credentials: false
+          path: source
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "26"
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12.9.0
+          run_install: false
+          package_json_file: source/package.json
+      - name: Bind source and regression fixture
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$PROOF_OUTPUT_DIR"
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          git status --porcelain > "$PROOF_OUTPUT_DIR/initial-status.txt"
+          test ! -s "$PROOF_OUTPUT_DIR/initial-status.txt"
+          case "$LANE" in
+            video) primary=src/cli/capability-cli.test.ts; paths='src/cli/capability-cli/video.ts src/cli/capability-cli.test.ts'; leaf=test/tsconfig/tsconfig.core.test.config-cli.json ;;
+            teams) primary=test/msteams-read-target.integration.test.ts; paths='src/commands/message-format.ts test/msteams-read-target.integration.test.ts'; leaf=test/tsconfig/tsconfig.test.root.other.json ;;
+            web) primary=src/agents/tools/web-fetch-visibility.tool-extraction.test.ts; paths='src/agents/tools/web-fetch-utils.ts src/agents/tools/web-fetch-utils.test.ts src/agents/tools/web-fetch-visibility.tool-extraction.test.ts'; leaf=test/tsconfig/tsconfig.core.test.agents-tools.json ;;
+          esac
+          printf 'PRIMARY_TEST=%s\nCHECK_PATHS=%s\nTYPE_LEAF=%s\n' "$primary" "$paths" "$leaf" >> "$GITHUB_ENV"
+          if [[ "$PROOF_MODE" == baseline ]]; then
+            git apply "../proof-tooling/.proof/round2/$LANE-regression.patch"
+          fi
+          sha256sum "$primary" package.json pnpm-lock.yaml > "$PROOF_OUTPUT_DIR/input-sha256.txt"
+          git rev-parse HEAD 'HEAD^{tree}' > "$PROOF_OUTPUT_DIR/source-binding.txt"
+          git diff --check
+      - name: Canonical secretless installation
+        working-directory: source
+        run: pnpm install --frozen-lockfile
+      - name: Observe primary regression and original siblings
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          start=$(date +%s)
+          set +e
+          pnpm test "$PRIMARY_TEST" -- --maxWorkers=1 --reporter=json --outputFile.json="$PROOF_OUTPUT_DIR/native-tests.json" > "$PROOF_OUTPUT_DIR/tests.stdout.log" 2> "$PROOF_OUTPUT_DIR/tests.stderr.log"
+          code=$?
+          set -e
+          printf '%s\n' "$code" > "$PROOF_OUTPUT_DIR/test-exit-code.txt"
+          printf '%s\n' "$(( $(date +%s) - start ))" > "$PROOF_OUTPUT_DIR/test-wall-seconds.txt"
+          node ../proof-tooling/.proof/round2/audit-tests.mjs "$PROOF_OUTPUT_DIR/native-tests.json" "$code" "$PROOF_MODE" "$LANE" "$PROOF_OUTPUT_DIR/test-audit.json"
+      - name: Canonical build for supported process entry
+        if: matrix.lane != 'teams'
+        working-directory: source
+        run: pnpm build
+      - name: Real video CLI to loopback-only bundled provider
+        if: matrix.lane == 'video'
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          task_node=$(command -v node)
+          task_pnpm=$(command -v pnpm)
+          task_repo="$PWD"
+          task_mode=original
+          if [[ "$PROOF_MODE" == candidate ]]; then task_mode=candidate; fi
+          sudo unshare --net -- bash -c 'ip link set lo up; task_user="$1"; shift; exec runuser -u "$task_user" -- "$@"' proof "$(id -un)" \
+            env PATH="$PATH" GITHUB_ACTIONS=true \
+            "$task_node" --import "$task_repo/scripts/tsx.mjs" \
+            "$GITHUB_WORKSPACE/proof-tooling/.proof/round2/video-real-cli-proof.mjs" \
+            --repo "$task_repo" --pnpm "$task_pnpm" --evidence-dir "$PROOF_OUTPUT_DIR/real-cli" \
+            --mode "$task_mode" --expected-head "$SOURCE_SHA"
+      - name: Real registered web_fetch through Gateway HTTP
+        if: matrix.lane == 'web'
+        working-directory: source
+        run: node ../proof-tooling/.proof/round2/web-fence-gateway-proof.mjs
+        env:
+          PROOF_OUTPUT_DIR: ${{ env.PROOF_OUTPUT_DIR }}/real-gateway
+      - name: Candidate targeted checks and relevant siblings
+        if: env.PROOF_MODE == 'candidate'
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          read -r -a paths <<< "$CHECK_PATHS"
+          node scripts/check-changed.mjs --dry-run -- "${paths[@]}" > "$PROOF_OUTPUT_DIR/official-changed-plan.txt"
+          pnpm exec oxfmt --check "${paths[@]}"
+          node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.core.json "${paths[@]}"
+          pnpm tsgo:core
+          node scripts/run-tsgo.mjs -p "$TYPE_LEAF" --pretty false
+          case "$LANE" in
+            teams) pnpm test src/commands/message-format.test.ts -- --maxWorkers=1 ;;
+            web) pnpm test src/agents/tools/web-fetch-utils.test.ts -- --maxWorkers=1 ;;
+          esac
+      - name: Retain final source status
+        if: always()
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$PROOF_OUTPUT_DIR"
+          git status --porcelain > "$PROOF_OUTPUT_DIR/final-status.txt"
+          git diff --stat > "$PROOF_OUTPUT_DIR/final-diff-stat.txt"
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          if [[ -n "${PRIMARY_TEST:-}" ]]; then
+            sha256sum --check "$PROOF_OUTPUT_DIR/input-sha256.txt"
+          fi
+          if [[ "$PROOF_MODE" == candidate && -n "${CHECK_PATHS:-}" ]]; then
+            read -r -a paths <<< "$CHECK_PATHS"
+            git diff --exit-code -- "${paths[@]}"
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: round2-${{ matrix.lane }}-${{ env.PROOF_MODE }}-${{ github.run_id }}
+          path: ${{ env.PROOF_OUTPUT_DIR }}
+          if-no-files-found: error
