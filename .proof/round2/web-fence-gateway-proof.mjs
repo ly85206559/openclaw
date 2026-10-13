@@ -52,9 +52,14 @@ const fixtures = [
     expected: "Example\n\nRead the guide.\n\none\ntwo\n\nSteps\n\nfirst\nsecond",
   },
   { route: "/inline-control", body: "```x```", expected: "x" },
+  {
+    route: "/inline-fence-prose-control",
+    body: "Use ``` to start a code block.\nNext paragraph.",
+    expected: "Use ``` to start a code block.\nNext paragraph.",
+  },
 ];
 const selectedFixtures = fixtures.filter(({ route }) => mode === "baseline"
-  ? route !== "/inline-control"
+  ? !["/inline-control", "/inline-fence-prose-control"].includes(route)
   : !["/tilde", "/long-backtick", "/trailing-text"].includes(route));
 const markdownFixture = mode === "candidate"
   ? fixtures.find(({ route }) => route === "/unclosed")
