@@ -130,12 +130,9 @@ describe("web_fetch visibility through the real tool execute path", () => {
   it.each([
     ["/markdown-unclosed", "# literal\n- literal"],
     ["/markdown-inline-fence-prose", "Use ``` to start a code block.\nNext paragraph."],
-  ])(
-    "preserves Markdown content through HTTP text extraction for %s",
-    async (path, expected) => {
-      const result = JSON.parse(await extract(path, "text")) as { extractor: string; text: string };
-      expect(result.extractor).toBe("cf-markdown");
-      expect(result.text).toContain(expected);
-    },
-  );
+  ])("preserves Markdown content through HTTP text extraction for %s", async (path, expected) => {
+    const result = JSON.parse(await extract(path, "text")) as { extractor: string; text: string };
+    expect(result.extractor).toBe("cf-markdown");
+    expect(result.text).toContain(expected);
+  });
 });
