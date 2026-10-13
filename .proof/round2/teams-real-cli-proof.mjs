@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { once } from "node:events";
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
@@ -75,6 +76,8 @@ async function runCli(current, env) {
   let exitCode = null;
   let exitSignal = null;
   let childCloseObserved = false;
+  let childCloseError;
+  let closeObservation;
   const outputClosed = { stdout: false, stderr: false };
   let managedError;
   let managedExitCode;
@@ -100,9 +103,15 @@ async function runCli(current, env) {
         }
         child.once("error", (error) => { spawnError = error; });
         child.once("exit", (code, childSignal) => { exitCode = code; exitSignal = childSignal; });
-        child.once("close", () => { childCloseObserved = true; });
+        closeObservation = once(child, "close", { signal }).then(
+          () => { childCloseObserved = true; },
+          (error) => { childCloseError = error; },
+        );
       },
     });
+    // Strict tree cleanup joins exit and output before Node necessarily emits close.
+    await closeObservation;
+    if (childCloseError) { throw childCloseError; }
   } catch (error) {
     managedError = error;
     retainTemporaryInputs ||= hasUnjoinedWork(error);
