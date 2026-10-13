@@ -126,11 +126,12 @@ describe("web_fetch visibility through the real tool execute path", () => {
     },
   );
 
-  it.each([
-    ["/markdown-unclosed", "# literal\n- literal"],
-  ])("preserves literal code through HTTP text extraction for %s", async (path, expected) => {
-    const result = JSON.parse(await extract(path, "text")) as { extractor: string; text: string };
-    expect(result.extractor).toBe("cf-markdown");
-    expect(result.text).toContain(expected);
-  });
+  it.each([["/markdown-unclosed", "# literal\n- literal"]])(
+    "preserves literal code through HTTP text extraction for %s",
+    async (path, expected) => {
+      const result = JSON.parse(await extract(path, "text")) as { extractor: string; text: string };
+      expect(result.extractor).toBe("cf-markdown");
+      expect(result.text).toContain(expected);
+    },
+  );
 });
