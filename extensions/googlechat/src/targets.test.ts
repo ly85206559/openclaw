@@ -304,13 +304,6 @@ describe("downloadGoogleChatMedia", () => {
       resourceName: "media/123",
       maxBytes: 10,
     }).catch((error: unknown) => error);
-    console.log(
-      "GOOGLECHAT_ERROR_READ_RECEIPT",
-      JSON.stringify({
-        error: outcome instanceof Error ? { name: outcome.name, message: outcome.message } : null,
-        released: release.mock.calls.length,
-      }),
-    );
     expect(outcome).toBeInstanceOf(GoogleChatApiError);
     expect(outcome).toMatchObject({ status: 500 });
     expect((outcome as Error).message).toContain("Google Chat API 500: body read failed");
