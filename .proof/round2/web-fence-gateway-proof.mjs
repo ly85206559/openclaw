@@ -1,12 +1,13 @@
 // Proof-only runner. Execute exclusively in reviewed secretless Linux Actions.
 import assert from "node:assert/strict";
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { createServer as createPortReservation } from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 assert.equal(process.env.GITHUB_ACTIONS, "true", "secretless GitHub Actions only");
 assert.equal(process.platform, "linux", "owned Linux process-group cleanup required");
@@ -63,7 +64,9 @@ const receipt = {
   mode, sourceSha, cases: [], controls: [], wire: [], fixtureCounts: {}, cleanup: {}, errors: [],
   limits: "Candidate text proof covers EOF and existing triple/inline/prose controls only; broader fence grammar is not repaired. No provider, model, browser, or vendor behavior is claimed.",
 };
-const sanitize = (value) => String(value).replaceAll(token, "[SYNTHETIC_GATEWAY_TOKEN]");
+const sanitize = (value) => String(value)
+  .replaceAll(token, "[SYNTHETIC_GATEWAY_TOKEN]")
+  .replace(/\[gateway\] agent model:[^\r\n]*/gu, "[gateway] [configured model omitted]");
 const sha256 = (value) => createHash("sha256").update(value).digest("hex");
 const fixture = createServer((request, response) => {
   const row = fixtures.find(({ route }) => route === request.url);
@@ -115,6 +118,10 @@ let fixturePort;
 let gatewayPort;
 let child;
 let childClosed;
+let managedRun;
+let terminateManagedChild;
+let hasUnjoinedWork;
+const outputClosed = { stdout: false, stderr: false };
 let stdout = "";
 let stderr = "";
 const reservation = createPortReservation();
@@ -150,6 +157,8 @@ function extracted(response, extractMode) {
   return unwrap(result.details.text);
 }
 try {
+  const { runManagedCommand, ...managed } = await import(pathToFileURL(path.join(process.cwd(), "scripts/lib/managed-child-process.mts")));
+  ({ terminateManagedChild, hasUnjoinedWork } = managed);
   fixturePort = await listen(fixture);
   gatewayPort = await listen(reservation);
   const configPath = path.join(root, "state", "openclaw.json");
@@ -174,24 +183,41 @@ try {
   await close(reservation);
   let signalReady;
   const readyLog = new Promise((resolve) => { signalReady = resolve; });
-  child = spawn("pnpm", ["openclaw", "gateway", "run", "--port", String(gatewayPort), "--bind", "loopback"], {
-    env, detached: true, stdio: ["ignore", "pipe", "pipe"],
-  });
   const capture = (stream, chunk) => {
     if (stream === "stdout") stdout += chunk.toString();
     else stderr += chunk.toString();
     if (/\[gateway\] ready(?:\r?\n|$)/u.test(`${stdout}\n${stderr}`)) signalReady();
   };
-  child.stdout.on("data", (chunk) => capture("stdout", chunk));
-  child.stderr.on("data", (chunk) => capture("stderr", chunk));
-  childClosed = new Promise((resolve) => {
-    child.once("error", (error) => resolve({ error: error.message }));
-    // The supported CLI forwards shutdown; close joins descendant-owned pipes, not just wrapper exit.
-    child.once("close", (code, signal) => resolve({ code, signal }));
-  });
+  let signalStarted;
+  const started = new Promise((resolve) => { signalStarted = resolve; });
+  managedRun = runManagedCommand({
+    bin: "pnpm",
+    args: ["openclaw", "gateway", "run", "--port", String(gatewayPort), "--bind", "loopback"],
+    cwd: process.cwd(), env, stdio: ["ignore", "pipe", "pipe"], shell: false,
+    requireProcessTreeExit: true, waitForCleanupRelease: true,
+    onReady(ownedChild) {
+      child = ownedChild;
+      for (const [name, stream] of [["stdout", child.stdout], ["stderr", child.stderr]]) {
+        stream.on("data", (chunk) => capture(name, chunk));
+        stream.once("close", () => { outputClosed[name] = true; });
+      }
+      childClosed = new Promise((resolve) => {
+        child.once("error", (error) => resolve({ error: error.message }));
+        child.once("close", (code, signal) => resolve({ code, signal }));
+      });
+      signalStarted();
+    },
+  }).then(
+    (exitCode) => ({ exitCode }),
+    (error) => ({ error }),
+  );
+  await Promise.race([
+    started,
+    managedRun.then((result) => { throw new Error(`Gateway did not start: ${sanitize(result.error?.stack ?? JSON.stringify(result))}`); }),
+  ]);
   await bounded(Promise.race([
     readyLog,
-    childClosed.then((exit) => { throw new Error(`Gateway closed before readiness: ${JSON.stringify(exit)}`); }),
+    managedRun.then((result) => { throw new Error(`Gateway finished before readiness: ${sanitize(result.error?.stack ?? JSON.stringify(result))}`); }),
   ]), 120_000, "Gateway did not publish readiness within the startup budget");
   const readiness = await fetch(`http://127.0.0.1:${gatewayPort}/readyz`, {
     headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(5_000),
@@ -231,27 +257,35 @@ try {
 } catch (error) {
   receipt.errors.push(sanitize(error.stack ?? error));
 } finally {
-  receipt.cleanup.scope = "Wrapper group, joined output pipes and observed listener release; independent detached descendants are not globally enumerated.";
-  if (child?.pid && childClosed) {
-    try { process.kill(-child.pid, "SIGTERM"); } catch (error) { if (error.code !== "ESRCH") receipt.errors.push(`SIGTERM: ${error.message}`); }
+  receipt.cleanup.owner = "scripts/lib/managed-child-process.mts:runManagedCommand";
+  receipt.cleanup.scope = "Managed wrapper group, output closure, acknowledged cleanup handoff and observed listener release; independent detached descendants are not globally enumerated.";
+  if (managedRun) {
     try {
-      receipt.cleanup.childExit = await bounded(childClosed, 15_000, "Gateway shutdown did not join");
+      if (child?.pid && child.exitCode === null && child.signalCode === null) {
+        receipt.cleanup.stopRequested = "SIGTERM";
+        const termination = terminateManagedChild(child, "SIGTERM");
+        if (termination?.error) receipt.errors.push(sanitize(termination.error.stack ?? termination.error));
+      }
+      const result = await managedRun;
+      receipt.cleanup.managedExitCode = result.exitCode;
+      receipt.cleanup.outputClosed = outputClosed;
+      if (result.error) {
+        receipt.cleanup.managedError = {
+          message: sanitize(result.error.message), code: result.error.code,
+          processTreeState: result.error.processTreeState, unjoinedWork: hasUnjoinedWork(result.error),
+        };
+        throw result.error;
+      }
+      receipt.cleanup.childExit = childClosed ? await childClosed : undefined;
+      assert.equal(receipt.cleanup.stopRequested, "SIGTERM", "Gateway exited before intentional cleanup");
+      assert.equal(result.exitCode, 143, "intentional Gateway SIGTERM must be reported");
+      assert.deepEqual(receipt.cleanup.childExit, { code: null, signal: "SIGTERM" });
+      assert.deepEqual(outputClosed, { stdout: true, stderr: true });
+      receipt.cleanup.completed = true;
     } catch (error) {
-      receipt.errors.push(error.message);
-      receipt.cleanup.forcedKill = true;
-      try { process.kill(-child.pid, "SIGKILL"); } catch (killError) { if (killError.code !== "ESRCH") receipt.errors.push(`SIGKILL: ${killError.message}`); }
-      try { receipt.cleanup.childExit = await bounded(childClosed, 5_000, "forced Gateway cleanup did not join"); } catch (joinError) { receipt.errors.push(joinError.message); }
+      receipt.cleanup.completed = false;
+      receipt.errors.push(sanitize(error.stack ?? error));
     }
-    try {
-      process.kill(-child.pid, 0);
-      receipt.cleanup.processGroupGone = false;
-      receipt.errors.push("Gateway process group remains after joined shutdown");
-      try { process.kill(-child.pid, "SIGKILL"); receipt.cleanup.forcedKill = true; } catch (error) { if (error.code !== "ESRCH") receipt.errors.push(error.message); }
-    } catch (error) {
-      if (error.code === "ESRCH") receipt.cleanup.processGroupGone = true;
-      else receipt.errors.push(`process group probe: ${error.message}`);
-    }
-    if (receipt.cleanup.childExit?.error) receipt.errors.push(receipt.cleanup.childExit.error);
   }
   fixture.closeAllConnections();
   if (fixture.listening) {

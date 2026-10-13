@@ -106,7 +106,6 @@ jobs:
           cp ../proof-tooling/.github/workflows/round2-boundary-proof.yml .github/workflows/round2-boundary-proof.yml
           pnpm check:workflows
       - name: Canonical CI artifact build for supported process entry
-        if: matrix.lane != 'teams'
         working-directory: source
         run: pnpm build:ci-artifacts
       - name: Real video CLI to loopback-only bundled provider
@@ -129,9 +128,26 @@ jobs:
       - name: Real registered web_fetch through Gateway HTTP
         if: matrix.lane == 'web'
         working-directory: source
-        run: node ../proof-tooling/.proof/round2/web-fence-gateway-proof.mjs
+        run: node --import ./scripts/tsx.mjs ../proof-tooling/.proof/round2/web-fence-gateway-proof.mjs
         env:
           PROOF_OUTPUT_DIR: ${{ env.PROOF_OUTPUT_DIR }}/real-gateway
+      - name: Real shipped Teams CLI through synthetic Graph HTTP
+        if: matrix.lane == 'teams'
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          task_node=$(command -v node)
+          task_pnpm=$(command -v pnpm)
+          task_repo="$PWD"
+          task_mode=original
+          if [[ "$PROOF_MODE" == candidate ]]; then task_mode=candidate; fi
+          sudo unshare --net -- bash -c 'ip link set lo up; task_user="$1"; shift; exec runuser -u "$task_user" -- "$@"' proof "$(id -un)" \
+            env PATH="$PATH" GITHUB_ACTIONS=true \
+            "$task_node" --import "$task_repo/scripts/tsx.mjs" \
+            "$GITHUB_WORKSPACE/proof-tooling/.proof/round2/teams-real-cli-proof.mjs" \
+            --repo "$task_repo" --pnpm "$task_pnpm" --evidence-dir "$PROOF_OUTPUT_DIR/real-cli" \
+            --mode "$task_mode" --expected-head "$SOURCE_SHA"
       - name: Candidate targeted checks and relevant siblings
         if: env.PROOF_MODE == 'candidate'
         working-directory: source
@@ -145,7 +161,11 @@ jobs:
           pnpm tsgo:core
           node scripts/run-tsgo.mjs -p "$TYPE_LEAF" --pretty false
           case "$LANE" in
-            teams) pnpm test src/commands/message-format.test.ts -- --maxWorkers=1 ;;
+            teams)
+              node --import ./scripts/tsx.mjs scripts/check-assertion-safety-ratchet.mts --base cc397809fb666caf37f19d0dfa9a8edfec90c87c
+              node scripts/run-oxlint.mjs --tsconfig test/tsconfig/tsconfig.test.root.json test/msteams-read-target.integration.test.ts
+              pnpm test src/commands/message-format.test.ts -- --maxWorkers=1
+              ;;
             web) pnpm test src/agents/tools/web-fetch-utils.test.ts -- --maxWorkers=1 ;;
           esac
       - name: Retain final source status
