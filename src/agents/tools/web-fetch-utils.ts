@@ -177,6 +177,14 @@ export function htmlToMarkdown(html: string): { text: string; title?: string } {
       continue;
     }
 
+    if (token.name === "td" || token.name === "th") {
+      const context = stack[stack.length - 1]!;
+      if (/\S$/.test(context.parts.at(-1) ?? "")) {
+        appendText(stack, " ");
+      }
+      continue;
+    }
+
     const kind =
       token.name === "title"
         ? "title"
