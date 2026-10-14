@@ -1,3 +1,4 @@
+import { appendFileSync } from "node:fs";
 import { createServer, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { marked } from "marked";
@@ -133,8 +134,9 @@ it.each([
       server.close(() => resolve());
       server.closeAllConnections();
     });
-    console.log(JSON.stringify({ name, scope: "native Urbit HTTP/SSE with mocked ingress/context/dispatch", message, parser, wire,
-      cleanup: { ingressStopped: ingressMock.stop.mock.calls.length, closedChannel: wire.some((entry) => entry.method === "DELETE") } }));
+    const receipt = JSON.stringify({ name, scope: "native Urbit HTTP/SSE with mocked ingress/context/dispatch", message, parser, wire,
+      cleanup: { ingressStopped: ingressMock.stop.mock.calls.length, closedChannel: wire.some((entry) => entry.method === "DELETE") } });
+    appendFileSync(process.env.TLON_PROOF_RECEIPTS_PATH!, `${receipt}\n`);
     expect(wire.some((entry) => entry.method === "DELETE")).toBe(true);
     expect(ingressMock.stop).toHaveBeenCalledOnce();
   }

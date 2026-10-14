@@ -1,13 +1,8 @@
-name: Tlon code-fence boundary proof
+name: Tlon code-fence paired boundary proof
 on:
   push:
     branches: [codex/proof-tlon-code-fences-20261014]
   workflow_dispatch:
-    inputs:
-      candidate:
-        description: "Full source SHA for GREEN; empty runs the frozen test-only RED source"
-        required: false
-        type: string
 permissions:
   contents: read
 jobs:
@@ -17,7 +12,7 @@ jobs:
     timeout-minutes: 25
     env:
       BASELINE: 93aa3cdf50b3da1215ae654ff95495871e4b308a
-      CANDIDATE: ${{ inputs.candidate }}
+      CANDIDATE: 60c494bbeccbf07cef54c8d510cf2436d3792d16
       OPENCLAW_VITEST_MAX_WORKERS: 1
       OPENAI_API_KEY: ""
       ANTHROPIC_API_KEY: ""
@@ -31,56 +26,65 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: 24.19.0
-      - name: Freeze fixtures and source identity
+      - name: Freeze fixtures and install source-pinned dependencies
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/tlon-proof"
           cp extensions/tlon/src/monitor/code-fences.proof.test.ts "$RUNNER_TEMP/tlon-proof/consumer.test.ts"
           cp extensions/tlon/src/monitor/utils.test.ts "$RUNNER_TEMP/tlon-proof/unit.test.ts"
-          SOURCE="${CANDIDATE:-$BASELINE}"
-          [[ "$SOURCE" =~ ^[0-9a-f]{40}$ ]]
-          git fetch --no-tags --depth=1 https://github.com/ly85206559/openclaw.git "$SOURCE"
-          git checkout --detach FETCH_HEAD
-          test "$(git rev-parse HEAD)" = "$SOURCE"
-          cp "$RUNNER_TEMP/tlon-proof/consumer.test.ts" extensions/tlon/src/monitor/code-fences.proof.test.ts
-          cp "$RUNNER_TEMP/tlon-proof/unit.test.ts" extensions/tlon/src/monitor/utils.test.ts
-          git rev-parse HEAD HEAD^{tree} > "$RUNNER_TEMP/tlon-proof/identity.txt"
-          git hash-object extensions/tlon/src/monitor/utils.ts >> "$RUNNER_TEMP/tlon-proof/identity.txt"
-          node --version >> "$RUNNER_TEMP/tlon-proof/identity.txt"
+          cp .github/workflows/proof-tlon-code-fences.yml "$RUNNER_TEMP/tlon-proof/workflow.yml"
+          git fetch --no-tags --depth=1 https://github.com/ly85206559/openclaw.git "$BASELINE" "$CANDIDATE"
+          test "$(git rev-parse "$BASELINE:pnpm-lock.yaml")" = "$(git rev-parse "$CANDIDATE:pnpm-lock.yaml")"
+          git checkout --detach "$CANDIDATE"
           corepack enable
           PACKAGE_PIN="$(node -p "require('./package.json').packageManager")"
           [[ "$PACKAGE_PIN" == pnpm@12.9.0+sha512.* ]]
-          printf '%s\n' "$PACKAGE_PIN" >> "$RUNNER_TEMP/tlon-proof/identity.txt"
-          pnpm --version >> "$RUNNER_TEMP/tlon-proof/identity.txt"
+          { node --version; printf '%s\n' "$PACKAGE_PIN"; pnpm --version; } > "$RUNNER_TEMP/tlon-proof/toolchain.txt"
           pnpm install --frozen-lockfile
-      - name: Execute independent parser and actual inbound consumer
+          node -p "require('./node_modules/marked/package.json').version" >> "$RUNNER_TEMP/tlon-proof/toolchain.txt"
+      - name: Paired parser and native HTTP SSE consumer receipts
         shell: bash
         run: |
-          set -uo pipefail
-          export OPENCLAW_VITEST_FS_MODULE_CACHE_PATH="$RUNNER_TEMP/tlon-proof/vitest-cache"
-          START=$SECONDS
-          node scripts/run-vitest.mjs extensions/tlon/src/monitor/utils.test.ts extensions/tlon/src/monitor/code-fences.proof.test.ts --reporter=json --outputFile="$RUNNER_TEMP/tlon-proof/results.json" 2>&1 | tee "$RUNNER_TEMP/tlon-proof/runtime.log"
-          EXIT=${PIPESTATUS[0]}
-          printf 'exit=%s\nwall_seconds=%s\n' "$EXIT" "$((SECONDS-START))" > "$RUNNER_TEMP/tlon-proof/exit.txt"
-          export PROOF_RESULTS="$RUNNER_TEMP/tlon-proof/results.json" PROOF_EXIT="$EXIT"
-          node --input-type=module <<'NODE'
+          set -euo pipefail
+          for MODE in baseline candidate; do
+            if [ "$MODE" = baseline ]; then SOURCE="$BASELINE"; else SOURCE="$CANDIDATE"; fi
+            git checkout --detach "$SOURCE"
+            test "$(git rev-parse HEAD)" = "$SOURCE"
+            mkdir -p "$RUNNER_TEMP/tlon-proof/$MODE"
+            cp "$RUNNER_TEMP/tlon-proof/consumer.test.ts" extensions/tlon/src/monitor/code-fences.proof.test.ts
+            cp "$RUNNER_TEMP/tlon-proof/unit.test.ts" extensions/tlon/src/monitor/utils.test.ts
+            git rev-parse HEAD HEAD^{tree} > "$RUNNER_TEMP/tlon-proof/$MODE/identity.txt"
+            git hash-object extensions/tlon/src/monitor/utils.ts >> "$RUNNER_TEMP/tlon-proof/$MODE/identity.txt"
+            sha256sum extensions/tlon/src/monitor/{utils.test.ts,code-fences.proof.test.ts} > "$RUNNER_TEMP/tlon-proof/$MODE/fixtures.sha256"
+            export TLON_PROOF_RECEIPTS_PATH="$RUNNER_TEMP/tlon-proof/$MODE/receipts.jsonl"
+            export OPENCLAW_VITEST_FS_MODULE_CACHE_PATH="$RUNNER_TEMP/tlon-proof/$MODE/vitest-cache"
+            export PROOF_RESULTS="$RUNNER_TEMP/tlon-proof/$MODE/results.json"
+            START=$SECONDS
+            set +e
+            node scripts/run-vitest.mjs extensions/tlon/src/monitor/utils.test.ts extensions/tlon/src/monitor/code-fences.proof.test.ts --reporter=verbose --reporter=json --outputFile="$PROOF_RESULTS" > "$RUNNER_TEMP/tlon-proof/$MODE/runtime.log" 2>&1
+            EXIT=$?
+            set -e
+            printf 'exit=%s\nwall_seconds=%s\n' "$EXIT" "$((SECONDS-START))" > "$RUNNER_TEMP/tlon-proof/$MODE/exit.txt"
+            cat "$RUNNER_TEMP/tlon-proof/$MODE/runtime.log"
+            export PROOF_EXIT="$EXIT" PROOF_MODE="$MODE"
+            node --input-type=module <<'NODE'
           import fs from 'node:fs';
           import assert from 'node:assert/strict';
           const report = JSON.parse(fs.readFileSync(process.env.PROOF_RESULTS, 'utf8'));
           const tests = report.testResults.flatMap(suite => suite.assertionResults ?? []);
           const failed = tests.filter(test => test.status === 'failed');
-          assert.equal(tests.length, 17, 'Both complete test files must collect');
+          assert.equal(tests.length, 17);
           assert.equal(report.testResults.length, 2);
           assert.equal(report.numRuntimeErrorTestSuites ?? 0, 0);
           assert.equal(tests.filter(test => !['passed', 'failed'].includes(test.status)).length, 0);
           for (const suite of report.testResults) assert.equal(suite.message ?? '', '');
-          if (process.env.CANDIDATE) {
+          if (process.env.PROOF_MODE === 'candidate') {
             assert.equal(process.env.PROOF_EXIT, '0');
+            assert.equal(report.success, true);
             assert.equal(failed.length, 0);
           } else {
             assert.equal(process.env.PROOF_EXIT, '1');
-            assert.equal(failed.length, 4);
             assert.deepEqual(failed.map(test => test.title).sort(), [
               'preserves nested triple-backtick fences as one Markdown code block',
               'preserves longer backtick fences as one Markdown code block',
@@ -89,18 +93,51 @@ jobs:
             ].sort());
             assert(failed.every(test => /AssertionError/.test(test.failureMessages.join('\n'))));
           }
-          assert.equal(tests.filter(test => test.status === 'pending').length, 0);
-          console.log(JSON.stringify({ collected: tests.length, failed: failed.map(test => test.fullName), sourceMode: process.env.CANDIDATE ? 'candidate' : 'test-only baseline' }));
+          const receipts = fs.readFileSync(process.env.TLON_PROOF_RECEIPTS_PATH, 'utf8').trim().split('\n').map(JSON.parse);
+          assert.equal(receipts.length, 7);
+          for (const receipt of receipts) {
+            assert.equal(receipt.cleanup.ingressStopped, 1);
+            assert.equal(receipt.cleanup.closedChannel, true);
+            assert(receipt.wire.some(x => x.method === 'POST' && x.path === '/~/login'));
+            assert(receipt.wire.some(x => x.method === 'PUT' && x.body?.some(a => a['event-id'] === 21)));
+          }
+          console.log(JSON.stringify({ mode: process.env.PROOF_MODE, collected: tests.length, failed: failed.length, nativeReceipts: receipts.length }));
           NODE
+          done
+          cmp "$RUNNER_TEMP/tlon-proof/baseline/fixtures.sha256" "$RUNNER_TEMP/tlon-proof/candidate/fixtures.sha256"
+      - name: Touched format lint types and workflow validation
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/check-changed.mjs --dry-run -- extensions/tlon/src/monitor/utils.ts extensions/tlon/src/monitor/utils.test.ts > "$RUNNER_TEMP/tlon-proof/changed-plan.log" 2>&1
+          pnpm exec oxfmt --check --threads=1 extensions/tlon/src/monitor/utils.ts extensions/tlon/src/monitor/utils.test.ts > "$RUNNER_TEMP/tlon-proof/format.log" 2>&1
+          node scripts/run-oxlint.mjs --tsconfig extensions/tsconfig.json extensions/tlon/src/monitor/utils.ts extensions/tlon/src/monitor/utils.test.ts > "$RUNNER_TEMP/tlon-proof/lint.log" 2>&1
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import path from 'node:path';
+          const root = process.cwd();
+          fs.writeFileSync(process.env.RUNNER_TEMP + '/tlon-proof/touched-tsconfig.json', JSON.stringify({
+            extends: path.join(root, 'extensions/tsconfig.json'),
+            include: ['extensions/tlon/src/monitor/utils.ts', 'extensions/tlon/src/monitor/utils.test.ts', 'src/**/*.d.ts', 'ui/**/*.d.ts', 'packages/**/*.d.ts'].map(p => path.join(root, p)),
+          }));
+          NODE
+          node scripts/run-tsgo.mjs --project "$RUNNER_TEMP/tlon-proof/touched-tsconfig.json" --noEmit > "$RUNNER_TEMP/tlon-proof/types.log" 2>&1
+          cp "$RUNNER_TEMP/tlon-proof/workflow.yml" .github/workflows/proof-tlon-code-fences.yml
+          pnpm check:workflows > "$RUNNER_TEMP/tlon-proof/workflows.log" 2>&1
+          git diff --check
+          git diff --exit-code
+          git diff --name-only > "$RUNNER_TEMP/tlon-proof/final-diff.txt"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: always()
         with:
           name: tlon-code-fence-proof-${{ github.run_id }}
           path: |
-            ${{ runner.temp }}/tlon-proof/identity.txt
-            ${{ runner.temp }}/tlon-proof/exit.txt
-            ${{ runner.temp }}/tlon-proof/runtime.log
-            ${{ runner.temp }}/tlon-proof/results.json
-            ${{ runner.temp }}/tlon-proof/consumer.test.ts
-            ${{ runner.temp }}/tlon-proof/unit.test.ts
+            ${{ runner.temp }}/tlon-proof/*.txt
+            ${{ runner.temp }}/tlon-proof/*.log
+            ${{ runner.temp }}/tlon-proof/*.test.ts
+            ${{ runner.temp }}/tlon-proof/*/*.txt
+            ${{ runner.temp }}/tlon-proof/*/*.json
+            ${{ runner.temp }}/tlon-proof/*/*.jsonl
+            ${{ runner.temp }}/tlon-proof/*/*.sha256
+            ${{ runner.temp }}/tlon-proof/*/*.log
           retention-days: 30
