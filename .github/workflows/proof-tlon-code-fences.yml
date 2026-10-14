@@ -59,8 +59,8 @@ jobs:
             git rev-parse HEAD HEAD^{tree} > "$RUNNER_TEMP/tlon-gateway-proof/$MODE/identity.txt"
             git hash-object extensions/tlon/src/monitor/utils.ts >> "$RUNNER_TEMP/tlon-gateway-proof/$MODE/identity.txt"
             START=$SECONDS
-            pnpm build > "$RUNNER_TEMP/tlon-gateway-proof/$MODE/build.log" 2>&1
-            printf 'build_exit=0\nwall_seconds=%s\n' "$((SECONDS-START))" > "$RUNNER_TEMP/tlon-gateway-proof/$MODE/build-exit.txt"
+            pnpm build qaRuntime > "$RUNNER_TEMP/tlon-gateway-proof/$MODE/build.log" 2>&1
+            printf 'build_profile=qaRuntime\nbuild_exit=0\nwall_seconds=%s\n' "$((SECONDS-START))" > "$RUNNER_TEMP/tlon-gateway-proof/$MODE/build-exit.txt"
             export PROOF_MODE="$MODE"
             export PROOF_OUT="$RUNNER_TEMP/tlon-gateway-proof/$MODE"
             START=$SECONDS
