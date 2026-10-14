@@ -50,7 +50,10 @@ const receipt = {
   cases: [], controls: [], wire: [], fixtureCounts: {}, cleanup: {}, errors: [],
   limits: "Canonical qaRuntime build and supported CLI/Gateway; no release package, UI, model, vendor, or public website proof.",
 };
-const sanitize = (value) => String(value).replaceAll(token, "[SYNTHETIC_TOKEN]").replaceAll("127.0.0.1", "[LOOPBACK]");
+const sanitize = (value) => String(value)
+  .replaceAll(token, "[SYNTHETIC_TOKEN]")
+  .replaceAll("127.0.0.1", "[LOOPBACK]")
+  .replace(/\[gateway\] agent model:[^\r\n]*/gu, "[gateway] agent model: [NOT_INVOKED]");
 const fixture = createServer((request, response) => {
   const row = fixtures.find(({ route }) => route === request.url);
   if (!row || request.method !== "GET") {
@@ -156,7 +159,7 @@ try {
   const capture = (stream, chunk) => {
     if (stream === "stdout") stdout += chunk.toString();
     else stderr += chunk.toString();
-    if (`${stdout}\n${stderr}`.toLowerCase().includes("gateway ready")) signalReady();
+    if (/\[gateway\] ready(?:\r?\n|$)/u.test(`${stdout}\n${stderr}`)) signalReady();
   };
   child.stdout.on("data", (chunk) => capture("stdout", chunk));
   child.stderr.on("data", (chunk) => capture("stderr", chunk));
