@@ -3,6 +3,11 @@ on:
   push:
     branches: [codex/proof-tlon-code-fences-20261014]
   workflow_dispatch:
+    inputs:
+      runtime:
+        description: "Rerun paired runtime only for changed runtime inputs or missing coverage"
+        type: boolean
+        default: false
 permissions:
   contents: read
 jobs:
@@ -37,6 +42,8 @@ jobs:
           git fetch --no-tags --depth=1 https://github.com/ly85206559/openclaw.git "$BASELINE" "$CANDIDATE"
           test "$(git rev-parse "$BASELINE:pnpm-lock.yaml")" = "$(git rev-parse "$CANDIDATE:pnpm-lock.yaml")"
           git checkout --detach "$CANDIDATE"
+          test "$(git rev-parse HEAD)" = "$CANDIDATE"
+          test "$(git hash-object extensions/tlon/src/monitor/utils.ts)" = 1d122843806a71d08ad015b11f07537f7e774fc0
           corepack enable
           PACKAGE_PIN="$(node -p "require('./package.json').packageManager")"
           [[ "$PACKAGE_PIN" == pnpm@12.9.0+sha512.* ]]
@@ -44,6 +51,7 @@ jobs:
           pnpm install --frozen-lockfile
           node -p "require('./node_modules/marked/package.json').version" >> "$RUNNER_TEMP/tlon-proof/toolchain.txt"
       - name: Paired parser and native HTTP SSE consumer receipts
+        if: ${{ inputs.runtime == true }}
         shell: bash
         run: |
           set -euo pipefail
@@ -116,12 +124,14 @@ jobs:
           import fs from 'node:fs';
           import path from 'node:path';
           const root = process.cwd();
-          fs.writeFileSync(process.env.RUNNER_TEMP + '/tlon-proof/touched-tsconfig.json', JSON.stringify({
+          fs.mkdirSync('.artifacts/tlon-proof-types', { recursive: true });
+          fs.writeFileSync('.artifacts/tlon-proof-types/tsconfig.json', JSON.stringify({
             extends: path.join(root, 'extensions/tsconfig.json'),
+            compilerOptions: { rootDir: root },
             include: ['extensions/tlon/src/monitor/utils.ts', 'extensions/tlon/src/monitor/utils.test.ts', 'src/**/*.d.ts', 'ui/**/*.d.ts', 'packages/**/*.d.ts'].map(p => path.join(root, p)),
           }));
           NODE
-          node scripts/run-tsgo.mjs --project "$RUNNER_TEMP/tlon-proof/touched-tsconfig.json" --noEmit > "$RUNNER_TEMP/tlon-proof/types.log" 2>&1
+          node scripts/run-tsgo.mjs --project .artifacts/tlon-proof-types/tsconfig.json --noEmit > "$RUNNER_TEMP/tlon-proof/types.log" 2>&1
           cp "$RUNNER_TEMP/tlon-proof/workflow.yml" .github/workflows/proof-tlon-code-fences.yml
           pnpm check:workflows > "$RUNNER_TEMP/tlon-proof/workflows.log" 2>&1
           git diff --check
