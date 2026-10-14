@@ -9,7 +9,7 @@ on:
         default: whitespace
       mode:
         type: choice
-        options: [baseline, candidate]
+        options: [baseline, candidate, format]
         default: baseline
       source_sha:
         required: true
@@ -37,7 +37,7 @@ jobs:
           set -euo pipefail
           [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
           case "$PROOF_LANE" in whitespace|html) ;; *) exit 2 ;; esac
-          case "$PROOF_MODE" in baseline|candidate) ;; *) exit 2 ;; esac
+          case "$PROOF_MODE" in baseline|candidate|format) ;; *) exit 2 ;; esac
           if [ "$PROOF_MODE" = baseline ]; then
             test "$SOURCE_SHA" = 7665342bcbb06b90ed1a0e0b251336a1e0831516
           fi
@@ -77,6 +77,7 @@ jobs:
         working-directory: source
         run: pnpm install --frozen-lockfile
       - name: Actual HTTP tool regression and original controls
+        if: env.PROOF_MODE != 'format'
         working-directory: source
         shell: bash
         run: |
@@ -91,6 +92,14 @@ jobs:
           printf '%s\n' "$result" > "$RUNNER_TEMP/web-fidelity/test-exit-code.txt"
           cat "$RUNNER_TEMP/web-fidelity/http.log"
           exit "$result"
+      - name: Read canonical formatting without changing source
+        if: env.PROOF_MODE == 'format'
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm exec oxfmt --stdin-filepath src/agents/tools/web-fetch-utils.ts < src/agents/tools/web-fetch-utils.ts > "$RUNNER_TEMP/web-fidelity/web-fetch-utils.formatted.ts"
+          pnpm exec oxfmt --stdin-filepath src/agents/tools/web-fetch-visibility.tool-extraction.test.ts < src/agents/tools/web-fetch-visibility.tool-extraction.test.ts > "$RUNNER_TEMP/web-fidelity/web-fetch-visibility.formatted.ts"
       - name: Candidate helper siblings and targeted static checks
         if: env.PROOF_MODE == 'candidate'
         working-directory: source
