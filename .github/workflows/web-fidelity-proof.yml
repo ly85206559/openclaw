@@ -1,0 +1,118 @@
+name: Web extraction fidelity proof
+
+on:
+  push:
+    branches: [codex/proof-web-fidelity-20261015]
+    paths: [.github/workflows/web-fidelity-proof.yml]
+  workflow_dispatch:
+    inputs:
+      lane:
+        type: choice
+        options: [whitespace, html]
+        default: whitespace
+      mode:
+        type: choice
+        options: [baseline, candidate]
+        default: baseline
+      source_sha:
+        required: true
+        default: 7665342bcbb06b90ed1a0e0b251336a1e0831516
+
+permissions:
+  contents: read
+
+jobs:
+  focused:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      SOURCE_SHA: ${{ inputs.source_sha || '7665342bcbb06b90ed1a0e0b251336a1e0831516' }}
+      PROOF_LANE: ${{ inputs.lane || 'whitespace' }}
+      PROOF_MODE: ${{ inputs.mode || 'baseline' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          path: proof
+      - name: Validate fixed proof selection
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          case "$PROOF_LANE" in whitespace|html) ;; *) exit 2 ;; esac
+          case "$PROOF_MODE" in baseline|candidate) ;; *) exit 2 ;; esac
+          if [ "$PROOF_MODE" = baseline ]; then
+            test "$SOURCE_SHA" = 7665342bcbb06b90ed1a0e0b251336a1e0831516
+          fi
+          mkdir -p "$RUNNER_TEMP/web-fidelity"
+      - uses: actions/checkout@v4
+        with:
+          repository: ly85206559/openclaw
+          ref: ${{ env.SOURCE_SHA }}
+          persist-credentials: false
+          path: source
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24.21.0"
+      - uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+          package_json_file: source/package.json
+      - name: Bind source and add only the baseline regression fixture
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          git rev-parse HEAD 'HEAD^{tree}' > "$RUNNER_TEMP/web-fidelity/source-binding.txt"
+          git status --porcelain > "$RUNNER_TEMP/web-fidelity/initial-status.txt"
+          test ! -s "$RUNNER_TEMP/web-fidelity/initial-status.txt"
+          sha256sum package.json pnpm-lock.yaml src/agents/tools/web-fetch-utils.ts src/agents/tools/web-fetch.ts > "$RUNNER_TEMP/web-fidelity/input-sha256.txt"
+          if [ "$PROOF_MODE" = baseline ]; then
+            git apply --check "../proof/.proof/web-fidelity/$PROOF_LANE-regression.patch"
+            git apply "../proof/.proof/web-fidelity/$PROOF_LANE-regression.patch"
+          fi
+          sha256sum src/agents/tools/web-fetch-visibility.tool-extraction.test.ts > "$RUNNER_TEMP/web-fidelity/test-sha256.txt"
+          printf '%s\n%s\n' "$PROOF_LANE" "$PROOF_MODE" > "$RUNNER_TEMP/web-fidelity/selection.txt"
+          node --version
+          pnpm --version
+      - name: Canonical frozen installation
+        working-directory: source
+        run: pnpm install --frozen-lockfile
+      - name: Actual HTTP tool regression and original controls
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          /usr/bin/time -p env -i HOME="$HOME" PATH="$PATH" PNPM_HOME="$PNPM_HOME" CI=true NO_COLOR=1 TERM=dumb \
+            pnpm test src/agents/tools/web-fetch-visibility.tool-extraction.test.ts --maxWorkers=1 \
+            --reporter=json --outputFile="$RUNNER_TEMP/web-fidelity/http.json" \
+            > "$RUNNER_TEMP/web-fidelity/http.log" 2>&1
+          result=$?
+          set -e
+          printf '%s\n' "$result" > "$RUNNER_TEMP/web-fidelity/test-exit-code.txt"
+          cat "$RUNNER_TEMP/web-fidelity/http.log"
+          exit "$result"
+      - name: Verify source custody
+        if: always()
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          sha256sum --check "$RUNNER_TEMP/web-fidelity/input-sha256.txt"
+          sha256sum --check "$RUNNER_TEMP/web-fidelity/test-sha256.txt"
+          git status --porcelain --untracked-files=no > "$RUNNER_TEMP/web-fidelity/final-status.txt"
+          if [ "$PROOF_MODE" = baseline ]; then
+            printf ' M src/agents/tools/web-fetch-visibility.tool-extraction.test.ts\n' > "$RUNNER_TEMP/web-fidelity/expected-status.txt"
+            cmp "$RUNNER_TEMP/web-fidelity/expected-status.txt" "$RUNNER_TEMP/web-fidelity/final-status.txt"
+          else
+            test ! -s "$RUNNER_TEMP/web-fidelity/final-status.txt"
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: web-fidelity-${{ env.PROOF_LANE }}-${{ env.PROOF_MODE }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/web-fidelity
+          if-no-files-found: error
