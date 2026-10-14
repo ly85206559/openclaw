@@ -121,10 +121,10 @@ describe("web_fetch visibility through the real tool execute path", () => {
         text: string;
       };
       expect(result.extractor).toBe("raw-html");
-      expect(result.text).toContain(
+      expect(result.text, result.text).toContain(
         mode === "markdown"
-          ? "Prefix\nPlan Price\nStarter $9\n[Read](/guide) More\nAfter\n[One Two](/all)"
-          : "Prefix\nPlan Price\nStarter $9\nRead More\nAfter\nOne Two",
+          ? "Prefix\nPlan Price\nStarter $9\n[Read](/guide) More\n\nAfter\n[One Two](/all)"
+          : "Prefix\nPlan Price\nStarter $9\nRead More\n\nAfter\nOne Two",
       );
     },
   );
