@@ -133,7 +133,7 @@ jobs:
           NODE
           node scripts/run-tsgo.mjs --project .artifacts/tlon-proof-types/tsconfig.json --noEmit > "$RUNNER_TEMP/tlon-proof/types.log" 2>&1
           cp "$RUNNER_TEMP/tlon-proof/workflow.yml" .github/workflows/proof-tlon-code-fences.yml
-          pnpm check:workflows > "$RUNNER_TEMP/tlon-proof/workflows.log" 2>&1
+          env -u GH_TOKEN -u GITHUB_TOKEN pnpm check:workflows > "$RUNNER_TEMP/tlon-proof/workflows.log" 2>&1
           git diff --check
           git diff --exit-code
           git diff --name-only > "$RUNNER_TEMP/tlon-proof/final-diff.txt"
