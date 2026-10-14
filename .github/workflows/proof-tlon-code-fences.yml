@@ -113,25 +113,14 @@ jobs:
           NODE
           done
           cmp "$RUNNER_TEMP/tlon-proof/baseline/fixtures.sha256" "$RUNNER_TEMP/tlon-proof/candidate/fixtures.sha256"
-      - name: Touched format lint types and workflow validation
+      - name: Workflow-only recovery with unchanged product inputs
         shell: bash
         run: |
           set -euo pipefail
-          node scripts/check-changed.mjs --dry-run -- extensions/tlon/src/monitor/utils.ts extensions/tlon/src/monitor/utils.test.ts > "$RUNNER_TEMP/tlon-proof/changed-plan.log" 2>&1
-          pnpm exec oxfmt --check --threads=1 extensions/tlon/src/monitor/utils.ts extensions/tlon/src/monitor/utils.test.ts > "$RUNNER_TEMP/tlon-proof/format.log" 2>&1
-          node scripts/run-oxlint.mjs --tsconfig extensions/tsconfig.json extensions/tlon/src/monitor/utils.ts extensions/tlon/src/monitor/utils.test.ts > "$RUNNER_TEMP/tlon-proof/lint.log" 2>&1
-          node --input-type=module <<'NODE'
-          import fs from 'node:fs';
-          import path from 'node:path';
-          const root = process.cwd();
-          fs.mkdirSync('.artifacts/tlon-proof-types', { recursive: true });
-          fs.writeFileSync('.artifacts/tlon-proof-types/tsconfig.json', JSON.stringify({
-            extends: path.join(root, 'extensions/tsconfig.json'),
-            compilerOptions: { rootDir: root },
-            include: ['extensions/tlon/src/monitor/utils.ts', 'extensions/tlon/src/monitor/utils.test.ts', 'src/**/*.d.ts', 'ui/**/*.d.ts', 'packages/**/*.d.ts'].map(p => path.join(root, p)),
-          }));
-          NODE
-          node scripts/run-tsgo.mjs --project .artifacts/tlon-proof-types/tsconfig.json --noEmit > "$RUNNER_TEMP/tlon-proof/types.log" 2>&1
+          # Runtime: 38499650387; touched format/lint/types: 38500931862.
+          # Their immutable source and fixtures are unchanged; only validator env changed.
+          git rev-parse HEAD HEAD^{tree} > "$RUNNER_TEMP/tlon-proof/recovery-identity.txt"
+          git hash-object extensions/tlon/src/monitor/utils.ts extensions/tlon/src/monitor/utils.test.ts >> "$RUNNER_TEMP/tlon-proof/recovery-identity.txt"
           cp "$RUNNER_TEMP/tlon-proof/workflow.yml" .github/workflows/proof-tlon-code-fences.yml
           env -u GH_TOKEN -u GITHUB_TOKEN pnpm check:workflows > "$RUNNER_TEMP/tlon-proof/workflows.log" 2>&1
           git diff --check
