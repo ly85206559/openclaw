@@ -1,0 +1,100 @@
+diff --git a/src/gateway/server.sessions.plugin-cleanup.test.ts b/src/gateway/server.sessions.plugin-cleanup.test.ts
+new file mode 100644
+index 00000000000..6823c535056
+--- /dev/null
++++ b/src/gateway/server.sessions.plugin-cleanup.test.ts
+@@ -0,0 +1,94 @@
++import path from "node:path";
++import { expect, test } from "vitest";
++import { loadSessionEntry } from "../config/sessions/session-accessor.js";
++import { flushLogger, resetLogger, setLoggerOverride } from "../logging/logger.js";
++import { createDiagnosticLogRecordCapture } from "../logging/test-helpers/diagnostic-log-capture.js";
++import { getTestPluginRegistry, setTestPluginRegistry } from "./test-helpers.plugin-registry.js";
++import { writeSessionStore } from "./test-helpers.js";
++import {
++  directSessionReq,
++  sessionStoreEntry,
++  setupGatewaySessionsHandlerTestHarness,
++} from "./test/server-sessions.test-helpers.js";
++
++const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
++
++test.for(["sessions.reset", "sessions.delete"] as const)(
++  "%s reports plugin cleanup failures at info logging level and finishes cleanup",
++  async (method) => {
++    const { dir, storePath } = await createSessionStoreDir();
++    const sessionKey = "agent:main:plugin-cleanup-warning";
++    const sessionId = "plugin-cleanup-session";
++    await writeSessionStore({
++      entries: {
++        [sessionKey]: sessionStoreEntry(sessionId, { lifecycleRevision: "before-cleanup" }),
++      },
++    });
++    const scope = { agentId: "main", sessionKey, storePath };
++    const before = loadSessionEntry(scope);
++    const previousLifecycles = getTestPluginRegistry().runtimeLifecycles;
++    const callbacks: string[] = [];
++    setTestPluginRegistry({
++      ...getTestPluginRegistry(),
++      runtimeLifecycles: [
++        {
++          pluginId: "cleanup-fixture",
++          source: "cleanup-fixture.js",
++          lifecycle: {
++            id: "throwing",
++            cleanup: ({ reason, sessionKey }) => {
++              callbacks.push(`throwing:${reason}:${sessionKey}`);
++              throw new Error("cleanup boom");
++            },
++          },
++        },
++        {
++          pluginId: "cleanup-fixture",
++          source: "cleanup-fixture.js",
++          lifecycle: {
++            id: "sibling",
++            cleanup: ({ reason, sessionKey }) => {
++              callbacks.push(`sibling:${reason}:${sessionKey}`);
++            },
++          },
++        },
++      ],
++    });
++    const capture = createDiagnosticLogRecordCapture();
++    setLoggerOverride({ level: "info", consoleLevel: "silent", file: path.join(dir, "cleanup.log") });
++    try {
++      const result = await directSessionReq(method, { key: sessionKey });
++      expect(result.error).toBeUndefined();
++      expect(result.ok).toBe(true);
++      const reason = method === "sessions.reset" ? "reset" : "delete";
++      expect(callbacks).toEqual([
++        `throwing:${reason}:${sessionKey}`,
++        `sibling:${reason}:${sessionKey}`,
++      ]);
++      const after = loadSessionEntry(scope);
++      if (method === "sessions.delete") {
++        expect(result.payload).toMatchObject({ deleted: true });
++        expect(after).toBeUndefined();
++      } else {
++        expect(after?.sessionId).toBe(sessionId);
++        expect(after?.lifecycleRevision).toEqual(expect.any(String));
++        expect(after?.lifecycleRevision).not.toBe(before?.lifecycleRevision);
++      }
++      await flushLogger();
++      await capture.flush();
++      const warnings = capture.records
++        .filter((record) => record.message.startsWith("plugin host cleanup failed for "))
++        .map(({ level, message }) => ({ level, message }));
++      expect(warnings).toEqual([
++        {
++          level: "WARN",
++          message: "plugin host cleanup failed for cleanup-fixture/runtime:throwing: Error: cleanup boom",
++        },
++      ]);
++    } finally {
++      capture.cleanup();
++      resetLogger();
++      setTestPluginRegistry({ ...getTestPluginRegistry(), runtimeLifecycles: previousLifecycles });
++    }
++  },
++);

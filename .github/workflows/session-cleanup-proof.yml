@@ -1,0 +1,111 @@
+name: Session cleanup warning proof
+
+on:
+  push:
+    branches: [codex/proof-web-fidelity-20261015]
+    paths: [.github/workflows/session-cleanup-proof.yml]
+  workflow_dispatch:
+    inputs:
+      mode:
+        type: choice
+        options: [baseline, candidate]
+        default: baseline
+      source_sha:
+        type: string
+        default: "4996ce6e54ab1adafb01dcd9533f614abe4ea4fa"
+
+permissions:
+  contents: read
+
+env:
+  PROOF_MODE: ${{ inputs.mode || 'baseline' }}
+  SOURCE_SHA: ${{ inputs.source_sha || '4996ce6e54ab1adafb01dcd9533f614abe4ea4fa' }}
+
+jobs:
+  proof:
+    strategy:
+      fail-fast: false
+      matrix:
+        lane: [native, gateway]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: proof
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: ly85206559/openclaw
+          ref: ${{ env.SOURCE_SHA }}
+          path: source
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24.21.0"
+      - uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+          package_json_file: source/package.json
+      - name: Pin clean source and proof
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_SHA" =~ ^[a-f0-9]{40}$ ]]
+          case "$PROOF_MODE" in baseline) test "$SOURCE_SHA" = 4996ce6e54ab1adafb01dcd9533f614abe4ea4fa ;; candidate) test "$SOURCE_SHA" != 4996ce6e54ab1adafb01dcd9533f614abe4ea4fa ;; *) exit 2 ;; esac
+          mkdir -p "$RUNNER_TEMP/cleanup-proof"
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          git rev-parse HEAD 'HEAD^{tree}' > "$RUNNER_TEMP/cleanup-proof/source-binding.txt"
+          test -z "$(git status --porcelain)"
+          sha256sum src/gateway/session-lifecycle-cleanup.ts src/gateway/session-reset-service.ts package.json pnpm-lock.yaml > "$RUNNER_TEMP/cleanup-proof/source-sha256.txt"
+          sha256sum ../proof/.proof/session-cleanup/* > "$RUNNER_TEMP/cleanup-proof/proof-sha256.txt"
+          node --check ../proof/.proof/session-cleanup/gateway-cleanup.mjs
+      - name: Canonical frozen installation
+        working-directory: source
+        run: pnpm install --frozen-lockfile
+      - name: Registered-handler regression
+        if: matrix.lane == 'native'
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$PROOF_MODE" = baseline ]; then git apply ../proof/.proof/session-cleanup/regression.patch; fi
+          sha256sum src/gateway/server.sessions.plugin-cleanup.test.ts > "$RUNNER_TEMP/cleanup-proof/regression-sha256.txt"
+          pnpm exec oxfmt --stdin-filepath src/gateway/server.sessions.plugin-cleanup.test.ts < src/gateway/server.sessions.plugin-cleanup.test.ts > "$RUNNER_TEMP/cleanup-proof/regression.formatted.ts"
+          pnpm test src/gateway/server.sessions.plugin-cleanup.test.ts --maxWorkers=1 --reporter=json --outputFile="$RUNNER_TEMP/cleanup-proof/tests.json" > "$RUNNER_TEMP/cleanup-proof/tests.log" 2>&1
+      - name: Canonical bounded runtime build
+        if: matrix.lane == 'gateway'
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          env -i HOME="$HOME" PATH="$PATH" PNPM_HOME="$PNPM_HOME" CI=true GITHUB_ACTIONS=true NO_COLOR=1 \
+            node --import ./scripts/tsx.mjs scripts/build-all.mts qaRuntime > "$RUNNER_TEMP/cleanup-proof/build.log" 2>&1
+          cp dist/.buildstamp "$RUNNER_TEMP/cleanup-proof/buildstamp.json"
+          env -i HOME="$HOME" PATH="$PATH" CI=true GITHUB_ACTIONS=true NO_COLOR=1 \
+            PROOF_MODE="$PROOF_MODE" SOURCE_SHA="$SOURCE_SHA" PROOF_OUTPUT_DIR="$RUNNER_TEMP/cleanup-proof" \
+            node ../proof/.proof/session-cleanup/gateway-cleanup.mjs > "$RUNNER_TEMP/cleanup-proof/proof.log" 2>&1
+      - name: Verify source and proof custody
+        if: always()
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          sha256sum --check "$RUNNER_TEMP/cleanup-proof/source-sha256.txt"
+          sha256sum --check "$RUNNER_TEMP/cleanup-proof/proof-sha256.txt"
+          if [ -f "$RUNNER_TEMP/cleanup-proof/regression-sha256.txt" ]; then sha256sum --check "$RUNNER_TEMP/cleanup-proof/regression-sha256.txt"; fi
+          test -z "$(git status --porcelain --untracked-files=no)"
+          git status --porcelain > "$RUNNER_TEMP/cleanup-proof/final-status.txt"
+          if [ "$PROOF_MODE" = baseline ] && [ '${{ matrix.lane }}' = native ]; then
+            test "$(cat "$RUNNER_TEMP/cleanup-proof/final-status.txt")" = '?? src/gateway/server.sessions.plugin-cleanup.test.ts'
+          else
+            test ! -s "$RUNNER_TEMP/cleanup-proof/final-status.txt"
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: session-cleanup-${{ env.PROOF_MODE }}-${{ matrix.lane }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/cleanup-proof
+          if-no-files-found: error
