@@ -1,5 +1,5 @@
 diff --git a/src/agents/tools/web-fetch-visibility.tool-extraction.test.ts b/src/agents/tools/web-fetch-visibility.tool-extraction.test.ts
-index b26a9b8f7da..24e42e1510a 100644
+index b26a9b8f7da..c708b989b5a 100644
 --- a/src/agents/tools/web-fetch-visibility.tool-extraction.test.ts
 +++ b/src/agents/tools/web-fetch-visibility.tool-extraction.test.ts
 @@ -15,6 +15,8 @@ const MARKDOWN_PAGES: Record<string, string> = {
@@ -7,7 +7,7 @@ index b26a9b8f7da..24e42e1510a 100644
  const PAGES: Record<string, string> = {
    ...MARKDOWN_PAGES,
 +  "/table-cells":
-+    '<p>Pre<span>fix</span></p><table><tr><th>Plan</th><th>Price</th></tr><tr><td>Starter<td>$9</tr><tr><td><a href="/guide">Read</a></td><td>More</td></tr></table><p>After</p>',
++    '<p>Pre<span>fix</span></p><table><tr><th>Plan</th><th>Price</th></tr><tr><td>Starter<td>$9</tr><tr><td><a href="/guide">Read</a></td><td>More</td></tr></table><p>After</p><a href="/all"><table><tr><td>One</td><td>Two</td></tr></table></a>',
    "/implicit-nested-siblings":
      "<ul><li hidden><ul><li>A<li>B</li></ul>Secret</li></ul><p>Visible</p>",
    "/unmatched-container": "<p hidden>Before</div>Secret</p><p>Visible</p>",
@@ -23,10 +23,10 @@ index b26a9b8f7da..24e42e1510a 100644
 +        text: string;
 +      };
 +      expect(result.extractor).toBe("raw-html");
-+      expect(result.text).toContain(
++      expect(result.text, result.text).toContain(
 +        mode === "markdown"
-+          ? "Prefix\nPlan Price\nStarter $9\n[Read](/guide) More\nAfter"
-+          : "Prefix\nPlan Price\nStarter $9\nRead More\nAfter",
++          ? "Prefix\nPlan Price\nStarter $9\n[Read](/guide) More\n\nAfter\n[One Two](/all)"
++          : "Prefix\nPlan Price\nStarter $9\nRead More\n\nAfter\nOne Two",
 +      );
 +    },
 +  );
