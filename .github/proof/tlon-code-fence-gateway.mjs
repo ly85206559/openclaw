@@ -193,6 +193,7 @@ async function sendCell({ name, group = false, code, denied = false }) {
     return;
   }
   const entry = await until(async () => (await providerRequests()).slice(before)
+    .filter((request) => request.inferenceFacts?.purpose === "other")
     .find((request) => currentUserText(request)?.includes(marker)), `${name} real provider request`);
   await until(() => sentProofAnswers().length > answerCount, `${name} real Tlon reply`);
   const userText = currentUserText(entry);
@@ -204,6 +205,7 @@ async function sendCell({ name, group = false, code, denied = false }) {
     assert(userText.includes(`\`\`\`markdown\n${value}\n\`\`\``), "Ordinary producer bytes changed");
   }
   captures.push({ name, marker, expectedCode: code ? value : undefined, userText, tokens,
+    requestPurpose: entry.inferenceFacts.purpose,
     rawRequestSeq: entry.seq, nativeReply: sentProofAnswers().at(-1), intact });
   console.log("GATEWAY_CONTEXT_CAPTURE " + JSON.stringify({ mode, name, userText, intact,
     codeNodes: tokens.filter((token) => token.type === "code").map(({ lang, text }) => ({ lang, text })) }));
