@@ -1,0 +1,91 @@
+name: Web whitespace built Gateway proof
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        type: choice
+        options: [baseline, candidate]
+        default: candidate
+
+permissions:
+  contents: read
+
+jobs:
+  gateway:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      PROOF_MODE: ${{ inputs.mode }}
+      SOURCE_SHA: ${{ inputs.mode == 'baseline' && '7665342bcbb06b90ed1a0e0b251336a1e0831516' || 'bbf6cff27aa4c4dede53e73919ba4d277fb3b179' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          path: proof
+      - uses: actions/checkout@v4
+        with:
+          repository: ly85206559/openclaw
+          ref: ${{ env.SOURCE_SHA }}
+          persist-credentials: false
+          path: source
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24.21.0"
+      - uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+          package_json_file: source/package.json
+      - name: Pin source and proof without fixture patches
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$PROOF_MODE" in baseline|candidate) ;; *) exit 2 ;; esac
+          mkdir -p "$RUNNER_TEMP/web-gateway"
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          git rev-parse HEAD 'HEAD^{tree}' > "$RUNNER_TEMP/web-gateway/source-binding.txt"
+          test -z "$(git status --porcelain)"
+          test ! -e dist/entry.js
+          sha256sum src/agents/tools/web-fetch-utils.ts src/agents/tools/web-fetch.ts package.json pnpm-lock.yaml > "$RUNNER_TEMP/web-gateway/source-sha256.txt"
+          sha256sum ../proof/.proof/web-fidelity/gateway-whitespace.mjs > "$RUNNER_TEMP/web-gateway/proof-sha256.txt"
+          node --check ../proof/.proof/web-fidelity/gateway-whitespace.mjs
+      - name: Canonical frozen installation
+        working-directory: source
+        run: pnpm install --frozen-lockfile
+      - name: Canonical bounded runtime build
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          env -i HOME="$HOME" PATH="$PATH" PNPM_HOME="$PNPM_HOME" CI=true GITHUB_ACTIONS=true NO_COLOR=1 \
+            node --import ./scripts/tsx.mjs scripts/build-all.mts qaRuntime \
+            > "$RUNNER_TEMP/web-gateway/build.log" 2>&1
+          cp dist/.buildstamp "$RUNNER_TEMP/web-gateway/buildstamp.json"
+          sha256sum dist/entry.js > "$RUNNER_TEMP/web-gateway/built-entry-sha256.txt"
+      - name: Supported CLI to authenticated Gateway to real HTTP content
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          env -i HOME="$HOME" PATH="$PATH" CI=true GITHUB_ACTIONS=true NO_COLOR=1 \
+            PROOF_MODE="$PROOF_MODE" SOURCE_SHA="$SOURCE_SHA" PROOF_OUTPUT_DIR="$RUNNER_TEMP/web-gateway" \
+            node ../proof/.proof/web-fidelity/gateway-whitespace.mjs \
+            > "$RUNNER_TEMP/web-gateway/proof.log" 2>&1
+      - name: Verify unchanged source and proof
+        if: always()
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          sha256sum --check "$RUNNER_TEMP/web-gateway/source-sha256.txt"
+          sha256sum --check "$RUNNER_TEMP/web-gateway/proof-sha256.txt"
+          git status --porcelain --untracked-files=no > "$RUNNER_TEMP/web-gateway/final-status.txt"
+          test ! -s "$RUNNER_TEMP/web-gateway/final-status.txt"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: web-whitespace-gateway-${{ env.PROOF_MODE }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/web-gateway
+          if-no-files-found: error
