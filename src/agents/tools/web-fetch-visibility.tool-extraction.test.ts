@@ -5,13 +5,13 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createWebFetchTool } from "./web-fetch.js";
 
 const MARKDOWN_CODE =
-  "# Example\n\n- Read [the guide](https://example.com).\n\n```text\n# comment\n- literal\n1. literal\n[label](https://example.com)\n![alt](image.png)\n`value`\n    if enabled:\n        print(\"two  spaces\")\n\n\n\treturn True\n```";
+  '# Example\n\n- Read [the guide](https://example.com).\n\n```text\n# comment\n- literal\n1. literal\n[label](https://example.com)\n![alt](image.png)\n`value`\n    if enabled:\n        print("two  spaces")\n\n\n\treturn True\n```';
 
 const MARKDOWN_PAGES: Record<string, string> = {
   "/markdown-code": MARKDOWN_CODE,
   "/markdown-unclosed": "```text\n# literal\n- literal",
   "/markdown-whitespace-unclosed":
-    "```python\n    if enabled:\n        print(\"two  spaces\")\n\n\n\treturn True",
+    '```python\n    if enabled:\n        print("two  spaces")\n\n\n\treturn True',
   "/markdown-inline-fence-prose": "Use ``` to start a code block.\nNext paragraph.",
 };
 
@@ -124,7 +124,7 @@ describe("web_fetch visibility through the real tool execute path", () => {
       expect(result.text).toContain(
         mode === "markdown"
           ? MARKDOWN_CODE
-          : "Example\n\nRead the guide.\n\n# comment\n- literal\n1. literal\n[label](https://example.com)\n![alt](image.png)\n`value`\n    if enabled:\n        print(\"two  spaces\")\n\n\n\treturn True",
+          : 'Example\n\nRead the guide.\n\n# comment\n- literal\n1. literal\n[label](https://example.com)\n![alt](image.png)\n`value`\n    if enabled:\n        print("two  spaces")\n\n\n\treturn True',
       );
     },
   );
@@ -133,7 +133,7 @@ describe("web_fetch visibility through the real tool execute path", () => {
     ["/markdown-unclosed", "# literal\n- literal"],
     [
       "/markdown-whitespace-unclosed",
-      "    if enabled:\n        print(\"two  spaces\")\n\n\n\treturn True",
+      '    if enabled:\n        print("two  spaces")\n\n\n\treturn True',
     ],
     ["/markdown-inline-fence-prose", "Use ``` to start a code block.\nNext paragraph."],
   ])("preserves Markdown content through HTTP text extraction for %s", async (path, expected) => {
