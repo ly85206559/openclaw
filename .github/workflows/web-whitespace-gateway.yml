@@ -1,6 +1,11 @@
 name: Web whitespace built Gateway proof
 
 on:
+  push:
+    branches: [codex/proof-web-fidelity-20261015]
+    paths:
+      - .github/workflows/web-whitespace-gateway.yml
+      - .proof/web-fidelity/gateway-whitespace.mjs
   workflow_dispatch:
     inputs:
       mode:
@@ -16,7 +21,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
-      PROOF_MODE: ${{ inputs.mode }}
+      PROOF_MODE: ${{ inputs.mode || 'candidate' }}
       SOURCE_SHA: ${{ inputs.mode == 'baseline' && '7665342bcbb06b90ed1a0e0b251336a1e0831516' || 'bbf6cff27aa4c4dede53e73919ba4d277fb3b179' }}
     steps:
       - uses: actions/checkout@v4
