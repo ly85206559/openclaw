@@ -91,6 +91,18 @@ async function bounded(promise, milliseconds, message) {
     clearTimeout(timer);
   }
 }
+async function joinProcessGroup(pid, deadline) {
+  const started = Date.now();
+  while (true) {
+    try { process.kill(-pid, 0); }
+    catch (error) {
+      if (error.code === "ESRCH") return Date.now() - started;
+      throw error;
+    }
+    if (Date.now() >= deadline) throw new Error("Gateway process group did not exit within shutdown budget");
+    await new Promise((resolve) => setTimeout(resolve, Math.min(50, deadline - Date.now())));
+  }
+}
 let fixturePort;
 let gatewayPort;
 let child;
@@ -213,8 +225,12 @@ try {
   receipt.errors.push(sanitize(error.stack ?? error));
 } finally {
   if (child?.pid && childClosed) {
+    const shutdownDeadline = Date.now() + 15_000;
     try { process.kill(-child.pid, "SIGTERM"); } catch (error) { if (error.code !== "ESRCH") receipt.errors.push(error.message); }
-    try { receipt.cleanup.childExit = await bounded(childClosed, 15_000, "Gateway shutdown did not join"); }
+    try {
+      receipt.cleanup.childExit = await bounded(childClosed, Math.max(1, shutdownDeadline - Date.now()), "Gateway shutdown did not join");
+      receipt.cleanup.processGroupWaitMs = await joinProcessGroup(child.pid, shutdownDeadline);
+    }
     catch (error) {
       receipt.errors.push(error.message);
       receipt.cleanup.forcedKill = true;
