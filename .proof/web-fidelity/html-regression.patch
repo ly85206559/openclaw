@@ -1,0 +1,36 @@
+diff --git a/src/agents/tools/web-fetch-visibility.tool-extraction.test.ts b/src/agents/tools/web-fetch-visibility.tool-extraction.test.ts
+index b26a9b8f7da..24e42e1510a 100644
+--- a/src/agents/tools/web-fetch-visibility.tool-extraction.test.ts
++++ b/src/agents/tools/web-fetch-visibility.tool-extraction.test.ts
+@@ -15,6 +15,8 @@ const MARKDOWN_PAGES: Record<string, string> = {
+ 
+ const PAGES: Record<string, string> = {
+   ...MARKDOWN_PAGES,
++  "/table-cells":
++    '<p>Pre<span>fix</span></p><table><tr><th>Plan</th><th>Price</th></tr><tr><td>Starter<td>$9</tr><tr><td><a href="/guide">Read</a></td><td>More</td></tr></table><p>After</p>',
+   "/implicit-nested-siblings":
+     "<ul><li hidden><ul><li>A<li>B</li></ul>Secret</li></ul><p>Visible</p>",
+   "/unmatched-container": "<p hidden>Before</div>Secret</p><p>Visible</p>",
+@@ -111,6 +113,22 @@ describe("web_fetch visibility through the real tool execute path", () => {
+     expect(text).not.toContain("Secret class note");
+   });
+ 
++  it.each(["text", "markdown"] as const)(
++    "keeps adjacent HTML table cells distinct in %s mode",
++    async (mode) => {
++      const result = JSON.parse(await extract("/table-cells", mode)) as {
++        extractor: string;
++        text: string;
++      };
++      expect(result.extractor).toBe("raw-html");
++      expect(result.text).toContain(
++        mode === "markdown"
++          ? "Prefix\nPlan Price\nStarter $9\n[Read](/guide) More\nAfter"
++          : "Prefix\nPlan Price\nStarter $9\nRead More\nAfter",
++      );
++    },
++  );
++
+   it.each(["text", "markdown"] as const)(
+     "preserves code examples through HTTP Markdown extraction in %s mode",
+     async (mode) => {

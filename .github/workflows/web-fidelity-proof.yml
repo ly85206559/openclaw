@@ -1,9 +1,6 @@
 name: Web extraction fidelity proof
 
 on:
-  push:
-    branches: [codex/proof-web-fidelity-20261015]
-    paths: [.github/workflows/web-fidelity-proof.yml]
   workflow_dispatch:
     inputs:
       lane:
@@ -94,6 +91,20 @@ jobs:
           printf '%s\n' "$result" > "$RUNNER_TEMP/web-fidelity/test-exit-code.txt"
           cat "$RUNNER_TEMP/web-fidelity/http.log"
           exit "$result"
+      - name: Candidate helper siblings and targeted static checks
+        if: env.PROOF_MODE == 'candidate'
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            node scripts/check-changed.mjs --dry-run -- src/agents/tools/web-fetch-utils.ts src/agents/tools/web-fetch-visibility.tool-extraction.test.ts
+            pnpm exec oxfmt --check src/agents/tools/web-fetch-utils.ts src/agents/tools/web-fetch-visibility.tool-extraction.test.ts
+            node scripts/run-oxlint.mjs --tsconfig tsconfig.core.json src/agents/tools/web-fetch-utils.ts
+            node scripts/run-oxlint.mjs --tsconfig test/tsconfig/tsconfig.core.test.agents-tools.json src/agents/tools/web-fetch-visibility.tool-extraction.test.ts
+            node scripts/run-tsgo.mjs -p test/tsconfig/tsconfig.core.test.agents-tools.json --pretty false
+            /usr/bin/time -p pnpm test src/agents/tools/web-fetch-utils.test.ts --maxWorkers=1 --reporter=json --outputFile="$RUNNER_TEMP/web-fidelity/helpers.json"
+          } > "$RUNNER_TEMP/web-fidelity/targeted-checks.log" 2>&1
       - name: Verify source custody
         if: always()
         working-directory: source
