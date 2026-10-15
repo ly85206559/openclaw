@@ -160,7 +160,9 @@ export async function classifyAttachmentBytes(params: {
     (detectedClass !== "binary" && !hasUtf16Bom)
   ) {
     let charset =
-      detectedClass === "text" ? (resolveUtf16Charset(params.buffer) ?? declaredCharset) : undefined;
+      detectedClass === "text"
+        ? (resolveUtf16Charset(params.buffer) ?? declaredCharset)
+        : undefined;
     if (
       detectedClass === "text" &&
       !charset &&
