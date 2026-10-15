@@ -160,15 +160,11 @@ export async function classifyAttachmentBytes(params: {
     (detectedClass !== "binary" && !hasUtf16Bom)
   ) {
     let charset =
-      detectedClass === "text"
-        ? (resolveUtf16Charset(params.buffer) ?? declaredCharset)
-        : undefined;
+      detectedClass === "text" ? (resolveUtf16Charset(params.buffer) ?? declaredCharset) : undefined;
     if (
       detectedClass === "text" &&
       !charset &&
-      !mimeHints.some((hint) =>
-        /;\s*charset\s*=/i.test(hint ?? ""),
-      ) &&
+      !mimeHints.some((hint) => /;\s*charset\s*=/i.test(hint ?? "")) &&
       sniffTextCharset(params.buffer) === "windows-1252"
     ) {
       // A text filename identifies the MIME, not its encoding. Preserve the same
