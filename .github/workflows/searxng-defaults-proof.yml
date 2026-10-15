@@ -218,7 +218,7 @@ jobs:
               'applies the configured timeout to the real request while allowing a longer budget',
             ]);
             assert.match(failed[0].failureMessages.join('\n'), /AssertionError/);
-            assert.match(failed[0].failureMessages.join('\n'), /count[^\n]*4/);
+            assert.match(failed[0].failureMessages.join('\n'), /to match object \{ count: 1[,}]/);
             assert.match(failed[1].failureMessages.join('\n'), /promise resolved[\s\S]*instead of rejecting/);
           }
           NODE
