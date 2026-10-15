@@ -1,0 +1,108 @@
+name: SearXNG existing installation upgrade proof
+
+on:
+  push:
+    branches: [codex/proof-searxng-defaults-candidate-20261016]
+    paths:
+      - .github/workflows/searxng-installed-upgrade.yml
+      - .proof/searxng-defaults/installed-upgrade.mjs
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  SOURCE_SHA: e9d96ad33a6531c9ded348234e3202163f3b6519
+
+jobs:
+  upgrade:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: proof
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: ly85206559/openclaw
+          ref: ${{ env.SOURCE_SHA }}
+          path: source
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24.21.0"
+      - uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+          package_json_file: source/package.json
+      - name: Bind exact clean source and proof
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test "$(git rev-parse 'HEAD^{tree}')" = f1b86f9c1a711a4f702180dd94f0b623480800ba
+          test -z "$(git status --porcelain)"
+          mkdir -p "$RUNNER_TEMP/searxng-upgrade" "$RUNNER_TEMP/searxng-upgrade-packages/core" "$RUNNER_TEMP/searxng-upgrade-packages/plugin"
+          git rev-parse HEAD 'HEAD^{tree}' > "$RUNNER_TEMP/searxng-upgrade/source-binding.txt"
+          sha256sum package.json pnpm-lock.yaml extensions/searxng/package.json extensions/searxng/src/searxng-client.ts extensions/searxng/src/searxng-search-provider.ts > "$RUNNER_TEMP/searxng-upgrade/source-sha256.txt"
+          sha256sum ../proof/.proof/searxng-defaults/installed-upgrade.mjs > "$RUNNER_TEMP/searxng-upgrade/driver-sha256.txt"
+          node --check ../proof/.proof/searxng-defaults/installed-upgrade.mjs
+      - name: Frozen candidate dependencies
+        working-directory: source
+        run: pnpm install --frozen-lockfile
+      - name: Canonical candidate core build and pack
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          env -i HOME="$HOME" PATH="$PATH" PNPM_HOME="$PNPM_HOME" CI=true GITHUB_ACTIONS=true NO_COLOR=1 \
+            node scripts/package-openclaw-for-docker.mjs \
+            --output-dir "$RUNNER_TEMP/searxng-upgrade-packages/core" --output-name openclaw-candidate.tgz \
+            --pack-json "$RUNNER_TEMP/searxng-upgrade/core-pack.json" \
+            > "$RUNNER_TEMP/searxng-upgrade/core-pack.stdout.log" 2> "$RUNNER_TEMP/searxng-upgrade/core-build-pack.log"
+          cp dist/.buildstamp "$RUNNER_TEMP/searxng-upgrade/buildstamp.json"
+      - name: Canonical candidate SearXNG plugin build and pack only
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          env -i HOME="$HOME" PATH="$PATH" PNPM_HOME="$PNPM_HOME" CI=true GITHUB_ACTIONS=true NO_COLOR=1 \
+            OPENCLAW_PLUGIN_NPM_PACK_OUTPUT_DIR="$RUNNER_TEMP/searxng-upgrade-packages/plugin" \
+            bash scripts/plugin-npm-publish.sh --pack extensions/searxng \
+            > "$RUNNER_TEMP/searxng-upgrade/plugin-pack.json" 2> "$RUNNER_TEMP/searxng-upgrade/plugin-build-pack.log"
+          test -f "$RUNNER_TEMP/searxng-upgrade-packages/plugin/openclaw-searxng-plugin-2026.10.3.tgz"
+          sha256sum "$RUNNER_TEMP/searxng-upgrade-packages/core/openclaw-candidate.tgz" \
+            "$RUNNER_TEMP/searxng-upgrade-packages/plugin/openclaw-searxng-plugin-2026.10.3.tgz" > "$RUNNER_TEMP/searxng-upgrade/candidate-artifact-sha256.txt"
+      - name: Published installed updater and existing SearXNG settings
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          env -i HOME="$HOME" PATH="$PATH" CI=true GITHUB_ACTIONS=true NO_COLOR=1 \
+            SOURCE_SHA="$SOURCE_SHA" PROOF_OUTPUT_DIR="$RUNNER_TEMP/searxng-upgrade" \
+            CANDIDATE_CORE_TARBALL="$RUNNER_TEMP/searxng-upgrade-packages/core/openclaw-candidate.tgz" \
+            CANDIDATE_PLUGIN_TARBALL="$RUNNER_TEMP/searxng-upgrade-packages/plugin/openclaw-searxng-plugin-2026.10.3.tgz" \
+            node ../proof/.proof/searxng-defaults/installed-upgrade.mjs \
+            > "$RUNNER_TEMP/searxng-upgrade/proof.log" 2>&1
+      - name: Source and artifact custody
+        if: always()
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          sha256sum --check "$RUNNER_TEMP/searxng-upgrade/source-sha256.txt"
+          sha256sum --check "$RUNNER_TEMP/searxng-upgrade/driver-sha256.txt"
+          if test -f "$RUNNER_TEMP/searxng-upgrade/candidate-artifact-sha256.txt"; then
+            sha256sum --check "$RUNNER_TEMP/searxng-upgrade/candidate-artifact-sha256.txt"
+          fi
+          git status --porcelain > "$RUNNER_TEMP/searxng-upgrade/final-status.txt"
+          test ! -s "$RUNNER_TEMP/searxng-upgrade/final-status.txt"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: searxng-installed-upgrade-${{ github.run_id }}
+          path: ${{ runner.temp }}/searxng-upgrade
+          if-no-files-found: error
