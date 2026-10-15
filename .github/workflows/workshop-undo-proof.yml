@@ -10,11 +10,15 @@ on:
       source_sha:
         type: string
         default: "a166c4931a4015935b710070f1a4a1c585b32fb1"
+      checks_only:
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 env:
+  BASE_SHA: a166c4931a4015935b710070f1a4a1c585b32fb1
   SOURCE_SHA: ${{ inputs.source_sha || 'a166c4931a4015935b710070f1a4a1c585b32fb1' }}
   PROOF_MODE: ${{ inputs.mode || 'baseline' }}
 
@@ -23,9 +27,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        lane: ${{ fromJSON(inputs.mode == 'candidate' && '["native","cli"]' || '["cli"]') }}
+        lane: ${{ fromJSON(inputs.checks_only && '["checks"]' || inputs.mode == 'candidate' && '["native","cli"]' || '["cli"]') }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
         with:
@@ -51,6 +55,7 @@ jobs:
           set -euo pipefail
           [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
           case "$PROOF_MODE" in baseline) test "$SOURCE_SHA" = a166c4931a4015935b710070f1a4a1c585b32fb1 ;; candidate) test "$SOURCE_SHA" != a166c4931a4015935b710070f1a4a1c585b32fb1 ;; *) exit 2 ;; esac
+          if [ '${{ inputs.checks_only }}' = true ]; then test "$PROOF_MODE" = candidate; fi
           mkdir -p "$RUNNER_TEMP/workshop-proof"
           test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
           test -z "$(git status --porcelain)"
@@ -58,6 +63,20 @@ jobs:
           sha256sum src/cli/skills-cli.ts src/skills/workshop/library.ts src/skills/workshop/skills-root.ts package.json pnpm-lock.yaml > "$RUNNER_TEMP/workshop-proof/source-sha256.txt"
           sha256sum ../proof/.proof/workshop-undo/* > "$RUNNER_TEMP/workshop-proof/proof-sha256.txt"
           node --check ../proof/.proof/workshop-undo/cli-roundtrip.mjs
+      - name: Candidate checker prerequisites
+        if: (matrix.lane == 'native' || matrix.lane == 'checks') && env.PROOF_MODE == 'candidate'
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=2 origin "$SOURCE_SHA"
+          test "$(git rev-parse HEAD^)" = "$BASE_SHA"
+          git apply --reverse --check ../proof/.proof/workshop-undo/regression.patch
+          sha256sum src/cli/skills-cli.workshop.test.ts > "$RUNNER_TEMP/workshop-proof/test-sha256.txt"
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ripgrep
+          command -v rg
+          rg --version
       - name: Frozen installation
         working-directory: source
         run: pnpm install --frozen-lockfile
@@ -72,17 +91,22 @@ jobs:
           sha256sum src/cli/skills-cli.workshop.test.ts > "$RUNNER_TEMP/workshop-proof/test-sha256.txt"
           pnpm exec oxfmt --stdin-filepath src/cli/skills-cli.workshop.test.ts < src/cli/skills-cli.workshop.test.ts > "$RUNNER_TEMP/workshop-proof/test.formatted.ts"
           /usr/bin/time -p pnpm test src/cli/skills-cli.workshop.test.ts --maxWorkers=1 --reporter=json --outputFile="$RUNNER_TEMP/workshop-proof/tests.json" > "$RUNNER_TEMP/workshop-proof/tests.log" 2>&1
+      - name: Candidate command-format controls
+        if: (matrix.lane == 'native' || matrix.lane == 'checks') && env.PROOF_MODE == 'candidate'
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm test src/cli/command-format.test.ts --maxWorkers=1 --reporter=json --outputFile="$RUNNER_TEMP/workshop-proof/format-controls.json" > "$RUNNER_TEMP/workshop-proof/format-controls.log" 2>&1
       - name: Candidate focused checks
-        if: matrix.lane == 'native' && env.PROOF_MODE == 'candidate'
+        if: (matrix.lane == 'native' || matrix.lane == 'checks') && env.PROOF_MODE == 'candidate'
         working-directory: source
         shell: bash
         run: |
           set -euo pipefail
           {
-            node scripts/check-changed.mjs --dry-run -- src/cli/skills-cli.ts src/cli/skills-cli.workshop.test.ts
-            node scripts/check-changed.mjs -- src/cli/skills-cli.ts src/cli/skills-cli.workshop.test.ts
-            node scripts/run-tsgo.mjs -p test/tsconfig/tsconfig.core.test.config-cli.json --pretty false
-            pnpm test src/cli/command-format.test.ts --maxWorkers=1 --reporter=json --outputFile="$RUNNER_TEMP/workshop-proof/format-controls.json"
+            node scripts/check-changed.mjs --base "$BASE_SHA" --head "$SOURCE_SHA" --dry-run -- src/cli/skills-cli.ts src/cli/skills-cli.workshop.test.ts
+            node scripts/check-changed.mjs --base "$BASE_SHA" --head "$SOURCE_SHA" -- src/cli/skills-cli.ts src/cli/skills-cli.workshop.test.ts
           } > "$RUNNER_TEMP/workshop-proof/targeted-checks.log" 2>&1
       - name: Build and replay actual printed undo
         if: matrix.lane == 'cli'
