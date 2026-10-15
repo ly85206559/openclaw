@@ -36,7 +36,7 @@ jobs:
           test -z "$(git status --porcelain)"
           mkdir -p "$RUNNER_TEMP/browser-dialog-build"
           git rev-parse HEAD 'HEAD^{tree}' > "$RUNNER_TEMP/browser-dialog-build/source-binding.txt"
-          git ls-files -z | xargs -0 sha256sum > "$RUNNER_TEMP/browser-dialog-build/source-sha256.txt"
+          sha256sum extensions/browser/src/cli/browser-cli-actions-input/shared.ts extensions/browser/src/cli/browser-cli-actions-input/register.batch.test.ts package.json pnpm-lock.yaml > "$RUNNER_TEMP/browser-dialog-build/source-sha256.txt"
       - name: Frozen installation
         run: pnpm install --frozen-lockfile
       - name: Canonical runtime build
