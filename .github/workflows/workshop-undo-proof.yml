@@ -16,6 +16,9 @@ on:
       parent_deadcode_only:
         type: boolean
         default: false
+      focused_only:
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -60,6 +63,11 @@ jobs:
           case "$PROOF_MODE" in baseline) test "$SOURCE_SHA" = a166c4931a4015935b710070f1a4a1c585b32fb1 ;; candidate) test "$SOURCE_SHA" != a166c4931a4015935b710070f1a4a1c585b32fb1 ;; *) exit 2 ;; esac
           if [ '${{ inputs.checks_only }}' = true ]; then test "$PROOF_MODE" = candidate; fi
           if [ '${{ inputs.parent_deadcode_only }}' = true ]; then test "$PROOF_MODE" = baseline; fi
+          if [ '${{ inputs.focused_only }}' = true ]; then
+            test "$PROOF_MODE" = candidate
+            test '${{ inputs.checks_only }}' != true
+            test '${{ inputs.parent_deadcode_only }}' != true
+          fi
           mkdir -p "$RUNNER_TEMP/workshop-proof"
           test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
           test -z "$(git status --porcelain)"
@@ -74,7 +82,11 @@ jobs:
         run: |
           set -euo pipefail
           git fetch --no-tags --depth=2 origin "$SOURCE_SHA"
-          test "$(git rev-parse HEAD^)" = "$BASE_SHA"
+          if [ '${{ inputs.focused_only }}' = true ]; then
+            test "$(git rev-parse HEAD^2)" = 68fed4aa461d2f1bc090d2385440ec21cbe6f181
+          else
+            test "$(git rev-parse HEAD^)" = "$BASE_SHA"
+          fi
           git apply --reverse --check ../proof/.proof/workshop-undo/regression.patch
           sha256sum src/cli/skills-cli.workshop.test.ts > "$RUNNER_TEMP/workshop-proof/test-sha256.txt"
           sudo apt-get update
@@ -94,6 +106,7 @@ jobs:
           git apply --reverse --check ../proof/.proof/workshop-undo/regression.patch
           sha256sum src/cli/skills-cli.workshop.test.ts > "$RUNNER_TEMP/workshop-proof/test-sha256.txt"
           pnpm exec oxfmt --stdin-filepath src/cli/skills-cli.workshop.test.ts < src/cli/skills-cli.workshop.test.ts > "$RUNNER_TEMP/workshop-proof/test.formatted.ts"
+          cmp src/cli/skills-cli.workshop.test.ts "$RUNNER_TEMP/workshop-proof/test.formatted.ts"
           /usr/bin/time -p pnpm test src/cli/skills-cli.workshop.test.ts --maxWorkers=1 --reporter=json --outputFile="$RUNNER_TEMP/workshop-proof/tests.json" > "$RUNNER_TEMP/workshop-proof/tests.log" 2>&1
       - name: Canonical pristine-parent dead export replay
         if: matrix.lane == 'deadcode'
@@ -110,7 +123,7 @@ jobs:
           set -euo pipefail
           pnpm test src/cli/profile.test.ts --maxWorkers=1 --reporter=json --outputFile="$RUNNER_TEMP/workshop-proof/format-controls.json" > "$RUNNER_TEMP/workshop-proof/format-controls.log" 2>&1
       - name: Candidate focused checks
-        if: (matrix.lane == 'native' || matrix.lane == 'checks') && env.PROOF_MODE == 'candidate'
+        if: (matrix.lane == 'native' || matrix.lane == 'checks') && env.PROOF_MODE == 'candidate' && !inputs.focused_only
         working-directory: source
         shell: bash
         run: |
@@ -141,6 +154,21 @@ jobs:
           sha256sum --check "$RUNNER_TEMP/workshop-proof/source-sha256.txt"
           sha256sum --check "$RUNNER_TEMP/workshop-proof/proof-sha256.txt"
           if [ -f "$RUNNER_TEMP/workshop-proof/test-sha256.txt" ]; then sha256sum --check "$RUNNER_TEMP/workshop-proof/test-sha256.txt"; fi
+          if [ '${{ matrix.lane }}' = native ] && [ "$PROOF_MODE" = candidate ]; then
+            node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import assert from 'node:assert/strict';
+          for (const [file, total] of [['tests.json', 10], ['format-controls.json', 18]]) {
+            const result = JSON.parse(fs.readFileSync(`${process.env.RUNNER_TEMP}/workshop-proof/${file}`, 'utf8'));
+            assert.equal(result.numTotalTests, total);
+            assert.equal(result.numPassedTests, total);
+            assert.equal(result.numFailedTests, 0);
+            assert.equal(result.numPendingTests, 0);
+            assert.equal(result.numTodoTests, 0);
+            assert.equal(result.success, true);
+          }
+          NODE
+          fi
           git status --porcelain > "$RUNNER_TEMP/workshop-proof/final-status.txt"
           if [ "$PROOF_MODE" = baseline ] && [ '${{ matrix.lane }}' = native ]; then
             test "$(cat "$RUNNER_TEMP/workshop-proof/final-status.txt")" = ' M src/cli/skills-cli.workshop.test.ts'
