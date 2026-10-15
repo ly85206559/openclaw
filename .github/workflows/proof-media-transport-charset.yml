@@ -115,6 +115,11 @@ jobs:
           assert.equal(process.env.PROOF_EXIT, process.env.PROOF_MODE === 'baseline' ? '1' : '0');
           console.log(JSON.stringify({mode:process.env.PROOF_MODE,collected:tests.length,failed:names,passed:tests.length-failed.length}));
           AUDIT
+            if [ "$MODE" = baseline ]; then
+              # Only discard this run's fixture overlay; its bytes and results are retained above.
+              git restore --source=HEAD --worktree -- src/media-understanding/file-context.test.ts
+              test -z "$(git status --porcelain)"
+            fi
           done
           test "$(git rev-parse HEAD)" = "$CANDIDATE"
           test -z "$(git status --porcelain)"
