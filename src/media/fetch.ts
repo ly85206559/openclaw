@@ -643,7 +643,9 @@ async function withGuardedMediaResponse<T>(
 }
 
 /** Fetches media through SSRF guards and returns the bounded response body as a buffer. */
-export async function readRemoteMediaBuffer(options: FetchMediaOptions): Promise<FetchMediaResult> {
+export async function readRemoteMediaBufferWithHeaders(
+  options: FetchMediaOptions,
+): Promise<FetchMediaResult & { headerContentType?: string }> {
   return await withGuardedMediaResponse(options, async ({ response: res, finalUrl, sourceUrl }) => {
     const effectiveMaxBytes = options.maxBytes ?? MAX_DOCUMENT_BYTES;
     assertMediaContentLength({ res, sourceUrl, maxBytes: effectiveMaxBytes });
@@ -671,9 +673,10 @@ export async function readRemoteMediaBuffer(options: FetchMediaOptions): Promise
 
     const fileNameExt = fileName ? extnameFromAnyPath(fileName) : undefined;
     const filePathForMime = fileNameExt ? fileName : (options.filePathHint ?? finalUrl);
+    const headerContentType = res.headers.get("content-type") ?? undefined;
     const contentType = await detectMime({
       buffer,
-      headerMime: res.headers.get("content-type"),
+      headerMime: headerContentType,
       filePath: filePathForMime,
     });
     if (fileName && !fileNameExt && contentType) {
@@ -686,9 +689,16 @@ export async function readRemoteMediaBuffer(options: FetchMediaOptions): Promise
     return {
       buffer,
       contentType: contentType ?? undefined,
+      headerContentType,
       fileName,
     };
   });
+}
+
+/** Preserve the public buffer result while internal text consumers retain decoder metadata. */
+export async function readRemoteMediaBuffer(options: FetchMediaOptions): Promise<FetchMediaResult> {
+  const { buffer, contentType, fileName } = await readRemoteMediaBufferWithHeaders(options);
+  return { buffer, contentType, fileName };
 }
 
 /** @deprecated Use `readRemoteMediaBuffer` for buffer reads or `saveRemoteMedia` for URL-to-store. */
