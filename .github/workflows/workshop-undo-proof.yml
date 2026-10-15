@@ -97,7 +97,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          pnpm test src/cli/command-format.test.ts --maxWorkers=1 --reporter=json --outputFile="$RUNNER_TEMP/workshop-proof/format-controls.json" > "$RUNNER_TEMP/workshop-proof/format-controls.log" 2>&1
+          pnpm test src/cli/profile.test.ts --maxWorkers=1 --reporter=json --outputFile="$RUNNER_TEMP/workshop-proof/format-controls.json" > "$RUNNER_TEMP/workshop-proof/format-controls.log" 2>&1
       - name: Candidate focused checks
         if: (matrix.lane == 'native' || matrix.lane == 'checks') && env.PROOF_MODE == 'candidate'
         working-directory: source
