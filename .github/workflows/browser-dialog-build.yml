@@ -1,0 +1,60 @@
+name: Browser dialog exact-head build
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      SOURCE_SHA: a9f8fa35372173e60d8fafd3e9ee17bc900f3dd2
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ly85206559/openclaw
+          ref: a9f8fa35372173e60d8fafd3e9ee17bc900f3dd2
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24.21.0"
+      - uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+      - name: Bind pristine candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test "$(git rev-parse 'HEAD^{tree}')" = 5315ed86a653fde2600fb06c9b39c0deed2c2006
+          test -z "$(git status --porcelain)"
+          mkdir -p "$RUNNER_TEMP/browser-dialog-build"
+          git rev-parse HEAD 'HEAD^{tree}' > "$RUNNER_TEMP/browser-dialog-build/source-binding.txt"
+          git ls-files -z | xargs -0 sha256sum > "$RUNNER_TEMP/browser-dialog-build/source-sha256.txt"
+      - name: Frozen installation
+        run: pnpm install --frozen-lockfile
+      - name: Canonical runtime build
+        shell: bash
+        run: |
+          set -euo pipefail
+          env -i HOME="$HOME" PATH="$PATH" PNPM_HOME="$PNPM_HOME" CI=true GITHUB_ACTIONS=true NO_COLOR=1 \
+            pnpm build qaRuntime > "$RUNNER_TEMP/browser-dialog-build/build.log" 2>&1
+          cp dist/.buildstamp "$RUNNER_TEMP/browser-dialog-build/buildstamp.json"
+      - name: Source custody
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          sha256sum --check "$RUNNER_TEMP/browser-dialog-build/source-sha256.txt" > "$RUNNER_TEMP/browser-dialog-build/source-audit.log" 2>&1
+          git status --porcelain > "$RUNNER_TEMP/browser-dialog-build/final-status.txt"
+          test ! -s "$RUNNER_TEMP/browser-dialog-build/final-status.txt"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: browser-dialog-build-${{ github.run_id }}
+          path: ${{ runner.temp }}/browser-dialog-build
+          if-no-files-found: error
