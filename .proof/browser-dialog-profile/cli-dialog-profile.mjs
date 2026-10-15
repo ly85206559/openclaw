@@ -260,7 +260,7 @@ try {
     browser: {
       enabled: true, defaultProfile: "openclaw", tabCleanup: { enabled: false },
       ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
-      profiles: Object.fromEntries(contexts.map(({ profile, cdpUrl }) => [profile, { cdpUrl, attachOnly: true, color: "#123456" }])),
+      profiles: Object.fromEntries(contexts.map(({ profile, cdpUrl }) => [profile, { cdpUrl, attachOnly: true }])),
     },
     skills: { load: { watch: false }, workshop: { autonomous: { mode: "off" } } },
     cron: { enabled: false }, discovery: { mdns: { mode: "off" } },
