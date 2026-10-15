@@ -8,6 +8,9 @@ on:
       source_sha:
         type: string
         default: "a166c4931a4015935b710070f1a4a1c585b32fb1"
+      native_only:
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -18,6 +21,7 @@ env:
 
 jobs:
   chromium:
+    if: ${{ !inputs.native_only }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -103,4 +107,114 @@ jobs:
         with:
           name: browser-dialog-profile-${{ github.run_id }}
           path: ${{ runner.temp }}/browser-dialog-proof
+          if-no-files-found: error
+
+  native:
+    if: ${{ inputs.native_only || (inputs.source_sha && inputs.source_sha != 'a166c4931a4015935b710070f1a4a1c585b32fb1') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: proof
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: ly85206559/openclaw
+          ref: ${{ env.SOURCE_SHA }}
+          path: source
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24.21.0"
+      - uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+          package_json_file: source/package.json
+      - name: Bind exact source and regression
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test -z "$(git status --porcelain)"
+          mkdir -p "$RUNNER_TEMP/browser-dialog-native"
+          git rev-parse HEAD 'HEAD^{tree}' > "$RUNNER_TEMP/browser-dialog-native/source-binding.txt"
+          sha256sum extensions/browser/src/cli/browser-cli-actions-input/shared.ts package.json pnpm-lock.yaml > "$RUNNER_TEMP/browser-dialog-native/source-sha256.txt"
+          sha256sum ../proof/.proof/browser-dialog-profile/* > "$RUNNER_TEMP/browser-dialog-native/proof-sha256.txt"
+          if [ "$SOURCE_SHA" = a166c4931a4015935b710070f1a4a1c585b32fb1 ]; then
+            git apply --unidiff-zero ../proof/.proof/browser-dialog-profile/regression.patch
+          else
+            git fetch --no-tags --depth=2 origin "$SOURCE_SHA"
+            test "$(git rev-parse HEAD^)" = a166c4931a4015935b710070f1a4a1c585b32fb1
+          fi
+          git apply --unidiff-zero --reverse --check ../proof/.proof/browser-dialog-profile/regression.patch
+          sha256sum extensions/browser/src/cli/browser-cli-actions-input/register.batch.test.ts > "$RUNNER_TEMP/browser-dialog-native/test-sha256.txt"
+      - name: Frozen installation
+        working-directory: source
+        run: pnpm install --frozen-lockfile
+      - name: Native caller recovery regression
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          target=extensions/browser/src/cli/browser-cli-actions-input/register.batch.test.ts
+          pnpm exec oxfmt --stdin-filepath "$target" < "$target" > "$RUNNER_TEMP/browser-dialog-native/test.formatted.ts"
+          cmp "$target" "$RUNNER_TEMP/browser-dialog-native/test.formatted.ts"
+          pnpm test "$target" --maxWorkers=1 --reporter=json --outputFile="$RUNNER_TEMP/browser-dialog-native/tests.json" > "$RUNNER_TEMP/browser-dialog-native/tests.log" 2>&1
+      - name: Candidate full scoped checker
+        if: env.SOURCE_SHA != 'a166c4931a4015935b710070f1a4a1c585b32fb1'
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ripgrep
+          {
+            node scripts/check-changed.mjs --base a166c4931a4015935b710070f1a4a1c585b32fb1 --head "$SOURCE_SHA" --dry-run -- extensions/browser/src/cli/browser-cli-actions-input/shared.ts extensions/browser/src/cli/browser-cli-actions-input/register.batch.test.ts
+            node scripts/check-changed.mjs --base a166c4931a4015935b710070f1a4a1c585b32fb1 --head "$SOURCE_SHA" -- extensions/browser/src/cli/browser-cli-actions-input/shared.ts extensions/browser/src/cli/browser-cli-actions-input/register.batch.test.ts
+          } > "$RUNNER_TEMP/browser-dialog-native/checks.log" 2>&1
+      - name: Candidate canonical runtime build
+        if: env.SOURCE_SHA != 'a166c4931a4015935b710070f1a4a1c585b32fb1'
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          env -i HOME="$HOME" PATH="$PATH" PNPM_HOME="$PNPM_HOME" CI=true GITHUB_ACTIONS=true NO_COLOR=1 \
+            pnpm build qaRuntime > "$RUNNER_TEMP/browser-dialog-native/build.log" 2>&1
+          cp dist/.buildstamp "$RUNNER_TEMP/browser-dialog-native/buildstamp.json"
+      - name: Source custody and no-skips audit
+        if: always()
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          sha256sum --check "$RUNNER_TEMP/browser-dialog-native/source-sha256.txt"
+          sha256sum --check "$RUNNER_TEMP/browser-dialog-native/proof-sha256.txt"
+          sha256sum --check "$RUNNER_TEMP/browser-dialog-native/test-sha256.txt"
+          git status --porcelain > "$RUNNER_TEMP/browser-dialog-native/final-status.txt"
+          if [ "$SOURCE_SHA" = a166c4931a4015935b710070f1a4a1c585b32fb1 ]; then
+            test "$(cat "$RUNNER_TEMP/browser-dialog-native/final-status.txt")" = ' M extensions/browser/src/cli/browser-cli-actions-input/register.batch.test.ts'
+          else
+            test ! -s "$RUNNER_TEMP/browser-dialog-native/final-status.txt"
+          fi
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import assert from 'node:assert/strict';
+          const result = JSON.parse(fs.readFileSync(`${process.env.RUNNER_TEMP}/browser-dialog-native/tests.json`, 'utf8'));
+          assert.equal(result.numTotalTests, 13);
+          assert.equal(result.numPendingTests, 0);
+          assert.equal(result.numTodoTests, 0);
+          assert.equal(result.numPassedTests + result.numFailedTests, 13);
+          assert.equal(result.testResults.length, 1);
+          assert.equal(result.testResults[0].assertionResults.length, 13);
+          assert.ok(result.testResults[0].assertionResults.every((test) => ['passed', 'failed'].includes(test.status)));
+          NODE
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: browser-dialog-native-${{ github.run_id }}
+          path: ${{ runner.temp }}/browser-dialog-native
           if-no-files-found: error

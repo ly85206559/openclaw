@@ -1,0 +1,41 @@
+diff --git a/extensions/browser/src/cli/browser-cli-actions-input/register.batch.test.ts b/extensions/browser/src/cli/browser-cli-actions-input/register.batch.test.ts
+index 77fca76e6ae..b9219ebcb98 100644
+--- a/extensions/browser/src/cli/browser-cli-actions-input/register.batch.test.ts
++++ b/extensions/browser/src/cli/browser-cli-actions-input/register.batch.test.ts
+@@ -1,0 +2 @@
++import { expectDefined } from "@openclaw/normalization-core";
+@@ -84,0 +86,34 @@ describe("browser action input batch command", () => {
++  it.each([undefined, "work", " work ", "-work"])(
++    "keeps the selected profile %s when replaying a modal recovery hint",
++    async (profile) => {
++      mocks.callBrowserRequest.mockResolvedValueOnce({
++        ok: true,
++        blockedByDialog: true,
++        browserState: { dialogs: { pending: [{ id: "d1" }] } },
++      });
++      const args = ["browser"];
++      if (profile !== undefined) {
++        args.push("--browser-profile", profile);
++      }
++      await createActionInputProgram().parseAsync([...args, "click", "e1"], { from: "user" });
++
++      const hint = getBrowserCliRuntimeCapture().runtimeLogs.join("\n");
++      const command = expectDefined(
++        hint.match(/Use (openclaw browser .+) to continue\./)?.[1],
++        "modal recovery command",
++      );
++      const replay = command
++        .replace("--accept or --dismiss", "--accept")
++        .replace("--dialog-id <id>", "--dialog-id d1");
++      await createActionInputProgram().parseAsync(replay.split(/\s+/).slice(1), { from: "user" });
++
++      expect(mocks.callBrowserRequest).toHaveBeenCalledTimes(2);
++      expect(mocks.callBrowserRequest.mock.calls.at(-1)?.[1]).toMatchObject({
++        method: "POST",
++        path: "/hooks/dialog",
++        query: profile ? { profile: profile.trim() } : undefined,
++        body: { accept: true, dialogId: "d1" },
++      });
++    },
++  );
++
