@@ -1,0 +1,125 @@
+name: Workshop undo agent proof
+
+on:
+  push:
+    branches: [codex/proof-workshop-undo-20261016]
+    paths: [.github/workflows/workshop-undo-proof.yml]
+  workflow_dispatch:
+    inputs:
+      mode:
+        type: choice
+        options: [baseline, candidate]
+        default: baseline
+      source_sha:
+        type: string
+        default: "a166c4931a4015935b710070f1a4a1c585b32fb1"
+
+permissions:
+  contents: read
+
+env:
+  SOURCE_SHA: ${{ inputs.source_sha || 'a166c4931a4015935b710070f1a4a1c585b32fb1' }}
+  PROOF_MODE: ${{ inputs.mode || 'baseline' }}
+
+jobs:
+  proof:
+    strategy:
+      fail-fast: false
+      matrix:
+        lane: [native, cli]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: proof
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: ly85206559/openclaw
+          ref: ${{ env.SOURCE_SHA }}
+          path: source
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24.21.0"
+      - uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+          package_json_file: source/package.json
+      - name: Bind pristine source and proof
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          case "$PROOF_MODE" in baseline) test "$SOURCE_SHA" = a166c4931a4015935b710070f1a4a1c585b32fb1 ;; candidate) test "$SOURCE_SHA" != a166c4931a4015935b710070f1a4a1c585b32fb1 ;; *) exit 2 ;; esac
+          mkdir -p "$RUNNER_TEMP/workshop-proof"
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test -z "$(git status --porcelain)"
+          git rev-parse HEAD 'HEAD^{tree}' > "$RUNNER_TEMP/workshop-proof/source-binding.txt"
+          sha256sum src/cli/skills-cli.ts src/skills/workshop/library.ts src/skills/workshop/skills-root.ts package.json pnpm-lock.yaml > "$RUNNER_TEMP/workshop-proof/source-sha256.txt"
+          sha256sum ../proof/.proof/workshop-undo/* > "$RUNNER_TEMP/workshop-proof/proof-sha256.txt"
+          node --check ../proof/.proof/workshop-undo/cli-roundtrip.mjs
+      - name: Frozen installation
+        working-directory: source
+        run: pnpm install --frozen-lockfile
+      - name: Registered CLI regression
+        if: matrix.lane == 'native'
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$PROOF_MODE" = baseline ]; then git apply ../proof/.proof/workshop-undo/regression.patch; fi
+          git apply --reverse --check ../proof/.proof/workshop-undo/regression.patch
+          sha256sum src/cli/skills-cli.workshop.test.ts > "$RUNNER_TEMP/workshop-proof/test-sha256.txt"
+          pnpm exec oxfmt --stdin-filepath src/cli/skills-cli.workshop.test.ts < src/cli/skills-cli.workshop.test.ts > "$RUNNER_TEMP/workshop-proof/test.formatted.ts"
+          /usr/bin/time -p pnpm test src/cli/skills-cli.workshop.test.ts --maxWorkers=1 --reporter=json --outputFile="$RUNNER_TEMP/workshop-proof/tests.json" > "$RUNNER_TEMP/workshop-proof/tests.log" 2>&1
+      - name: Candidate focused checks
+        if: matrix.lane == 'native' && env.PROOF_MODE == 'candidate'
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            node scripts/check-changed.mjs --dry-run -- src/cli/skills-cli.ts src/cli/skills-cli.workshop.test.ts
+            pnpm exec oxfmt --check src/cli/skills-cli.ts src/cli/skills-cli.workshop.test.ts
+            node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.core.json src/cli/skills-cli.ts src/cli/skills-cli.workshop.test.ts
+            node scripts/run-tsgo.mjs -p tsconfig.core.json --pretty false
+            node scripts/run-tsgo.mjs -p test/tsconfig/tsconfig.core.test.config-cli.json --pretty false
+            pnpm test src/cli/command-format.test.ts --maxWorkers=1 --reporter=json --outputFile="$RUNNER_TEMP/workshop-proof/format-controls.json"
+          } > "$RUNNER_TEMP/workshop-proof/targeted-checks.log" 2>&1
+      - name: Build and replay actual printed undo
+        if: matrix.lane == 'cli'
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          env -i HOME="$HOME" PATH="$PATH" PNPM_HOME="$PNPM_HOME" CI=true GITHUB_ACTIONS=true NO_COLOR=1 \
+            pnpm build qaRuntime > "$RUNNER_TEMP/workshop-proof/build.log" 2>&1
+          cp dist/.buildstamp "$RUNNER_TEMP/workshop-proof/buildstamp.json"
+          env -i HOME="$HOME" PATH="$PATH" CI=true GITHUB_ACTIONS=true NO_COLOR=1 \
+            SOURCE_SHA="$SOURCE_SHA" PROOF_MODE="$PROOF_MODE" PROOF_OUTPUT_DIR="$RUNNER_TEMP/workshop-proof" \
+            node ../proof/.proof/workshop-undo/cli-roundtrip.mjs > "$RUNNER_TEMP/workshop-proof/proof.log" 2>&1
+      - name: Source custody
+        if: always()
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          sha256sum --check "$RUNNER_TEMP/workshop-proof/source-sha256.txt"
+          sha256sum --check "$RUNNER_TEMP/workshop-proof/proof-sha256.txt"
+          if [ -f "$RUNNER_TEMP/workshop-proof/test-sha256.txt" ]; then sha256sum --check "$RUNNER_TEMP/workshop-proof/test-sha256.txt"; fi
+          git status --porcelain > "$RUNNER_TEMP/workshop-proof/final-status.txt"
+          if [ "$PROOF_MODE" = baseline ] && [ '${{ matrix.lane }}' = native ]; then
+            test "$(cat "$RUNNER_TEMP/workshop-proof/final-status.txt")" = ' M src/cli/skills-cli.workshop.test.ts'
+          else
+            test ! -s "$RUNNER_TEMP/workshop-proof/final-status.txt"
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: workshop-undo-${{ env.PROOF_MODE }}-${{ matrix.lane }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/workshop-proof
+          if-no-files-found: error
