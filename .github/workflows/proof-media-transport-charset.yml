@@ -15,8 +15,8 @@ jobs:
       GITHUB_TOKEN: ""
       OPENAI_API_KEY: ""
       ANTHROPIC_API_KEY: ""
-      CANDIDATE: 58f34346aee78299bf54cab77092b3eb6c7c7443
-      BASELINE: 5c26beee43a306682cdb0d7e182585dec8bbafde
+      CANDIDATE: 8ec8b5590d6b6e47b3c53419cb8d423d8ce0015c
+      BASELINE: 6b3617207ac19f95b960434c635fd902cc242d85
       OPENCLAW_VITEST_MAX_WORKERS: 1
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -146,5 +146,11 @@ jobs:
         if: always()
         with:
           name: remote-document-charset-${{ github.run_id }}
-          path: ${{ runner.temp }}/charset-proof/
+          path: |
+            ${{ runner.temp }}/charset-proof/*.json
+            ${{ runner.temp }}/charset-proof/*.log
+            ${{ runner.temp }}/charset-proof/*.txt
+            ${{ runner.temp }}/charset-proof/*.sha256
+            ${{ runner.temp }}/charset-proof/fixture.ts
+            ${{ runner.temp }}/charset-proof/runtime-reporter.mjs
           retention-days: 30
