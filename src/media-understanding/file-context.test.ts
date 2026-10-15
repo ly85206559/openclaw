@@ -15,30 +15,73 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 describe("remote document charset", () => {
   const cyrillic = Buffer.from([0xcf, 0xf0, 0xe8, 0xe2, 0xe5, 0xf2, 0x20, 0x88]);
   const cases = [
-    { name: "transport charset", buffer: cyrillic, header: "text/plain; charset=windows-1251", expected: "Привет €" },
-    { name: "quoted transport alias", buffer: cyrillic, header: 'text/plain; charset="cp1251"', expected: "Привет €" },
-    { name: "channel type without charset", buffer: cyrillic, header: "text/plain; charset=windows-1251", mime: "text/plain", expected: "Привет €" },
-    { name: "channel charset precedence", buffer: cyrillic, header: "text/plain; charset=windows-1251", mime: "text/plain; charset=windows-1252", expected: "Ïðèâåò ˆ" },
-    { name: "byte-detected UTF-16", buffer: Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from("Привет €", "utf16le")]), header: "text/plain; charset=windows-1251", expected: "Привет €" },
-    { name: "UTF-8 default", buffer: Buffer.from("Привет €"), header: "text/plain", expected: "Привет €" },
-    { name: "unknown charset fallback", buffer: Buffer.from("Привет €"), header: "text/plain; charset=not-an-encoding", expected: "Привет €" },
-    { name: "inferred legacy text", buffer: Buffer.from("Café notes: résumé et météo pour demain.", "latin1"), header: "text/plain", expected: "Café notes: résumé et météo pour demain." },
+    {
+      name: "transport charset",
+      buffer: cyrillic,
+      header: "text/plain; charset=windows-1251",
+      expected: "Привет €",
+    },
+    {
+      name: "quoted transport alias",
+      buffer: cyrillic,
+      header: 'text/plain; charset="cp1251"',
+      expected: "Привет €",
+    },
+    {
+      name: "channel type without charset",
+      buffer: cyrillic,
+      header: "text/plain; charset=windows-1251",
+      mime: "text/plain",
+      expected: "Привет €",
+    },
+    {
+      name: "channel charset precedence",
+      buffer: cyrillic,
+      header: "text/plain; charset=windows-1251",
+      mime: "text/plain; charset=windows-1252",
+      expected: "Ïðèâåò ˆ",
+    },
+    {
+      name: "byte-detected UTF-16",
+      buffer: Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from("Привет €", "utf16le")]),
+      header: "text/plain; charset=windows-1251",
+      expected: "Привет €",
+    },
+    {
+      name: "UTF-8 default",
+      buffer: Buffer.from("Привет €"),
+      header: "text/plain",
+      expected: "Привет €",
+    },
+    {
+      name: "unknown charset fallback",
+      buffer: Buffer.from("Привет €"),
+      header: "text/plain; charset=not-an-encoding",
+      expected: "Привет €",
+    },
+    {
+      name: "inferred legacy text",
+      buffer: Buffer.from("Café notes: résumé et météo pour demain.", "latin1"),
+      header: "text/plain",
+      expected: "Café notes: résumé et météo pour demain.",
+    },
   ];
   let fixture: Awaited<ReturnType<typeof reserveTestPortListener<ReturnType<typeof createServer>>>>;
 
   beforeAll(async () => {
     fixture = await reserveTestPortListener({
       offsets: [0],
-      createListener: () => createServer((request, response) => {
-        const index = Number(request.url?.slice(1).split(".")[0]);
-        const entry = cases[index];
-        if (!entry) {
-          response.writeHead(404).end();
-          return;
-        }
-        response.writeHead(200, { "Content-Type": entry.header });
-        response.end(entry.buffer);
-      }),
+      createListener: () =>
+        createServer((request, response) => {
+          const index = Number(request.url?.slice(1).split(".")[0]);
+          const entry = cases[index];
+          if (!entry) {
+            response.writeHead(404).end();
+            return;
+          }
+          response.writeHead(200, { "Content-Type": entry.header });
+          response.end(entry.buffer);
+        }),
     });
   });
 
