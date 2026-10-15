@@ -146,8 +146,8 @@ jobs:
           if [ "$SOURCE_SHA" = a166c4931a4015935b710070f1a4a1c585b32fb1 ]; then
             git apply --unidiff-zero ../proof/.proof/browser-dialog-profile/regression.patch
           else
-            git fetch --no-tags --depth=2 origin "$SOURCE_SHA"
-            test "$(git rev-parse HEAD^)" = a166c4931a4015935b710070f1a4a1c585b32fb1
+            git fetch --no-tags --depth=3 origin "$SOURCE_SHA"
+            git merge-base --is-ancestor a166c4931a4015935b710070f1a4a1c585b32fb1 HEAD
           fi
           git apply --unidiff-zero --reverse --check ../proof/.proof/browser-dialog-profile/regression.patch
           sha256sum extensions/browser/src/cli/browser-cli-actions-input/register.batch.test.ts > "$RUNNER_TEMP/browser-dialog-native/test-sha256.txt"

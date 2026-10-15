@@ -1,13 +1,16 @@
 diff --git a/extensions/browser/src/cli/browser-cli-actions-input/register.batch.test.ts b/extensions/browser/src/cli/browser-cli-actions-input/register.batch.test.ts
-index 77fca76e6ae..b9219ebcb98 100644
+index 77fca76e6ae..7cd6ba64742 100644
 --- a/extensions/browser/src/cli/browser-cli-actions-input/register.batch.test.ts
 +++ b/extensions/browser/src/cli/browser-cli-actions-input/register.batch.test.ts
 @@ -1,0 +2 @@
 +import { expectDefined } from "@openclaw/normalization-core";
-@@ -84,0 +86,34 @@ describe("browser action input batch command", () => {
+@@ -9,0 +11 @@ import {
++  mockBrowserGateway,
+@@ -84,0 +87,36 @@ describe("browser action input batch command", () => {
 +  it.each([undefined, "work", " work ", "-work"])(
 +    "keeps the selected profile %s when replaying a modal recovery hint",
 +    async (profile) => {
++      const gateway = mockBrowserGateway();
 +      mocks.callBrowserRequest.mockResolvedValueOnce({
 +        ok: true,
 +        blockedByDialog: true,
@@ -29,8 +32,9 @@ index 77fca76e6ae..b9219ebcb98 100644
 +        .replace("--dialog-id <id>", "--dialog-id d1");
 +      await createActionInputProgram().parseAsync(replay.split(/\s+/).slice(1), { from: "user" });
 +
-+      expect(mocks.callBrowserRequest).toHaveBeenCalledTimes(2);
-+      expect(mocks.callBrowserRequest.mock.calls.at(-1)?.[1]).toMatchObject({
++      expect(mocks.callBrowserRequest).toHaveBeenCalledTimes(1);
++      expect(gateway).toHaveBeenCalledTimes(1);
++      expect(gateway.mock.calls[0]?.[2]).toMatchObject({
 +        method: "POST",
 +        path: "/hooks/dialog",
 +        query: profile ? { profile: profile.trim() } : undefined,
