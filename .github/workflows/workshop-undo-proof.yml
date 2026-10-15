@@ -26,7 +26,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        lane: [native, cli]
+        lane: ${{ fromJSON(inputs.mode == 'candidate' && '["native","cli"]' || '["cli"]') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:

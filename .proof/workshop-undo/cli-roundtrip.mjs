@@ -122,7 +122,7 @@ try {
     gateway: { mode: "local", port },
     plugins: { enabled: false, slots: { memory: "none" } },
     skills: { load: { watch: false }, workshop: { autonomous: { mode: "off" } } },
-    agents: { entries: {
+    agents: { ownership: "explicit", defaults: { systemAgent: { agentId: "main" } }, entries: {
       main: { workspace: source, agentDir: roots.main },
       writer: { workspace: path.join(fixture, "writer-workspace"), agentDir: roots.writer },
     } },
