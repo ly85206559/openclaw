@@ -224,16 +224,27 @@ async function unpack(name, archive) {
 async function compareInstalled(name, expected, installedRoot) {
   const root = await fs.realpath(installedRoot);
   assert.ok(root.startsWith(`${fixture}${path.sep}`), "runtime must be owned by the isolated installation, not the checkout");
+  const lifecycleMarkers = [];
+  let comparedFiles = 0;
   for (const file of expected.inventory.files) {
     const installed = path.join(root, file.path);
+    if (expected.inventory.manifest.name === "openclaw" && file.path === ".openclaw-lifecycle-pending") {
+      // scripts/postinstall-bundled-plugins.mjs consumes this shipped completion marker.
+      // Require completed lifecycle state rather than retaining the archive's pending state.
+      await assert.rejects(fs.lstat(installed), { code: "ENOENT" });
+      lifecycleMarkers.push({ ...file, installedState: "consumed-by-package-lifecycle" });
+      continue;
+    }
     const resolved = await fs.realpath(installed);
     assert.ok(resolved.startsWith(`${root}${path.sep}`), "installed package files cannot escape their owner");
     assert.equal((await fs.lstat(installed)).isFile(), true);
     assert.equal(sha256(await fs.readFile(installed)), file.sha256, `installed ${file.path} must equal the packed artifact`);
+    comparedFiles += 1;
   }
+  assert.equal(lifecycleMarkers.length, expected.inventory.manifest.name === "openclaw" ? 1 : 0);
   const verification = {
     root, archiveSha256: expected.inventory.archiveSha256,
-    comparedFiles: expected.inventory.files.length,
+    comparedFiles, lifecycleMarkers,
   };
   await fs.writeFile(path.join(output, `${name}.identity.json`), JSON.stringify(verification, null, 2));
   return verification;
