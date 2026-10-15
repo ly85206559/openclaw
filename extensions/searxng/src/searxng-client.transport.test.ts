@@ -202,7 +202,9 @@ describe("searxng real transport", () => {
         }, 2_000);
         response.once("close", () => {
           clearTimeout(timer);
-          if (isShortBudget) timedOutRequestClosed.resolve({ responseSent });
+          if (isShortBudget) {
+            timedOutRequestClosed.resolve({ responseSent });
+          }
         });
       }),
     );
