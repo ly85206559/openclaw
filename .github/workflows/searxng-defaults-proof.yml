@@ -1,0 +1,94 @@
+name: SearXNG configured defaults proof
+
+on:
+  push:
+    branches: [codex/proof-searxng-defaults-20261016]
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        type: string
+        default: "a166c4931a4015935b710070f1a4a1c585b32fb1"
+      mode:
+        type: choice
+        options: [baseline, candidate]
+        default: baseline
+
+permissions:
+  contents: read
+
+env:
+  SOURCE_SHA: ${{ inputs.source_sha || 'a166c4931a4015935b710070f1a4a1c585b32fb1' }}
+  PROOF_MODE: ${{ inputs.mode || 'baseline' }}
+
+jobs:
+  cli:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: proof
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: ly85206559/openclaw
+          ref: ${{ env.SOURCE_SHA }}
+          path: source
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24.21.0"
+      - uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+          package_json_file: source/package.json
+      - name: Bind pristine source and proof
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          case "$PROOF_MODE" in baseline) test "$SOURCE_SHA" = a166c4931a4015935b710070f1a4a1c585b32fb1 ;; candidate) test "$SOURCE_SHA" != a166c4931a4015935b710070f1a4a1c585b32fb1 ;; *) exit 2 ;; esac
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test -z "$(git status --porcelain)"
+          mkdir -p "$RUNNER_TEMP/searxng-defaults-proof"
+          git rev-parse HEAD 'HEAD^{tree}' > "$RUNNER_TEMP/searxng-defaults-proof/source-binding.txt"
+          sha256sum extensions/searxng/src/searxng-client.ts extensions/searxng/src/searxng-search-provider.ts src/cli/capability-cli/web.ts package.json pnpm-lock.yaml > "$RUNNER_TEMP/searxng-defaults-proof/source-sha256.txt"
+          sha256sum ../proof/.proof/searxng-defaults/* > "$RUNNER_TEMP/searxng-defaults-proof/proof-sha256.txt"
+          node --check ../proof/.proof/searxng-defaults/cli-defaults.mjs
+      - name: Frozen installation
+        working-directory: source
+        run: pnpm install --frozen-lockfile
+      - name: Canonical runtime build
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          env -i HOME="$HOME" PATH="$PATH" PNPM_HOME="$PNPM_HOME" CI=true GITHUB_ACTIONS=true NO_COLOR=1 \
+            pnpm build qaRuntime > "$RUNNER_TEMP/searxng-defaults-proof/build.log" 2>&1
+          cp dist/.buildstamp "$RUNNER_TEMP/searxng-defaults-proof/buildstamp.json"
+      - name: Actual supported CLI against loopback SearXNG
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          env -i HOME="$HOME" PATH="$PATH" CI=true GITHUB_ACTIONS=true NO_COLOR=1 \
+            SOURCE_SHA="$SOURCE_SHA" PROOF_MODE="$PROOF_MODE" PROOF_OUTPUT_DIR="$RUNNER_TEMP/searxng-defaults-proof" \
+            node ../proof/.proof/searxng-defaults/cli-defaults.mjs > "$RUNNER_TEMP/searxng-defaults-proof/proof.log" 2>&1
+      - name: Source custody
+        if: always()
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          sha256sum --check "$RUNNER_TEMP/searxng-defaults-proof/source-sha256.txt"
+          sha256sum --check "$RUNNER_TEMP/searxng-defaults-proof/proof-sha256.txt"
+          git status --porcelain > "$RUNNER_TEMP/searxng-defaults-proof/final-status.txt"
+          test ! -s "$RUNNER_TEMP/searxng-defaults-proof/final-status.txt"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: searxng-defaults-${{ env.PROOF_MODE }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/searxng-defaults-proof
+          if-no-files-found: error
