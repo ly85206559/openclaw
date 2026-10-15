@@ -9,13 +9,14 @@ jobs:
   proof:
     if: github.repository == 'ly85206559/openclaw'
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 25
     env:
       GH_TOKEN: ""
       GITHUB_TOKEN: ""
       OPENAI_API_KEY: ""
       ANTHROPIC_API_KEY: ""
-      PROOF_MODE: baseline
+      CANDIDATE: 2f34ad4073aa77d1e28034b39b70162d7afbf311
+      BASELINE: 5c26beee43a306682cdb0d7e182585dec8bbafde
       OPENCLAW_VITEST_MAX_WORKERS: 1
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -25,31 +26,45 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: 24.21.0
-      - name: Install exact source-pinned dependencies in secretless isolation
+      - name: Pin candidate and prepare exact-source dependencies
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/charset-proof"
-          git rev-parse HEAD HEAD^{tree} > "$RUNNER_TEMP/charset-proof/identity.txt"
-          git hash-object packages/media-core/src/attachment-classify.ts src/media/fetch.ts src/media-understanding/attachments.cache.ts src/media-understanding/file-context.test.ts >> "$RUNNER_TEMP/charset-proof/identity.txt"
+          git rev-parse HEAD > "$RUNNER_TEMP/charset-proof/carrier.txt"
+          git fetch --no-tags --depth=1 https://github.com/ly85206559/openclaw.git "$CANDIDATE" "$BASELINE"
+          git checkout --detach "$CANDIDATE"
+          test "$(git rev-parse HEAD)" = "$CANDIDATE"
+          cp src/media-understanding/file-context.test.ts "$RUNNER_TEMP/charset-proof/fixture.ts"
+          sha256sum "$RUNNER_TEMP/charset-proof/fixture.ts" > "$RUNNER_TEMP/charset-proof/fixture.sha256"
           corepack enable
           { node --version; node -p "require('./package.json').packageManager"; pnpm --version; } > "$RUNNER_TEMP/charset-proof/toolchain.txt"
           pnpm install --frozen-lockfile
-      - name: Real HTTP cache classification extraction and model-visible file block
+      - name: Paired real HTTP before and after with identical fixture
         shell: bash
         run: |
           set -euo pipefail
-          export PROOF_RESULTS="$RUNNER_TEMP/charset-proof/results.json"
           export OPENCLAW_VITEST_FS_MODULE_CACHE_PATH="$RUNNER_TEMP/charset-proof/vitest-cache"
-          START=$SECONDS
-          set +e
-          node scripts/run-vitest.mjs src/media-understanding/file-context.test.ts -t 'remote document charset' --maxWorkers=1 --reporter=verbose --reporter=json --outputFile="$PROOF_RESULTS" > "$RUNNER_TEMP/charset-proof/runtime.log" 2>&1
-          EXIT=$?
-          set -e
-          printf 'exit=%s\nwall_seconds=%s\n' "$EXIT" "$((SECONDS-START))" > "$RUNNER_TEMP/charset-proof/exit.txt"
-          cat "$RUNNER_TEMP/charset-proof/runtime.log"
-          export PROOF_EXIT="$EXIT"
-          node --input-type=module <<'AUDIT'
+          for MODE in baseline candidate; do
+            if [ "$MODE" = baseline ]; then REF="$BASELINE"; else REF="$CANDIDATE"; fi
+            git checkout --detach "$REF"
+            test "$(git rev-parse HEAD)" = "$REF"
+            cp "$RUNNER_TEMP/charset-proof/fixture.ts" src/media-understanding/file-context.test.ts
+            {
+              git rev-parse HEAD HEAD^{tree}
+              git hash-object packages/media-core/src/attachment-classify.ts src/media/fetch.ts src/media-understanding/attachments.cache.ts src/media-understanding/file-context.test.ts
+              git status --short
+            } > "$RUNNER_TEMP/charset-proof/$MODE-identity.txt"
+            export PROOF_MODE="$MODE"
+            export PROOF_RESULTS="$RUNNER_TEMP/charset-proof/$MODE-results.json"
+            set +e
+            node scripts/run-vitest.mjs src/media-understanding/file-context.test.ts -t 'remote document charset' --maxWorkers=1 --reporter=verbose --reporter=json --outputFile="$PROOF_RESULTS" > "$RUNNER_TEMP/charset-proof/$MODE-runtime.log" 2>&1
+            EXIT=$?
+            set -e
+            printf 'exit=%s\n' "$EXIT" > "$RUNNER_TEMP/charset-proof/$MODE-exit.txt"
+            cat "$RUNNER_TEMP/charset-proof/$MODE-runtime.log"
+            export PROOF_EXIT="$EXIT"
+            node --input-type=module <<'AUDIT'
           import fs from 'node:fs';
           import assert from 'node:assert/strict';
           const result = JSON.parse(fs.readFileSync(process.env.PROOF_RESULTS, 'utf8'));
@@ -69,7 +84,28 @@ jobs:
           assert.equal(process.env.PROOF_EXIT, process.env.PROOF_MODE === 'baseline' ? '1' : '0');
           console.log(JSON.stringify({mode:process.env.PROOF_MODE,collected:tests.length,failed:names,passed:tests.length-failed.length}));
           AUDIT
-          exit "$EXIT"
+          done
+          test "$(git rev-parse HEAD)" = "$CANDIDATE"
+          test -z "$(git status --porcelain)"
+      - name: Related owner and existing mock regression suites
+        shell: bash
+        run: |
+          set -euo pipefail
+          export OPENCLAW_VITEST_FS_MODULE_CACHE_PATH="$RUNNER_TEMP/charset-proof/vitest-cache"
+          node scripts/run-vitest.mjs src/media-understanding/file-context.test.ts src/media-understanding/attachments.cache.test.ts src/media-understanding/media-understanding-url-fallback.test.ts src/media-understanding/apply.test.ts packages/media-core/src/attachment-classify.test.ts src/media/fetch.test.ts src/media/fetch.prototype-headers.test.ts src/media/input-files.extract.test.ts src/media/input-files.fetch-guard.test.ts --maxWorkers=1 --reporter=verbose --reporter=json --outputFile="$RUNNER_TEMP/charset-proof/regressions.json" 2>&1 | tee "$RUNNER_TEMP/charset-proof/regressions.log"
+      - name: Canonical changed-surface checks
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$CANDIDATE"
+          FILES=(packages/media-core/src/attachment-classify.ts src/media/fetch.ts src/media-understanding/attachments.cache.ts src/media-understanding/file-context.test.ts src/media-understanding/attachments.cache.test.ts src/media-understanding/media-understanding-url-fallback.test.ts src/media-understanding/apply.test.ts)
+          pnpm exec oxfmt --check "${FILES[@]}" 2>&1 | tee "$RUNNER_TEMP/charset-proof/format.log"
+          node scripts/run-oxlint.mjs "${FILES[@]}" 2>&1 | tee "$RUNNER_TEMP/charset-proof/lint.log"
+          node scripts/check-changed.mjs --dry-run -- "${FILES[@]}" > "$RUNNER_TEMP/charset-proof/changed-plan.log" 2>&1
+          node scripts/run-tsgo.mjs -p tsconfig.core.json --incremental --tsBuildInfoFile "$RUNNER_TEMP/charset-proof/core.tsbuildinfo" 2>&1 | tee "$RUNNER_TEMP/charset-proof/types.log"
+          git diff --check
+          test -z "$(git status --porcelain)"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: always()
         with:
