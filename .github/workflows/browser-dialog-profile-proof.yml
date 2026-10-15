@@ -1,0 +1,106 @@
+name: Browser dialog profile proof
+
+on:
+  push:
+    branches: [codex/proof-browser-dialog-profile-20261016]
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        type: string
+        default: "a166c4931a4015935b710070f1a4a1c585b32fb1"
+
+permissions:
+  contents: read
+
+env:
+  SOURCE_SHA: ${{ inputs.source_sha || 'a166c4931a4015935b710070f1a4a1c585b32fb1' }}
+  PROOF_TEST: extensions/browser/src/cli/browser-cli-actions-input/dialog-profile.proof.chromium.test.ts
+
+jobs:
+  chromium:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: proof
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: ly85206559/openclaw
+          ref: ${{ env.SOURCE_SHA }}
+          path: source
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24.21.0"
+      - uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+          package_json_file: source/package.json
+      - name: Bind exact source and proof
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test -z "$(git status --porcelain)"
+          mkdir -p "$RUNNER_TEMP/browser-dialog-proof"
+          git rev-parse HEAD 'HEAD^{tree}' > "$RUNNER_TEMP/browser-dialog-proof/source-binding.txt"
+          sha256sum extensions/browser/src/cli/browser-cli-actions-input/shared.ts extensions/browser/src/cli/browser-cli.ts extensions/browser/src/browser/pw-session-dialogs.ts package.json pnpm-lock.yaml > "$RUNNER_TEMP/browser-dialog-proof/source-sha256.txt"
+          sha256sum ../proof/.proof/browser-dialog-profile/* > "$RUNNER_TEMP/browser-dialog-proof/proof-sha256.txt"
+          test ! -e "$PROOF_TEST"
+          cp ../proof/.proof/browser-dialog-profile/dialog-profile.proof.chromium.test.ts "$PROOF_TEST"
+          sha256sum "$PROOF_TEST" > "$RUNNER_TEMP/browser-dialog-proof/injected-sha256.txt"
+      - name: Frozen installation
+        working-directory: source
+        run: pnpm install --frozen-lockfile
+      - name: Install pinned Chromium
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm --dir extensions/browser exec playwright-core install --with-deps chromium
+          chromium_path="$(pnpm --dir extensions/browser exec node --input-type=module -e 'import { chromium } from "playwright-core"; console.log(chromium.executablePath());')"
+          test -x "$chromium_path"
+          printf 'PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=%s\n' "$chromium_path" >> "$GITHUB_ENV"
+      - name: Replay registered CLI hint against real Chromium
+        working-directory: source
+        shell: bash
+        env:
+          PROOF_OUTPUT_DIR: ${{ runner.temp }}/browser-dialog-proof
+          OPENCLAW_STATE_DIR: ${{ runner.temp }}/browser-dialog-state
+        run: |
+          set -euo pipefail
+          pnpm test "$PROOF_TEST" --maxWorkers=1 --reporter=json --outputFile="$RUNNER_TEMP/browser-dialog-proof/tests.json" > "$RUNNER_TEMP/browser-dialog-proof/tests.log" 2>&1
+      - name: Audit execution and source custody
+        if: always()
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          sha256sum --check "$RUNNER_TEMP/browser-dialog-proof/source-sha256.txt"
+          sha256sum --check "$RUNNER_TEMP/browser-dialog-proof/proof-sha256.txt"
+          sha256sum --check "$RUNNER_TEMP/browser-dialog-proof/injected-sha256.txt"
+          git status --porcelain > "$RUNNER_TEMP/browser-dialog-proof/final-status.txt"
+          test "$(cat "$RUNNER_TEMP/browser-dialog-proof/final-status.txt")" = "?? $PROOF_TEST"
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import assert from 'node:assert/strict';
+          const result = JSON.parse(fs.readFileSync(`${process.env.RUNNER_TEMP}/browser-dialog-proof/tests.json`, 'utf8'));
+          assert.equal(result.numTotalTests, 1);
+          assert.equal(result.numPendingTests, 0);
+          assert.equal(result.numTodoTests, 0);
+          assert.equal(result.numPassedTests + result.numFailedTests, 1);
+          assert.equal(result.testResults.length, 1);
+          assert.equal(result.testResults[0].assertionResults.length, 1);
+          assert.ok(['passed', 'failed'].includes(result.testResults[0].assertionResults[0].status));
+          NODE
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: browser-dialog-profile-${{ github.run_id }}
+          path: ${{ runner.temp }}/browser-dialog-proof
+          if-no-files-found: error
