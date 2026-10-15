@@ -1,0 +1,108 @@
+name: Browser dialog shipped CLI Gateway proof
+
+on:
+  push:
+    branches: [codex/proof-browser-dialog-profile-candidate-20261016]
+    paths:
+      - .github/workflows/browser-dialog-cli-proof.yml
+      - .proof/browser-dialog-profile/cli-dialog-profile.mjs
+  workflow_dispatch:
+    inputs:
+      mode:
+        type: choice
+        options: [baseline, candidate]
+        default: baseline
+
+permissions:
+  contents: read
+
+env:
+  PROOF_MODE: ${{ inputs.mode || 'baseline' }}
+  SOURCE_SHA: ${{ inputs.mode == 'candidate' && 'a9f8fa35372173e60d8fafd3e9ee17bc900f3dd2' || 'a166c4931a4015935b710070f1a4a1c585b32fb1' }}
+
+jobs:
+  cli:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: proof
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: ly85206559/openclaw
+          ref: ${{ env.SOURCE_SHA }}
+          path: source
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24.21.0"
+      - uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+          package_json_file: source/package.json
+      - name: Bind pristine source and driver
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$PROOF_MODE" in
+            baseline) test "$SOURCE_SHA" = a166c4931a4015935b710070f1a4a1c585b32fb1; expected_tree=cf4dfaeb61726abc53cc4ffe327f76957d5e288d ;;
+            candidate) test "$SOURCE_SHA" = a9f8fa35372173e60d8fafd3e9ee17bc900f3dd2; expected_tree=5315ed86a653fde2600fb06c9b39c0deed2c2006 ;;
+            *) exit 2 ;;
+          esac
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test "$(git rev-parse 'HEAD^{tree}')" = "$expected_tree"
+          test -z "$(git status --porcelain)"
+          mkdir -p "$RUNNER_TEMP/browser-dialog-cli"
+          git rev-parse HEAD 'HEAD^{tree}' > "$RUNNER_TEMP/browser-dialog-cli/source-binding.txt"
+          sha256sum extensions/browser/src/cli/browser-cli-actions-input/shared.ts extensions/browser/src/cli/browser-cli.ts extensions/browser/src/gateway/browser-request.ts extensions/browser/plugin-registration.ts package.json pnpm-lock.yaml > "$RUNNER_TEMP/browser-dialog-cli/source-sha256.txt"
+          sha256sum ../proof/.proof/browser-dialog-profile/cli-dialog-profile.mjs > "$RUNNER_TEMP/browser-dialog-cli/driver-sha256.txt"
+          node --check ../proof/.proof/browser-dialog-profile/cli-dialog-profile.mjs
+      - name: Frozen installation
+        working-directory: source
+        run: pnpm install --frozen-lockfile
+      - name: Install pinned Chromium
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm --dir extensions/browser exec playwright-core install --with-deps chromium
+          chromium_path="$(pnpm --dir extensions/browser exec node --input-type=module -e 'import { chromium } from "playwright-core"; console.log(chromium.executablePath());')"
+          test -x "$chromium_path"
+          printf 'PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=%s\n' "$chromium_path" >> "$GITHUB_ENV"
+      - name: Canonical pristine runtime build
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          env -i HOME="$HOME" PATH="$PATH" PNPM_HOME="$PNPM_HOME" CI=true GITHUB_ACTIONS=true NO_COLOR=1 \
+            pnpm build qaRuntime > "$RUNNER_TEMP/browser-dialog-cli/build.log" 2>&1
+          cp dist/.buildstamp "$RUNNER_TEMP/browser-dialog-cli/buildstamp.json"
+      - name: Actual CLI and Gateway dialog recovery
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          env -i HOME="$HOME" PATH="$PATH" CI=true GITHUB_ACTIONS=true NO_COLOR=1 \
+            SOURCE_SHA="$SOURCE_SHA" PROOF_MODE="$PROOF_MODE" PROOF_OUTPUT_DIR="$RUNNER_TEMP/browser-dialog-cli" \
+            PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH="$PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH" \
+            node ../proof/.proof/browser-dialog-profile/cli-dialog-profile.mjs > "$RUNNER_TEMP/browser-dialog-cli/proof.log" 2>&1
+      - name: Source custody
+        if: always()
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          sha256sum --check "$RUNNER_TEMP/browser-dialog-cli/source-sha256.txt"
+          sha256sum --check "$RUNNER_TEMP/browser-dialog-cli/driver-sha256.txt"
+          git status --porcelain > "$RUNNER_TEMP/browser-dialog-cli/final-status.txt"
+          test ! -s "$RUNNER_TEMP/browser-dialog-cli/final-status.txt"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: browser-dialog-cli-${{ env.PROOF_MODE }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/browser-dialog-cli
+          if-no-files-found: error
