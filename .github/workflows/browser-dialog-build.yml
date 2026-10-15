@@ -1,6 +1,9 @@
 name: Browser dialog exact-head build
 
 on:
+  push:
+    branches: [codex/proof-browser-dialog-profile-candidate-20261016]
+    paths: [.github/workflows/browser-dialog-build.yml]
   workflow_dispatch:
 
 permissions:
