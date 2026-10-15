@@ -2,6 +2,7 @@ name: Remote document charset boundary proof
 on:
   push:
     branches: [codex/proof-media-transport-charset-20261015]
+    paths: [.github/workflows/proof-media-transport-charset.yml]
   workflow_dispatch:
 permissions:
   contents: read
@@ -15,7 +16,7 @@ jobs:
       GITHUB_TOKEN: ""
       OPENAI_API_KEY: ""
       ANTHROPIC_API_KEY: ""
-      CANDIDATE: 916b3aa88dcc4d9f3268ee283394516752f9d235
+      CANDIDATE: 47d15172a40555942613d84ef6a726e7ba2780e5
       BASELINE: 6b3617207ac19f95b960434c635fd902cc242d85
       OPENCLAW_VITEST_MAX_WORKERS: 1
     steps:
