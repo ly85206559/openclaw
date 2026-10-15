@@ -1,0 +1,76 @@
+name: SearXNG exact-head native recovery
+
+on:
+  push:
+    branches: [codex/proof-searxng-defaults-candidate-20261016]
+    paths: [.github/workflows/searxng-native-recovery.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      SOURCE_SHA: e9d96ad33a6531c9ded348234e3202163f3b6519
+      TEST_FILE: extensions/searxng/src/searxng-client.transport.test.ts
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ly85206559/openclaw
+          ref: e9d96ad33a6531c9ded348234e3202163f3b6519
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24.21.0"
+      - uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+      - name: Bind exact candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test "$(git rev-parse 'HEAD^{tree}')" = f1b86f9c1a711a4f702180dd94f0b623480800ba
+          test -z "$(git status --porcelain)"
+          mkdir -p "$RUNNER_TEMP/searxng-native-recovery"
+          git rev-parse HEAD 'HEAD^{tree}' > "$RUNNER_TEMP/searxng-native-recovery/source-binding.txt"
+          sha256sum extensions/searxng/src/searxng-client.ts "$TEST_FILE" package.json pnpm-lock.yaml > "$RUNNER_TEMP/searxng-native-recovery/source-sha256.txt"
+      - name: Frozen installation
+        run: pnpm install --frozen-lockfile
+      - name: Native real transport regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm exec oxfmt --check "$TEST_FILE"
+          pnpm test "$TEST_FILE" --maxWorkers=1 --reporter=json --outputFile="$RUNNER_TEMP/searxng-native-recovery/tests.json" > "$RUNNER_TEMP/searxng-native-recovery/tests.log" 2>&1
+      - name: Source custody and no-skips audit
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          sha256sum --check "$RUNNER_TEMP/searxng-native-recovery/source-sha256.txt"
+          git status --porcelain > "$RUNNER_TEMP/searxng-native-recovery/final-status.txt"
+          test ! -s "$RUNNER_TEMP/searxng-native-recovery/final-status.txt"
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import assert from 'node:assert/strict';
+          const result = JSON.parse(fs.readFileSync(`${process.env.RUNNER_TEMP}/searxng-native-recovery/tests.json`, 'utf8'));
+          assert.equal(result.numTotalTests, 5);
+          assert.equal(result.numPassedTests, 5);
+          assert.equal(result.numFailedTests, 0);
+          assert.equal(result.numPendingTests, 0);
+          assert.equal(result.numTodoTests, 0);
+          assert.equal(result.success, true);
+          assert.equal(result.testResults.length, 1);
+          assert.equal(result.testResults[0].assertionResults.length, 5);
+          assert.ok(result.testResults[0].assertionResults.every((test) => test.status === 'passed'));
+          NODE
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: searxng-native-recovery-${{ github.run_id }}
+          path: ${{ runner.temp }}/searxng-native-recovery
+          if-no-files-found: error
