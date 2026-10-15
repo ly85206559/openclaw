@@ -8,6 +8,7 @@ import {
   createBrowserProgram,
   getBrowserCliRuntime,
   getBrowserCliRuntimeCapture,
+  mockBrowserGateway,
 } from "../browser-cli.test-support.js";
 import * as batchSharedModule from "./shared.js";
 
@@ -86,6 +87,7 @@ describe("browser action input batch command", () => {
   it.each([undefined, "work", " work ", "-work"])(
     "keeps the selected profile %s when replaying a modal recovery hint",
     async (profile) => {
+      const gateway = mockBrowserGateway();
       mocks.callBrowserRequest.mockResolvedValueOnce({
         ok: true,
         blockedByDialog: true,
@@ -107,8 +109,9 @@ describe("browser action input batch command", () => {
         .replace("--dialog-id <id>", "--dialog-id d1");
       await createActionInputProgram().parseAsync(replay.split(/\s+/).slice(1), { from: "user" });
 
-      expect(mocks.callBrowserRequest).toHaveBeenCalledTimes(2);
-      expect(mocks.callBrowserRequest.mock.calls.at(-1)?.[1]).toMatchObject({
+      expect(mocks.callBrowserRequest).toHaveBeenCalledTimes(1);
+      expect(gateway).toHaveBeenCalledTimes(1);
+      expect(gateway.mock.calls[0]?.[2]).toMatchObject({
         method: "POST",
         path: "/hooks/dialog",
         query: profile ? { profile: profile.trim() } : undefined,
