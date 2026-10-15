@@ -40,6 +40,18 @@ jobs:
           corepack enable
           { node --version; node -p "require('./package.json').packageManager"; pnpm --version; } > "$RUNNER_TEMP/charset-proof/toolchain.txt"
           pnpm install --frozen-lockfile
+          node -p "require('vitest/package.json').version" >> "$RUNNER_TEMP/charset-proof/toolchain.txt"
+          cat > "$RUNNER_TEMP/charset-proof/runtime-reporter.mjs" <<'REPORTER'
+          import fs from 'node:fs';
+          const error = ({name, message, stack, actual, expected}) => ({name, message, stack, actual, expected});
+          export default class RuntimeReporter {
+            onTestRunEnd(modules, unhandledErrors, reason) {
+              const suiteErrors = modules.flatMap(module => [module, ...module.children.allSuites()].flatMap(suite => suite.errors().map(error)));
+              const tests = modules.flatMap(module => [...module.children.allTests()].map(test => ({name:test.name, ...test.result(), errors:(test.result().errors ?? []).map(error)})));
+              fs.writeFileSync(process.env.PROOF_EVENTS, JSON.stringify({reason, unhandledErrors:unhandledErrors.map(error), suiteErrors, tests}, null, 2));
+            }
+          }
+          REPORTER
       - name: Paired real HTTP before and after with identical fixture
         shell: bash
         run: |
@@ -57,8 +69,9 @@ jobs:
             } > "$RUNNER_TEMP/charset-proof/$MODE-identity.txt"
             export PROOF_MODE="$MODE"
             export PROOF_RESULTS="$RUNNER_TEMP/charset-proof/$MODE-results.json"
+            export PROOF_EVENTS="$RUNNER_TEMP/charset-proof/$MODE-events.json"
             set +e
-            node scripts/run-vitest.mjs src/media-understanding/file-context.test.ts -t 'remote document charset' --maxWorkers=1 --reporter=verbose --reporter=json --outputFile="$PROOF_RESULTS" > "$RUNNER_TEMP/charset-proof/$MODE-runtime.log" 2>&1
+            node scripts/run-vitest.mjs src/media-understanding/file-context.test.ts -t 'remote document charset' --maxWorkers=1 --reporter=verbose --reporter=json --reporter="$RUNNER_TEMP/charset-proof/runtime-reporter.mjs" --outputFile="$PROOF_RESULTS" > "$RUNNER_TEMP/charset-proof/$MODE-runtime.log" 2>&1
             EXIT=$?
             set -e
             printf 'exit=%s\n' "$EXIT" > "$RUNNER_TEMP/charset-proof/$MODE-exit.txt"
@@ -71,7 +84,11 @@ jobs:
           const tests = result.testResults.flatMap(suite => suite.assertionResults ?? []).filter(test => test.ancestorTitles.includes('remote document charset'));
           assert.equal(tests.length, 8);
           assert(tests.every(test => ['passed', 'failed'].includes(test.status)));
-          assert.equal(result.numRuntimeErrorTestSuites ?? 0, 0);
+          const events = JSON.parse(fs.readFileSync(process.env.PROOF_EVENTS, 'utf8'));
+          assert.deepEqual(events.unhandledErrors, []);
+          assert.deepEqual(events.suiteErrors, []);
+          assert.equal(events.reason, process.env.PROOF_MODE === 'baseline' ? 'failed' : 'passed');
+          assert(result.testResults.every(suite => !suite.message));
           const failed = tests.filter(test => test.status === 'failed');
           const names = failed.map(test => test.title).sort();
           const expected = process.env.PROOF_MODE === 'baseline' ? [
@@ -80,7 +97,21 @@ jobs:
             'decodes channel type without charset through the real remote attachment owner',
           ].sort() : [];
           assert.deepEqual(names, expected);
-          assert(failed.every(test => /AssertionError/.test(test.failureMessages.join('\n'))));
+          const fixture = fs.readFileSync(process.env.RUNNER_TEMP + '/charset-proof/fixture.ts', 'utf8').split('\n');
+          const line = fixture.findIndex(value => value.includes('expect(result.blocks[0]?.text).toContain')) + 1;
+          assert(line > 0);
+          for (const test of failed) {
+            assert.equal(test.failureMessages.length, 1);
+            const receipt = events.tests.find(entry => entry.name === test.title);
+            assert.equal(receipt.state, 'failed');
+            assert.equal(receipt.errors.length, 1);
+            const error = receipt.errors[0];
+            assert.equal(error.name, 'AssertionError');
+            assert.equal(error.expected, '\n---\nПривет €\n');
+            assert(error.actual.includes('Ïðèâåò ˆ'));
+            assert(!error.actual.includes('Привет €'));
+            assert(error.stack.includes('file-context.test.ts:' + line + ':'));
+          }
           assert.equal(process.env.PROOF_EXIT, process.env.PROOF_MODE === 'baseline' ? '1' : '0');
           console.log(JSON.stringify({mode:process.env.PROOF_MODE,collected:tests.length,failed:names,passed:tests.length-failed.length}));
           AUDIT
