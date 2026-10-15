@@ -1,0 +1,98 @@
+name: Built Gateway charset model-input proof
+on:
+  push:
+    branches: [codex/proof-media-transport-charset-20261015]
+    paths: [.github/workflows/proof-media-charset-gateway.yml, .github/proof/media-charset-gateway.mjs]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  gateway:
+    if: github.repository == 'ly85206559/openclaw'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      BASELINE: 6b3617207ac19f95b960434c635fd902cc242d85
+      CANDIDATE: 47d15172a40555942613d84ef6a726e7ba2780e5
+      GH_TOKEN: ""
+      GITHUB_TOKEN: ""
+      OPENAI_API_KEY: ""
+      ANTHROPIC_API_KEY: ""
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.21.0
+      - name: Freeze identical Gateway driver and exact source identities
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/charset-gateway"
+          cp .github/proof/media-charset-gateway.mjs "$RUNNER_TEMP/charset-gateway/harness.mjs"
+          sha256sum "$RUNNER_TEMP/charset-gateway/harness.mjs" > "$RUNNER_TEMP/charset-gateway/harness.sha256"
+          git rev-parse HEAD > "$RUNNER_TEMP/charset-gateway/carrier.txt"
+          git fetch --no-tags --depth=8 https://github.com/ly85206559/openclaw.git "$BASELINE" "$CANDIDATE"
+          test "$(git rev-parse "$BASELINE:pnpm-lock.yaml")" = "$(git rev-parse "$CANDIDATE:pnpm-lock.yaml")"
+          git checkout --detach "$CANDIDATE"
+          corepack enable
+          { node --version; node -p "require('./package.json').packageManager"; pnpm --version; } > "$RUNNER_TEMP/charset-gateway/toolchain.txt"
+          pnpm install --frozen-lockfile
+      - name: Built CLI and Gateway before and after into actual model requests
+        shell: bash
+        run: |
+          set -euo pipefail
+          for MODE in baseline candidate; do
+            if [ "$MODE" = baseline ]; then SOURCE="$BASELINE"; else SOURCE="$CANDIDATE"; fi
+            git checkout --detach "$SOURCE"
+            test "$(git rev-parse HEAD)" = "$SOURCE"
+            export PROOF_MODE="$MODE" PROOF_OUT="$RUNNER_TEMP/charset-gateway/$MODE"
+            mkdir -p "$PROOF_OUT"
+            { git rev-parse HEAD HEAD^{tree}; git hash-object packages/media-core/src/attachment-classify.ts src/media/fetch.ts src/media-understanding/attachments.cache.ts; } > "$PROOF_OUT/identity.txt"
+            START=$SECONDS
+            pnpm build qaRuntime > "$PROOF_OUT/build.log" 2>&1
+            printf 'profile=qaRuntime\nexit=0\nwall_seconds=%s\n' "$((SECONDS-START))" > "$PROOF_OUT/build-exit.txt"
+            START=$SECONDS
+            set +e
+            node "$RUNNER_TEMP/charset-gateway/harness.mjs" > "$PROOF_OUT/harness.log" 2>&1
+            EXIT=$?
+            set -e
+            printf 'exit=%s\nwall_seconds=%s\n' "$EXIT" "$((SECONDS-START))" > "$PROOF_OUT/runtime-exit.txt"
+            cat "$PROOF_OUT/harness.log"
+            export PROOF_EXIT="$EXIT"
+            node --input-type=module <<'AUDIT'
+          import fs from 'node:fs';
+          import assert from 'node:assert/strict';
+          const report = JSON.parse(fs.readFileSync(process.env.PROOF_OUT + '/gateway-proof.json', 'utf8'));
+          assert.equal(report.phase, 'audited');
+          assert.equal(report.failure, undefined);
+          assert.equal(report.receipts.length, 8);
+          assert.equal(report.privateHits, 0);
+          assert.equal(report.cleanup.privateServerClosed, true);
+          assert.deepEqual(report.cleanup.errors, []);
+          assert.equal(report.cleanup.children.length, 2);
+          assert(report.cleanup.children.every(child => child.exitCode !== null || child.signal !== null));
+          const failed = report.receipts.filter(receipt => !receipt.pass).map(receipt => receipt.name);
+          assert.deepEqual(failed, process.env.PROOF_MODE === 'baseline' ? ['sniffed-declared-charset', 'sniffed-quoted-alias'] : []);
+          assert.equal(process.env.PROOF_EXIT, process.env.PROOF_MODE === 'baseline' ? '1' : '0');
+          console.log(JSON.stringify({mode: report.mode, collected: 8, failed, passed: 8-failed.length, exit: process.env.PROOF_EXIT, cleanup: 'verified'}));
+          AUDIT
+            git diff --check
+            test -z "$(git status --porcelain)"
+          done
+      - name: Retain inspectable model-input and terminal receipts
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: charset-built-gateway-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/charset-gateway/*.mjs
+            ${{ runner.temp }}/charset-gateway/*.txt
+            ${{ runner.temp }}/charset-gateway/*.sha256
+            ${{ runner.temp }}/charset-gateway/*/*.json
+            ${{ runner.temp }}/charset-gateway/*/*.jsonl
+            ${{ runner.temp }}/charset-gateway/*/*.log
+            ${{ runner.temp }}/charset-gateway/*/*.txt
+          retention-days: 30
