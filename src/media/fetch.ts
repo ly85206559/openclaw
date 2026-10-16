@@ -1,3 +1,4 @@
+import { MIMEType } from "node:util";
 import { MAX_DOCUMENT_BYTES } from "@openclaw/media-core/constants";
 import { parseMediaContentLength } from "@openclaw/media-core/content-length";
 import { basenameFromAnyPath, extnameFromAnyPath } from "@openclaw/media-core/file-name";
@@ -531,6 +532,21 @@ async function saveOkMediaResponse(
       params.originalFilename,
       detectionFilePathHint,
     );
+    // Keep the response decoder hint when staging an attachment for a channel.
+    // MIME sniffing still owns the type; it must not erase the charset.
+    if (contentType && saved.contentType) {
+      try {
+        const headerMime = new MIMEType(contentType);
+        const charset = headerMime.params.get("charset");
+        if (charset !== null) {
+          const storedMime = new MIMEType(saved.contentType);
+          storedMime.params.set("charset", charset);
+          saved.contentType = storedMime.toString();
+        }
+      } catch {
+        // Malformed metadata does not invalidate successfully downloaded media.
+      }
+    }
     return { ...saved, ...(fileName ? { fileName } : {}) };
   } catch (err) {
     if (err instanceof MediaFetchError) {
