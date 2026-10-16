@@ -285,12 +285,20 @@ async function inspectPlugin(name, expected) {
   assert.ok(expected.inventory.files.some((file) => path.join(identity.root, file.path) === entry), "registered entry must belong to the packed inventory");
   assert.equal(report.install.version, "2026.10.3");
   assert.equal(report.install.source, "npm");
-  assert.equal(report.install.npmIntegrity, expected.inventory.archiveIntegrity);
+  assert.equal(report.install.resolvedName, "@openclaw/searxng-plugin");
+  assert.equal(report.install.resolvedVersion, "2026.10.3");
+  assert.equal(report.install.resolvedSpec, "@openclaw/searxng-plugin@2026.10.3");
+  assert.equal(report.install.integrity, expected.inventory.archiveIntegrity);
   if (name === "candidate-plugin-inspect") {
+    assert.equal(report.install.npmIntegrity, expected.inventory.archiveIntegrity);
     assert.equal(report.install.artifactKind, "npm-pack");
     assert.equal(await fs.realpath(report.install.sourcePath), await fs.realpath(pluginTarball));
-  } else {
+  } else if (name === "stable-plugin-inspect") {
     assert.equal(report.install.spec, "@openclaw/searxng-plugin@2026.10.3");
+  } else {
+    assert.equal(name, "post-core-stable-plugin-inspect");
+    // Official cohort convergence restores the catalog selector, not new package bytes.
+    assert.equal(report.install.spec, "@openclaw/searxng-plugin");
   }
   return { ...identity, source: entry, install: report.install };
 }
