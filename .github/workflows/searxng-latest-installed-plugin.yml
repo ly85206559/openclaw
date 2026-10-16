@@ -1,0 +1,96 @@
+name: SearXNG latest stable installed plugin proof
+
+on:
+  push:
+    branches: [codex/proof-searxng-defaults-candidate-20261016]
+    paths:
+      - .github/workflows/searxng-latest-installed-plugin.yml
+      - .proof/searxng-defaults/installed-upgrade.mjs
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  SOURCE_SHA: e9d96ad33a6531c9ded348234e3202163f3b6519
+
+jobs:
+  latest-installed-plugin:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: proof
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: ly85206559/openclaw
+          ref: ${{ env.SOURCE_SHA }}
+          path: source
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24.21.0"
+      - uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+          package_json_file: source/package.json
+      - name: Bind exact source and latest-installed proof
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test "$(git rev-parse 'HEAD^{tree}')" = f1b86f9c1a711a4f702180dd94f0b623480800ba
+          test -z "$(git status --porcelain)"
+          mkdir -p "$RUNNER_TEMP/searxng-latest-installed" "$RUNNER_TEMP/searxng-latest-plugin-package"
+          git rev-parse HEAD 'HEAD^{tree}' > "$RUNNER_TEMP/searxng-latest-installed/source-binding.txt"
+          sha256sum package.json pnpm-lock.yaml extensions/searxng/package.json extensions/searxng/src/searxng-client.ts extensions/searxng/src/searxng-search-provider.ts > "$RUNNER_TEMP/searxng-latest-installed/source-sha256.txt"
+          sha256sum ../proof/.proof/searxng-defaults/installed-upgrade.mjs > "$RUNNER_TEMP/searxng-latest-installed/driver-sha256.txt"
+          node --check ../proof/.proof/searxng-defaults/installed-upgrade.mjs
+      - name: Frozen candidate plugin dependencies
+        working-directory: source
+        run: pnpm install --frozen-lockfile
+      - name: Canonical candidate SearXNG plugin build and pack only
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          env -i HOME="$HOME" PATH="$PATH" PNPM_HOME="$PNPM_HOME" CI=true GITHUB_ACTIONS=true NO_COLOR=1 \
+            OPENCLAW_PLUGIN_NPM_PACK_OUTPUT_DIR="$RUNNER_TEMP/searxng-latest-plugin-package" \
+            bash scripts/plugin-npm-publish.sh --pack extensions/searxng \
+            > "$RUNNER_TEMP/searxng-latest-installed/plugin-pack.json" 2> "$RUNNER_TEMP/searxng-latest-installed/plugin-build-pack.log"
+          test -f "$RUNNER_TEMP/searxng-latest-plugin-package/openclaw-searxng-plugin-2026.10.3.tgz"
+          sha256sum "$RUNNER_TEMP/searxng-latest-plugin-package/openclaw-searxng-plugin-2026.10.3.tgz" > "$RUNNER_TEMP/searxng-latest-installed/candidate-artifact-sha256.txt"
+      - name: Latest stable installation consumes candidate plugin with existing settings
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          env -i HOME="$HOME" PATH="$PATH" CI=true GITHUB_ACTIONS=true NO_COLOR=1 \
+            SOURCE_SHA="$SOURCE_SHA" PROOF_SCENARIO=latest-plugin-install \
+            PROOF_OUTPUT_DIR="$RUNNER_TEMP/searxng-latest-installed" \
+            CANDIDATE_PLUGIN_TARBALL="$RUNNER_TEMP/searxng-latest-plugin-package/openclaw-searxng-plugin-2026.10.3.tgz" \
+            node ../proof/.proof/searxng-defaults/installed-upgrade.mjs \
+            > "$RUNNER_TEMP/searxng-latest-installed/proof.log" 2>&1
+      - name: Source and candidate artifact custody
+        if: always()
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          sha256sum --check "$RUNNER_TEMP/searxng-latest-installed/source-sha256.txt"
+          sha256sum --check "$RUNNER_TEMP/searxng-latest-installed/driver-sha256.txt"
+          if test -f "$RUNNER_TEMP/searxng-latest-installed/candidate-artifact-sha256.txt"; then
+            sha256sum --check "$RUNNER_TEMP/searxng-latest-installed/candidate-artifact-sha256.txt"
+          fi
+          git status --porcelain > "$RUNNER_TEMP/searxng-latest-installed/final-status.txt"
+          test ! -s "$RUNNER_TEMP/searxng-latest-installed/final-status.txt"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: searxng-latest-installed-${{ github.run_id }}
+          path: ${{ runner.temp }}/searxng-latest-installed
+          if-no-files-found: error

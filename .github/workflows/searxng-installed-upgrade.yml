@@ -1,11 +1,6 @@
 name: SearXNG existing installation upgrade proof
 
 on:
-  push:
-    branches: [codex/proof-searxng-defaults-candidate-20261016]
-    paths:
-      - .github/workflows/searxng-installed-upgrade.yml
-      - .proof/searxng-defaults/installed-upgrade.mjs
   workflow_dispatch:
 
 permissions:

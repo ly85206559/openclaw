@@ -11,10 +11,16 @@ assert.equal(process.env.GITHUB_ACTIONS, "true");
 assert.equal(process.platform, "linux");
 const sourceSha = "e9d96ad33a6531c9ded348234e3202163f3b6519";
 assert.equal(process.env.SOURCE_SHA, sourceSha);
+const scenario = process.env.PROOF_SCENARIO ?? "published-core-upgrade";
+assert.ok(["published-core-upgrade", "latest-plugin-install"].includes(scenario));
+const coreUpgrade = scenario === "published-core-upgrade";
+const stableVersion = coreUpgrade ? "2026.10.3" : "2026.10.4";
 const output = process.env.PROOF_OUTPUT_DIR;
 const coreTarball = process.env.CANDIDATE_CORE_TARBALL;
 const pluginTarball = process.env.CANDIDATE_PLUGIN_TARBALL;
-for (const value of [output, coreTarball, pluginTarball]) assert.ok(value && path.isAbsolute(value));
+for (const value of [output, pluginTarball]) assert.ok(value && path.isAbsolute(value));
+if (coreUpgrade) assert.ok(coreTarball && path.isAbsolute(coreTarball));
+else assert.equal(coreTarball, undefined, "latest-plugin-install must not install or inspect a candidate core archive");
 await fs.mkdir(output, { recursive: true });
 // This standalone installed-package proof cannot import the checkout's Vitest lifecycle helpers.
 const fixture = await fs.mkdtemp(path.join(os.tmpdir(), "searxng-installed-upgrade-"));
@@ -25,10 +31,12 @@ const cliBin = path.join(prefix, "bin", "openclaw");
 const coreRoot = path.join(prefix, "lib", "node_modules", "openclaw");
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const receipt = {
-  sourceSha, stableVersion: "2026.10.3", calls: [], requests: [], snapshots: [],
+  sourceSha, scenario, stableVersion, hostVersion: stableVersion,
+  pluginArtifactVersion: "2026.10.3", coreUpdaterInvoked: false,
+  calls: [], requests: [], snapshots: [],
   packages: {}, errors: [], behaviorFailures: [],
 };
-const stablePackages = {
+const stablePackages = coreUpgrade ? {
   core: {
     name: "openclaw", version: "2026.10.3",
     metadata: "https://registry.npmjs.org/openclaw/2026.10.3",
@@ -40,6 +48,19 @@ const stablePackages = {
     metadata: "https://registry.npmjs.org/@openclaw%2Fsearxng-plugin/2026.10.3",
     tarball: "https://registry.npmjs.org/@openclaw/searxng-plugin/-/searxng-plugin-2026.10.3.tgz",
     integrity: "sha512-f0bJICQPC76obBHbUF/78F4f8pkspQLlmIDjL7xuvreYdHTc+wnowldOuMAVOQrBb1ijVyntp8lzXLccRua2BA==",
+  },
+} : {
+  core: {
+    name: "openclaw", version: "2026.10.4",
+    metadata: "https://registry.npmjs.org/openclaw/2026.10.4",
+    tarball: "https://registry.npmjs.org/openclaw/-/openclaw-2026.10.4.tgz",
+    integrity: "sha512-+FH0StZF1tlTazM7JJGY6JePeJmhFNSRByi2Q3jXPRiLO7o4dJh2xa9Vy4Dk8Cd2ic8B7Zkf5NfEaCCWUkgqnQ==",
+  },
+  plugin: {
+    name: "@openclaw/searxng-plugin", version: "2026.10.4",
+    metadata: "https://registry.npmjs.org/@openclaw%2Fsearxng-plugin/2026.10.4",
+    tarball: "https://registry.npmjs.org/@openclaw/searxng-plugin/-/searxng-plugin-2026.10.4.tgz",
+    integrity: "sha512-brQtRmi091fqUH5TRgilST1//Zhyfve4Ri44KW3P6+T/ryBXlw1uvNr3cvfezZUfCIZV33xFovc1e+TtmWK1Lw==",
   },
 };
 const env = {
@@ -183,6 +204,29 @@ async function stableArchive(kind) {
   receipt.packages[`stable-${kind}`] = { ...expected, archive, bytes: bytes.length, sha256: sha256(bytes), integrity };
   return archive;
 }
+async function checkLatestTags() {
+  receipt.latestPreflight = [];
+  for (const [kind, expected] of Object.entries(stablePackages)) {
+    const url = `${expected.metadata.slice(0, expected.metadata.lastIndexOf("/") + 1)}latest`;
+    const startedAt = new Date().toISOString();
+    const response = await fetch(url, {
+      headers: { "Cache-Control": "no-cache" }, signal: AbortSignal.timeout(60_000),
+    });
+    assert.equal(response.status, 200);
+    const metadata = await response.json();
+    const observed = {
+      kind, url, startedAt, checkedAt: new Date().toISOString(), responseDate: response.headers.get("date"),
+      name: metadata.name, version: metadata.version,
+      tarball: metadata.dist?.tarball, integrity: metadata.dist?.integrity,
+    };
+    receipt.latestPreflight.push(observed);
+    await fs.writeFile(path.join(output, `latest-${kind}.registry.json`), JSON.stringify(metadata, null, 2));
+    assert.equal(metadata.name, expected.name);
+    assert.equal(metadata.version, expected.version, "npm latest changed; requalify rather than claiming a stale latest-version proof");
+    assert.equal(metadata.dist.tarball, expected.tarball);
+    assert.equal(metadata.dist.integrity, expected.integrity);
+  }
+}
 async function unpack(name, archive) {
   assert.equal((await fs.lstat(archive)).isFile(), true, "package input must be a regular archive");
   const bytes = await fs.readFile(archive);
@@ -283,18 +327,19 @@ async function inspectPlugin(name, expected) {
   const entry = await fs.realpath(report.plugin.source);
   assert.ok(entry.startsWith(`${identity.root}${path.sep}`), "registered provider must resolve to the verified installed package");
   assert.ok(expected.inventory.files.some((file) => path.join(identity.root, file.path) === entry), "registered entry must belong to the packed inventory");
-  assert.equal(report.install.version, "2026.10.3");
+  const expectedVersion = expected.inventory.manifest.version;
+  assert.equal(report.install.version, expectedVersion);
   assert.equal(report.install.source, "npm");
   assert.equal(report.install.resolvedName, "@openclaw/searxng-plugin");
-  assert.equal(report.install.resolvedVersion, "2026.10.3");
-  assert.equal(report.install.resolvedSpec, "@openclaw/searxng-plugin@2026.10.3");
+  assert.equal(report.install.resolvedVersion, expectedVersion);
+  assert.equal(report.install.resolvedSpec, `@openclaw/searxng-plugin@${expectedVersion}`);
   assert.equal(report.install.integrity, expected.inventory.archiveIntegrity);
   if (name === "candidate-plugin-inspect") {
     assert.equal(report.install.npmIntegrity, expected.inventory.archiveIntegrity);
     assert.equal(report.install.artifactKind, "npm-pack");
     assert.equal(await fs.realpath(report.install.sourcePath), await fs.realpath(pluginTarball));
   } else if (name === "stable-plugin-inspect") {
-    assert.equal(report.install.spec, "@openclaw/searxng-plugin@2026.10.3");
+    assert.equal(report.install.spec, `@openclaw/searxng-plugin@${expectedVersion}`);
   } else {
     assert.equal(name, "post-core-stable-plugin-inspect");
     // Official cohort convergence restores the catalog selector, not new package bytes.
@@ -417,20 +462,26 @@ try {
   const address = server.address();
   assert.ok(address && typeof address !== "string");
   receipt.fixturePort = address.port;
+  if (!coreUpgrade) await checkLatestTags();
   const stableCoreArchive = await stableArchive("core");
   const stablePluginArchive = await stableArchive("plugin");
   const stableCore = await unpack("stable-core-package", stableCoreArchive);
   const stablePlugin = await unpack("stable-plugin-package", stablePluginArchive);
-  const candidateCore = await unpack("candidate-core-package", coreTarball);
+  const candidateCore = coreUpgrade ? await unpack("candidate-core-package", coreTarball) : undefined;
   const candidatePlugin = await unpack("candidate-plugin-package", pluginTarball);
-  for (const [kind, expectedName] of [[candidateCore, "openclaw"], [candidatePlugin, "@openclaw/searxng-plugin"]]) {
-    assert.equal(kind.inventory.manifest.name, expectedName);
-    assert.equal(kind.inventory.manifest.version, "2026.10.3");
+  assert.equal(candidatePlugin.inventory.manifest.name, "@openclaw/searxng-plugin");
+  assert.equal(candidatePlugin.inventory.manifest.version, receipt.pluginArtifactVersion);
+  if (coreUpgrade) {
+    assert.equal(candidateCore.inventory.manifest.name, "openclaw");
+    assert.equal(candidateCore.inventory.manifest.version, "2026.10.3");
+    const buildInfo = JSON.parse(await fs.readFile(path.join(candidateCore.root, "dist", "build-info.json"), "utf8"));
+    assert.equal(buildInfo.commit, sourceSha, "canonical candidate core package must identify the exact reviewed source");
+    receipt.candidateBuildInfo = buildInfo;
+    assert.notEqual(candidateCore.inventory.archiveSha256, stableCore.inventory.archiveSha256);
+  } else {
+    assert.equal(candidatePlugin.inventory.manifest.peerDependencies.openclaw, ">=2026.10.3");
+    assert.equal(candidatePlugin.inventory.manifest.openclaw.compat.pluginApi, ">=2026.10.3");
   }
-  const buildInfo = JSON.parse(await fs.readFile(path.join(candidateCore.root, "dist", "build-info.json"), "utf8"));
-  assert.equal(buildInfo.commit, sourceSha, "canonical candidate core package must identify the exact reviewed source");
-  receipt.candidateBuildInfo = buildInfo;
-  assert.notEqual(candidateCore.inventory.archiveSha256, stableCore.inventory.archiveSha256);
   assert.notEqual(candidatePlugin.inventory.archiveSha256, stablePlugin.inventory.archiveSha256);
   const oldManifest = JSON.parse(await fs.readFile(path.join(stablePlugin.root, "openclaw.plugin.json"), "utf8"));
   const newManifest = JSON.parse(await fs.readFile(path.join(candidatePlugin.root, "openclaw.plugin.json"), "utf8"));
@@ -448,7 +499,7 @@ try {
       main: { workspace: path.join(fixture, "workspace"), agentDir: path.join(fixture, "agent") },
     } },
   }));
-  successful(await run("install-stable-plugin", cliBin, ["plugins", "install", "npm:@openclaw/searxng-plugin@2026.10.3", "--pin", "--no-enable"], 600_000));
+  successful(await run("install-stable-plugin", cliBin, ["plugins", "install", `npm:@openclaw/searxng-plugin@${stableVersion}`, "--pin", "--no-enable"], 600_000));
   const seed = {
     tools: { web: { search: { provider: "searxng", cacheTtlMinutes: 0, maxResults: 1, timeoutSeconds: 1 } } },
     plugins: { entries: { searxng: { enabled: true, config: { webSearch: {
@@ -470,47 +521,50 @@ try {
   assert.deepEqual(receipt.behaviorFailures, [], "published stable baseline must actually exhibit the expected default failures and explicit control");
   receipt.stableBaselineObserved = true;
 
-  const update = successful(await run("stable-installed-updater", cliBin, ["update", "--tag", coreTarball, "--no-restart", "--yes", "--json"], 600_000));
-  const updateResult = await json(update);
-  assert.equal(updateResult.status, "ok");
-  assert.equal(updateResult.mode, "npm");
-  assert.equal(updateResult.failedStep, undefined);
-  assert.equal(updateResult.rollbackOutcome, undefined);
-  if (updateResult.run) assert.equal(updateResult.run.status, "succeeded");
-  assert.ok(Array.isArray(updateResult.steps) && updateResult.steps.length > 0);
-  assert.ok(updateResult.steps.some((step) => step.command.includes(coreTarball)), "the released updater must actually install the candidate archive, not skip/no-op");
-  for (const step of updateResult.steps) {
-    assert.equal(step.exitCode, 0, `updater step ${step.name} must complete`);
-    assert.ok(!step.signal && !step.killed && !step.outputLimitExceeded);
-    assert.ok(!step.termination || step.termination === "exit");
-  }
-  assert.equal(await fs.realpath(updateResult.root), await fs.realpath(coreRoot));
-  receipt.candidateCoreIdentity = await compareInstalled("candidate-core-installed", candidateCore, coreRoot);
-  await snapshot("after-core-upgrade");
-  const pluginUpdate = updateResult.postUpdate?.plugins;
-  assert.ok(pluginUpdate, "installed updater must retain its plugin-update outcome");
-  assert.equal(pluginUpdate.status, "ok");
-  assert.deepEqual(pluginUpdate.integrityDrifts, []);
-  assert.deepEqual(pluginUpdate.sync.errors, []);
-  assert.deepEqual(pluginUpdate.sync.warnings, []);
-  assert.deepEqual(pluginUpdate.warnings ?? [], []);
-  for (const outcome of pluginUpdate.npm.outcomes) {
-    assert.notEqual(outcome.status, "error");
-    if (outcome.pluginId === "searxng") {
-      assert.ok(!outcome.nextVersion || outcome.nextVersion === "2026.10.3", "core updater must not select the incompatible 2026.10.4 plugin");
+  if (coreUpgrade) {
+    receipt.coreUpdaterInvoked = true;
+    const update = successful(await run("stable-installed-updater", cliBin, ["update", "--tag", coreTarball, "--no-restart", "--yes", "--json"], 600_000));
+    const updateResult = await json(update);
+    assert.equal(updateResult.status, "ok");
+    assert.equal(updateResult.mode, "npm");
+    assert.equal(updateResult.failedStep, undefined);
+    assert.equal(updateResult.rollbackOutcome, undefined);
+    if (updateResult.run) assert.equal(updateResult.run.status, "succeeded");
+    assert.ok(Array.isArray(updateResult.steps) && updateResult.steps.length > 0);
+    assert.ok(updateResult.steps.some((step) => step.command.includes(coreTarball)), "the released updater must actually install the candidate archive, not skip/no-op");
+    for (const step of updateResult.steps) {
+      assert.equal(step.exitCode, 0, `updater step ${step.name} must complete`);
+      assert.ok(!step.signal && !step.killed && !step.outputLimitExceeded);
+      assert.ok(!step.termination || step.termination === "exit");
     }
+    assert.equal(await fs.realpath(updateResult.root), await fs.realpath(coreRoot));
+    receipt.candidateCoreIdentity = await compareInstalled("candidate-core-installed", candidateCore, coreRoot);
+    await snapshot("after-core-upgrade");
+    const pluginUpdate = updateResult.postUpdate?.plugins;
+    assert.ok(pluginUpdate, "installed updater must retain its plugin-update outcome");
+    assert.equal(pluginUpdate.status, "ok");
+    assert.deepEqual(pluginUpdate.integrityDrifts, []);
+    assert.deepEqual(pluginUpdate.sync.errors, []);
+    assert.deepEqual(pluginUpdate.sync.warnings, []);
+    assert.deepEqual(pluginUpdate.warnings ?? [], []);
+    for (const outcome of pluginUpdate.npm.outcomes) {
+      assert.notEqual(outcome.status, "error");
+      if (outcome.pluginId === "searxng") {
+        assert.ok(!outcome.nextVersion || outcome.nextVersion === "2026.10.3", "core updater must not select the incompatible 2026.10.4 plugin");
+      }
+    }
+    receipt.postCoreStablePluginIdentity = await inspectPlugin("post-core-stable-plugin-inspect", stablePlugin);
   }
-  receipt.postCoreStablePluginIdentity = await inspectPlugin("post-core-stable-plugin-inspect", stablePlugin);
   // Reinstall the reviewed local package via its canonical owner, preserving existing activation.
   // No capability acceptance flag: unchanged accepted surfaces must be reused or the proof stops.
   successful(await run("install-candidate-plugin", cliBin, ["plugins", "install", `npm-pack:${pluginTarball}`, "--force", "--no-enable"], 600_000));
-  await snapshot("after-plugin-upgrade");
+  await snapshot(coreUpgrade ? "after-plugin-upgrade" : "after-plugin-replacement");
   receipt.candidatePluginIdentity = await inspectPlugin("candidate-plugin-inspect", candidatePlugin);
   const candidateValidation = await json(successful(await run("candidate-config-validate", cliBin, ["config", "validate", "--json"])));
   assert.equal(candidateValidation.valid, true);
   await searches("candidate");
   await snapshot("after-candidate-searches");
-  await compareInstalled("candidate-core-final", candidateCore, coreRoot);
+  receipt.finalCoreIdentity = await compareInstalled(coreUpgrade ? "candidate-core-final" : "stable-core-unchanged-final", coreUpgrade ? candidateCore : stableCore, coreRoot);
   receipt.completed = true;
 } catch (error) {
   receipt.errors.push({ name: error.name, message: error.message });
@@ -552,10 +606,14 @@ assert.deepEqual(receipt.errors, [], "installed-upgrade proof must not contain f
 assert.deepEqual(receipt.behaviorFailures, []);
 assert.equal(receipt.stableBaselineObserved, true);
 assert.equal(receipt.completed, true);
+assert.equal(receipt.coreUpdaterInvoked, coreUpgrade);
+assert.equal(receipt.calls.some((call) => call.name === "stable-installed-updater"), coreUpgrade);
 assert.equal(receipt.requests.length, 6);
 assert.ok(receipt.calls.every((call) => call.processGroupGone && !call.watchdogFired && !call.forcedKill));
 assert.equal(receipt.serverClosed, true);
 assert.equal(receipt.fixturePortRebound, true);
 assert.equal(receipt.allOwnedProcessGroupsGone, true);
 assert.equal(receipt.fixtureRemoved, true);
-console.log("PASS: published stable installed updater and canonical plugin replacement preserved authored defaults; installed candidate count/override/real-request timeout passed");
+console.log(coreUpgrade
+  ? "PASS: published 2026.10.3 installed updater and canonical plugin replacement preserved authored defaults; installed candidate count/override/real-request timeout passed"
+  : "PASS: published latest 2026.10.4 core remained byte-identical while canonical e9 candidate plugin 2026.10.3 replacement preserved authored defaults; count/override/real-request timeout passed; no core updater executed");
