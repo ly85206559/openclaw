@@ -9,9 +9,8 @@ const MARKDOWN_CODE =
 
 const MARKDOWN_PAGES: Record<string, string> = {
   "/markdown-code": MARKDOWN_CODE,
-  "/markdown-unclosed": "```text\n# literal\n- literal",
-  "/markdown-whitespace-unclosed":
-    '```python\n    if enabled:\n        print("two  spaces")\n\n\n\treturn True',
+  "/markdown-unclosed":
+    '```text\n# literal\n- literal\n    if enabled:\n        print("two  spaces")\n\n\n\treturn True',
   "/markdown-inline-fence-prose": "Use ``` to start a code block.\nNext paragraph.",
 };
 
@@ -130,10 +129,9 @@ describe("web_fetch visibility through the real tool execute path", () => {
   );
 
   it.each([
-    ["/markdown-unclosed", "# literal\n- literal"],
     [
-      "/markdown-whitespace-unclosed",
-      '    if enabled:\n        print("two  spaces")\n\n\n\treturn True',
+      "/markdown-unclosed",
+      '# literal\n- literal\n    if enabled:\n        print("two  spaces")\n\n\n\treturn True',
     ],
     ["/markdown-inline-fence-prose", "Use ``` to start a code block.\nNext paragraph."],
   ])("preserves Markdown content through HTTP text extraction for %s", async (path, expected) => {
