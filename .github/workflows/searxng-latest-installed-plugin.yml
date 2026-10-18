@@ -6,7 +6,6 @@ on:
     paths:
       - .github/workflows/searxng-latest-installed-plugin.yml
       - .proof/searxng-defaults/installed-upgrade.mjs
-  workflow_dispatch:
 
 permissions:
   contents: read
@@ -16,6 +15,12 @@ env:
 
 jobs:
   latest-installed-plugin:
+    # Workflow 386125831 has completed run 1. Consent is for its next run, attempt 1, only.
+    if: >-
+      github.repository == 'ly85206559/openclaw' && github.actor == 'ly85206559' &&
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/codex/proof-searxng-consented-install-20261018' &&
+      github.run_number == 2 && github.run_attempt == 1
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -71,6 +76,9 @@ jobs:
           env -i HOME="$HOME" PATH="$PATH" CI=true GITHUB_ACTIONS=true NO_COLOR=1 \
             SOURCE_SHA="$SOURCE_SHA" PROOF_SCENARIO=latest-plugin-install \
             PROOF_ACCEPT_CAPABILITIES_FOR_SOURCE_SHA="$SOURCE_SHA" \
+            PROOF_WORKFLOW_RUN_ID="${{ github.run_id }}" \
+            PROOF_WORKFLOW_RUN_NUMBER="${{ github.run_number }}" \
+            PROOF_WORKFLOW_RUN_ATTEMPT="${{ github.run_attempt }}" \
             PROOF_OUTPUT_DIR="$RUNNER_TEMP/searxng-latest-installed" \
             CANDIDATE_PLUGIN_TARBALL="$RUNNER_TEMP/searxng-latest-plugin-package/openclaw-searxng-plugin-2026.10.3.tgz" \
             node ../proof/.proof/searxng-defaults/installed-upgrade.mjs \
