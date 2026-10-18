@@ -82,9 +82,24 @@ jobs:
           const original = "fc8788d9985d4c9a94fea722fb39571b6f040ed3";
           const owner = "scripts/check-control-ui-performance-base.mts";
           const installedRoot = fs.realpathSync(process.cwd());
+          const installedHead = spawnSync("git", ["rev-parse", "HEAD"], {encoding:"utf8"});
+          assert.equal(installedHead.status, 0, installedHead.stderr);
+          assert.equal(installedHead.stdout.trim(), candidate);
           const root = path.join(process.env.GITHUB_WORKSPACE, "source # space");
-          for (const directory of ["node_modules", "ui/node_modules"]) {
-            fs.symlinkSync(path.join(installedRoot, directory), path.join(root, directory), "dir");
+          const workspaceRoots = ["", "ui"];
+          const linkedDependencies = [];
+          for (const parent of ["packages", "extensions"]) {
+            for (const entry of fs.readdirSync(path.join(installedRoot, parent), {withFileTypes:true})) {
+              if (entry.isDirectory()) workspaceRoots.push(path.join(parent, entry.name));
+            }
+          }
+          for (const workspace of workspaceRoots) {
+            const directory = path.join(workspace, "node_modules");
+            const installed = path.join(installedRoot, directory);
+            if (fs.existsSync(installed)) {
+              fs.symlinkSync(installed, path.join(root, directory), "dir");
+              linkedDependencies.push(directory);
+            }
           }
           process.chdir(root);
           assert.match(root, /source # space$/u);
@@ -103,7 +118,8 @@ jobs:
             candidate, original, sourceTree: git("rev-parse", "HEAD^{tree}"),
             node: process.version, command: ["pnpm", "ui:check-performance:base", candidate],
             candidateOwnerHash: sha256(pristine), controlOwnerHash: sha256(control.stdout),
-            realCheckout: true, outcomes: [],
+            realCheckout: true, dependencyCheckoutHead: installedHead.stdout.trim(),
+            linkedDependencies, outcomes: [],
           };
           try {
             for (const [mode, source] of [["raw-preload-control", control.stdout], ["exact-candidate", pristine]]) {
