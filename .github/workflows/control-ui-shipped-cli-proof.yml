@@ -43,34 +43,12 @@ jobs:
           bun --version
           pnpm install --frozen-lockfile
 
-      - name: Reproduce the original Bun fixture regression
-        run: |
-          set -euo pipefail
-          git restore --source=fc8788d9985d4c9a94fea722fb39571b6f040ed3 -- test/scripts/control-ui-performance-base.test.ts
-          set +e
-          OPENCLAW_VITEST_RUNTIME=bun pnpm test test/scripts/control-ui-performance-base.test.ts --maxWorkers=1 > "$RUNNER_TEMP/bun-red.log" 2>&1
-          status=$?
-          set -e
-          cat "$RUNNER_TEMP/bun-red.log"
-          git restore --source=HEAD -- test/scripts/control-ui-performance-base.test.ts
-          test "$status" -ne 0
-          grep -F 'Module not found' "$RUNNER_TEMP/bun-red.log"
-          grep -F 'repo ' "$RUNNER_TEMP/bun-red.log"
-
-      - name: Prove the repaired owner suite under Node and Bun
-        run: |
-          set -euo pipefail
-          git diff --exit-code
-          OPENCLAW_VITEST_RUNTIME=node pnpm test test/scripts/control-ui-performance-base.test.ts --maxWorkers=1 2>&1 | tee "$RUNNER_TEMP/node-green.log"
-          OPENCLAW_VITEST_RUNTIME=bun pnpm test test/scripts/control-ui-performance-base.test.ts --maxWorkers=1 2>&1 | tee "$RUNNER_TEMP/bun-green.log"
-          node scripts/check-changed.mjs --dry-run -- scripts/check-control-ui-performance-base.mts test/scripts/control-ui-performance-base.test.ts
-          pnpm exec oxfmt --check scripts/check-control-ui-performance-base.mts test/scripts/control-ui-performance-base.test.ts
-          node scripts/run-oxlint.mjs --tsconfig tsconfig.scripts.json scripts/check-control-ui-performance-base.mts test/scripts/control-ui-performance-base.test.ts
-
+      # Exact 3c22172 owner suites, format and lint already passed in 39109664756;
+      # required upstream CI 39110104707 also passed. Reuse those unchanged gates.
       - name: Run the original PNPM comparison command in the real checkout
         run: |
           set -euo pipefail
-          git worktree add --detach "$GITHUB_WORKSPACE/source # space" 3c22172e91d8db5d748fd7e08eaca4ef2353d581
+          git worktree add --detach "$GITHUB_WORKSPACE/source %20 space" 3c22172e91d8db5d748fd7e08eaca4ef2353d581
           node --input-type=module <<'NODE'
           import assert from "node:assert/strict";
           import { createHash } from "node:crypto";
@@ -85,7 +63,7 @@ jobs:
           const installedHead = spawnSync("git", ["rev-parse", "HEAD"], {encoding:"utf8"});
           assert.equal(installedHead.status, 0, installedHead.stderr);
           assert.equal(installedHead.stdout.trim(), candidate);
-          const root = path.join(process.env.GITHUB_WORKSPACE, "source # space");
+          const root = path.join(process.env.GITHUB_WORKSPACE, "source %20 space");
           const workspaceRoots = ["", "ui"];
           const linkedDependencies = [];
           for (const parent of ["packages", "extensions"]) {
@@ -102,7 +80,7 @@ jobs:
             }
           }
           process.chdir(root);
-          assert.match(root, /source # space$/u);
+          assert.match(root, /source %20 space$/u);
           const git = (...args) => {
             const result = spawnSync("git", args, { encoding: "utf8" });
             assert.equal(result.status, 0, result.stderr);
@@ -176,9 +154,6 @@ jobs:
         with:
           name: control-ui-shipped-cli-${{ github.run_id }}
           path: |
-            ${{ runner.temp }}/bun-red.log
-            ${{ runner.temp }}/node-green.log
-            ${{ runner.temp }}/bun-green.log
             ${{ runner.temp }}/shipped-*.log
             ${{ runner.temp }}/shipped-cli-receipt.json
           if-no-files-found: error
