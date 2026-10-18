@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   focused-regression:
-    runs-on: ubuntu-24.04
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -18,12 +18,22 @@ jobs:
       matrix:
         include:
           - name: current-main-test-only-red
-            target_ref: 3905256ff995dd37227b30c6de31e3bd21b5193f
+            target_ref: 9aeedd645ad
             expect_failure: true
+            os: ubuntu-24.04
           - name: fixed-head-green
-            target_ref: aad12f48d24b228464a8933720a4bcb3fc6d9772
+            target_ref: fc8788d9985
             expect_failure: false
-    name: ${{ matrix.name }}
+            os: ubuntu-24.04
+          - name: current-main-test-only-red
+            target_ref: 9aeedd645ad
+            expect_failure: true
+            os: windows-2025
+          - name: fixed-head-green
+            target_ref: fc8788d9985
+            expect_failure: false
+            os: windows-2025
+    name: ${{ matrix.name }} (${{ matrix.os }})
     steps:
       - name: Checkout exact proof target
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -45,6 +55,7 @@ jobs:
           pnpm install --frozen-lockfile
 
       - name: Run owning boundary test
+        shell: bash
         env:
           EXPECT_FAILURE: ${{ matrix.expect_failure }}
           TARGET_REF: ${{ matrix.target_ref }}
