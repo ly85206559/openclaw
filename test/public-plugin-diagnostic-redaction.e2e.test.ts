@@ -7,11 +7,17 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { isSupportedOpenClawNodeVersion } from "../node-version.mjs";
+import type { OpenClawConfig } from "../src/config/types.js";
+import {
+  resolveCompatRegistryVersion,
+  resolveInstalledPluginIndexPolicyHash,
+} from "../src/plugins/installed-plugin-index-policy.js";
 import { writePersistedInstalledPluginIndex } from "../src/plugins/installed-plugin-index-store-write.js";
 import {
   INSTALLED_PLUGIN_INDEX_MIGRATION_VERSION,
   INSTALLED_PLUGIN_INDEX_VERSION,
 } from "../src/plugins/installed-plugin-index-types.js";
+import { resolveCompatibilityHostVersion } from "../src/version.js";
 
 const PLUGIN_ID = "fixture-public-diagnostic";
 const SYNTHETIC_SECRET = "fixture-only-public-diagnostic-value";
@@ -73,9 +79,10 @@ function stopProcessTree(child: ChildProcess | undefined): void {
 }
 
 async function waitForGatewayReady(child: ChildProcess, output: { text: string }): Promise<void> {
-  const deadline = Date.now() + 8 * 60 * 1000;
+  const deadline = Date.now() + 3 * 60 * 1000;
   while (Date.now() <= deadline) {
-    if (output.text.includes("gateway ready")) {
+    // Subsystem formatting drops the repeated "gateway" word, so the line is "[gateway] ready".
+    if (output.text.includes("[gateway] ready")) {
       return;
     }
     if (output.text.includes("refusing to report the gateway ready")) {
@@ -147,25 +154,27 @@ describe("public plugin diagnostic CLI proof", () => {
         `${JSON.stringify({ name: PLUGIN_ID, main: oversizedMain }, null, 2)}\n`,
         "utf8",
       );
-      await fs.mkdir(stateDir, { recursive: true });
       await fs.writeFile(
-        configPath,
-        `${JSON.stringify(
-          {
-            gateway: {
-              mode: "local",
-              bind: "loopback",
-              port,
-              auth: { mode: "token", token: gatewayToken },
-            },
-            memory: { search: { enabled: false } },
-            plugins: { entries: { [PLUGIN_ID]: { enabled: true } } },
-          },
-          null,
-          2,
-        )}\n`,
+        path.join(pluginDir, "openclaw.plugin.json"),
+        `${JSON.stringify({ id: PLUGIN_ID, configSchema: { type: "object" } }, null, 2)}\n`,
         "utf8",
       );
+      await fs.writeFile(path.join(pluginDir, "index.js"), "export {}\n", "utf8");
+      const config = {
+        gateway: {
+          mode: "local",
+          bind: "loopback",
+          port,
+          auth: { mode: "token", token: gatewayToken },
+        },
+        memory: { search: { enabled: false } },
+        plugins: {
+          load: { paths: [pluginDir] },
+          entries: { [PLUGIN_ID]: { enabled: true } },
+        },
+      } as OpenClawConfig;
+      await fs.mkdir(stateDir, { recursive: true });
+      await fs.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
       const env = proofProcessEnv({
         ...process.env,
         HOME: root,
@@ -178,10 +187,10 @@ describe("public plugin diagnostic CLI proof", () => {
       await writePersistedInstalledPluginIndex(
         {
           version: INSTALLED_PLUGIN_INDEX_VERSION,
-          hostContractVersion: "proof",
-          compatRegistryVersion: "proof",
+          hostContractVersion: resolveCompatibilityHostVersion(env),
+          compatRegistryVersion: resolveCompatRegistryVersion(),
           migrationVersion: INSTALLED_PLUGIN_INDEX_MIGRATION_VERSION,
-          policyHash: "proof",
+          policyHash: resolveInstalledPluginIndexPolicyHash(config, env),
           generatedAtMs: Date.now(),
           installRecords: {
             [PLUGIN_ID]: {
