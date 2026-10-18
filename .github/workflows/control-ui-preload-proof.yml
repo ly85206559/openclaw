@@ -18,19 +18,19 @@ jobs:
       matrix:
         include:
           - name: current-main-test-only-red
-            target_ref: 9aeedd645ad
+            target_ref: 9aeedd645ad7af79dc5af6f187f86193823ab9a3
             expect_failure: true
             os: ubuntu-24.04
           - name: fixed-head-green
-            target_ref: fc8788d9985
+            target_ref: fc8788d9985d4c9a94fea722fb39571b6f040ed3
             expect_failure: false
             os: ubuntu-24.04
           - name: current-main-test-only-red
-            target_ref: 9aeedd645ad
+            target_ref: 9aeedd645ad7af79dc5af6f187f86193823ab9a3
             expect_failure: true
             os: windows-2025
           - name: fixed-head-green
-            target_ref: fc8788d9985
+            target_ref: fc8788d9985d4c9a94fea722fb39571b6f040ed3
             expect_failure: false
             os: windows-2025
     name: ${{ matrix.name }} (${{ matrix.os }})
