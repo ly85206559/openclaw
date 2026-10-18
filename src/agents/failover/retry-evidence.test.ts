@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   classifyRateLimitWindow,
+  hasLongWindowRateLimitEvidence,
   hasOrganizationTpmRateLimitEvidence,
   resolveRetryAfterMs,
 } from "./retry-evidence.js";
@@ -68,6 +69,19 @@ describe("classifyRateLimitWindow", () => {
     ["429 Rate limit reached on tokens per minute (TPM).", false],
   ])("distinguishes exhausted organization TPM from request throttles: %s", (message, expected) => {
     expect(hasOrganizationTpmRateLimitEvidence(message)).toBe(expected);
+  });
+
+  it("treats Anthropic's plural spend-cap wording as an exhausted usage window", () => {
+    const message =
+      '{"type":"error","error":{"type":"invalid_request_error","message":"You have reached your specified API usage limits. You will regain access on 2026-11-01 at 00:00 UTC."}}';
+    expect(hasLongWindowRateLimitEvidence(message)).toBe(true);
+    expect(classifyRateLimitWindow(message, NOW_MS)).toEqual({ kind: "long" });
+    expect(
+      classifyRateLimitWindow(
+        "You have reached your API usage limits on tokens per minute.",
+        NOW_MS,
+      ),
+    ).toEqual({ kind: "short" });
   });
 
   it("compares converted fractions against the one-minute short-window limit", () => {
