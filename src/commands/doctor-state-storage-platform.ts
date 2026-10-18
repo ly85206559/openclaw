@@ -1,4 +1,3 @@
-/** Platform storage diagnostics for Doctor state directories. */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -44,11 +43,8 @@ type LinuxMountInfoEntry = {
   source: string;
 };
 
-type LinuxSdBackedStateDir = {
+type LinuxSdBackedStateDir = LinuxMountInfoEntry & {
   path: string;
-  mountPoint: string;
-  fsType: string;
-  source: string;
 };
 
 function parseLinuxMountInfo(rawMountInfo: string): LinuxMountInfoEntry[] {
@@ -174,7 +170,6 @@ export function detectLinuxSdBackedStateDir(stateDir: string): LinuxSdBackedStat
   return stateMount;
 }
 
-/** Formats the warning for state stored on SD/eMMC media. */
 export function formatLinuxSdBackedStateDirWarning(
   displayStateDir: string,
   linuxSdBackedStateDir: LinuxSdBackedStateDir,
@@ -211,7 +206,6 @@ export function detectLinuxVolatileStateDir(stateDir: string): LinuxVolatileStat
   return volatileStateMount;
 }
 
-/** Formats the warning for state stored on a volatile Linux filesystem. */
 export function formatLinuxVolatileStateDirWarning(
   displayStateDir: string,
   volatileDir: LinuxVolatileStateDir,
@@ -228,6 +222,24 @@ export function formatLinuxVolatileStateDirWarning(
   ].join("\n");
 }
 
+function detectCloudSyncedStateDir<Storage extends string>(
+  stateDir: string,
+  roots: readonly { root: string; storage: Storage }[],
+  caseInsensitive = false,
+): { path: string; storage: Storage } | null {
+  if (roots.length === 0) {
+    return null;
+  }
+  // Resolve missing leaves through existing ancestors: a junction may lead out of a sync root.
+  const resolvedStatePath =
+    resolvePathThroughExistingAncestor(stateDir, path) ?? path.resolve(stateDir);
+  const comparisonPath = caseInsensitive ? resolvedStatePath.toLowerCase() : resolvedStatePath;
+  const match = roots.find(({ root }) =>
+    isPathUnderRoot(comparisonPath, caseInsensitive ? root.toLowerCase() : root),
+  );
+  return match ? { path: resolvedStatePath, storage: match.storage } : null;
+}
+
 /** Detects macOS state directories under iCloud Drive or CloudStorage providers. */
 export function detectMacCloudSyncedStateDir(stateDir: string): {
   path: string;
@@ -240,7 +252,7 @@ export function detectMacCloudSyncedStateDir(stateDir: string): {
   // Cloud-sync roots should always be anchored to the OS account home on macOS.
   // OPENCLAW_HOME can relocate app data defaults, but iCloud/CloudStorage remain under the OS home.
   const homedir = os.homedir();
-  const roots = [
+  return detectCloudSyncedStateDir(stateDir, [
     {
       storage: "iCloud Drive" as const,
       root: path.join(homedir, "Library", "Mobile Documents", "com~apple~CloudDocs"),
@@ -249,18 +261,7 @@ export function detectMacCloudSyncedStateDir(stateDir: string): {
       storage: "CloudStorage provider" as const,
       root: path.join(homedir, "Library", "CloudStorage"),
     },
-  ];
-  // Missing state leaves must still follow existing symlink ancestors, like the Linux detectors.
-  const resolvedStatePath =
-    resolvePathThroughExistingAncestor(stateDir, path) ?? path.resolve(stateDir);
-
-  for (const { storage, root } of roots) {
-    if (isPathUnderRoot(resolvedStatePath, root)) {
-      return { path: resolvedStatePath, storage };
-    }
-  }
-
-  return null;
+  ]);
 }
 
 /** Detects Windows state directories under OneDrive sync roots. */
@@ -288,31 +289,11 @@ export function detectWindowsCloudSyncedStateDir(
   addRoot("OneDrive", resolveEnvironmentValue(env, "OneDrive", platform));
   addRoot("OneDrive", resolveEnvironmentValue(env, "OneDriveConsumer", platform));
   addRoot("OneDrive for Business", resolveEnvironmentValue(env, "OneDriveCommercial", platform));
-  if (roots.length === 0) {
-    return null;
-  }
-
-  // A state dir that does not exist yet cannot be resolved directly, and
-  // falling back to the lexical path misreads a not-yet-created leaf beneath a
-  // OneDrive-named junction that actually resolves to local storage. Resolve
-  // through the nearest existing ancestor, as the Linux detectors do, so the
-  // junction is followed even when the leaf is absent.
-  const resolvedStatePath =
-    resolvePathThroughExistingAncestor(stateDir, path) ?? path.resolve(stateDir);
-
-  for (const { storage, root } of roots) {
-    // Windows filesystems are case-insensitive by default; compare folded.
-    if (isPathUnderRoot(resolvedStatePath.toLowerCase(), root.toLowerCase())) {
-      return { path: resolvedStatePath, storage };
-    }
-  }
-
-  return null;
+  return detectCloudSyncedStateDir(stateDir, roots, true);
 }
 
 type WindowsCloudSyncedStateDir = NonNullable<ReturnType<typeof detectWindowsCloudSyncedStateDir>>;
 
-/** Formats the warning for state stored under a OneDrive sync root. */
 export function formatWindowsCloudSyncedStateDirWarning(
   displayStateDir: string,
   windowsCloudSyncedStateDir: WindowsCloudSyncedStateDir,
