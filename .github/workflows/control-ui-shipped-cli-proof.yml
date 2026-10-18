@@ -14,14 +14,14 @@ jobs:
     timeout-minutes: 35
     defaults:
       run:
-        working-directory: "source # space"
+        working-directory: source
         shell: bash
     steps:
-      - name: Checkout the exact candidate in a special-character path
+      - name: Checkout the exact candidate for the owner suites
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: 3c22172e91d8db5d748fd7e08eaca4ef2353d581
-          path: "source # space"
+          path: source
           fetch-depth: 3
           persist-credentials: false
 
@@ -31,7 +31,7 @@ jobs:
           node-version: 24.21.0
 
       - name: Set up the repository-pinned test Bun
-        uses: "./source # space/.github/actions/setup-test-bun"
+        uses: ./source/.github/actions/setup-test-bun
 
       - name: Install declared dependencies
         run: |
@@ -70,6 +70,7 @@ jobs:
       - name: Run the original PNPM comparison command in the real checkout
         run: |
           set -euo pipefail
+          git worktree add --detach "$GITHUB_WORKSPACE/source # space" 3c22172e91d8db5d748fd7e08eaca4ef2353d581
           node --input-type=module <<'NODE'
           import assert from "node:assert/strict";
           import { createHash } from "node:crypto";
@@ -80,7 +81,12 @@ jobs:
           const candidate = "3c22172e91d8db5d748fd7e08eaca4ef2353d581";
           const original = "fc8788d9985d4c9a94fea722fb39571b6f040ed3";
           const owner = "scripts/check-control-ui-performance-base.mts";
-          const root = fs.realpathSync(process.cwd());
+          const installedRoot = fs.realpathSync(process.cwd());
+          const root = path.join(process.env.GITHUB_WORKSPACE, "source # space");
+          for (const directory of ["node_modules", "ui/node_modules"]) {
+            fs.symlinkSync(path.join(installedRoot, directory), path.join(root, directory), "dir");
+          }
+          process.chdir(root);
           assert.match(root, /source # space$/u);
           const git = (...args) => {
             const result = spawnSync("git", args, { encoding: "utf8" });
