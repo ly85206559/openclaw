@@ -267,14 +267,19 @@ describe("public plugin diagnostic CLI proof", () => {
         expect(diagnostic?.detail).not.toContain(SYNTHETIC_SECRET);
         expect(diagnostic?.detail?.length ?? 0).toBeLessThanOrEqual(1_000);
         expect(diagnostic?.detail?.length ?? 0).toBeGreaterThan(0);
-        console.log(
-          [
-            "public plugin diagnostic CLI proof:",
-            `detailLength=${diagnostic?.detail?.length}`,
-            "containsSyntheticCredential=false",
-            `reason=${diagnostic?.reason}`,
-          ].join(" "),
-        );
+        const detail = diagnostic.detail ?? "";
+        const proofLine = [
+          "public plugin diagnostic CLI proof:",
+          `detailLength=${detail.length}`,
+          "containsSyntheticCredential=false",
+          `reason=${diagnostic.reason}`,
+          "boundedTo1000=true",
+        ].join(" ");
+        process.stderr.write(`${proofLine}\n`);
+        const proofLog = process.env.PUBLIC_DIAGNOSTIC_PROOF_LOG;
+        if (proofLog) {
+          await fs.writeFile(proofLog, `${proofLine}\n`, "utf8");
+        }
       } finally {
         stopProcessTree(gateway);
         await fs.rm(root, { recursive: true, force: true });

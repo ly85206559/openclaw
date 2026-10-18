@@ -23,7 +23,11 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
       - name: Run public diagnostic CLI proof
+        env:
+          PUBLIC_DIAGNOSTIC_PROOF_LOG: public-diagnostic-proof.log
         run: >-
           node scripts/run-vitest.mjs run
           test/public-plugin-diagnostic-redaction.e2e.test.ts
           --reporter verbose
+      - name: Show public diagnostic proof
+        run: cat public-diagnostic-proof.log
