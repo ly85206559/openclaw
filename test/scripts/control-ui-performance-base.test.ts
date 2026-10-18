@@ -70,7 +70,7 @@ async function createComparisonRepo(
   const diagnostics = command.enableDiagnostics("control-ui-performance-base");
   diagnostics.stage("fixture");
   const temporaryRoot = fs.realpathSync(command.createTempDir("ui-budget-proof-"));
-  const root = path.join(temporaryRoot, "repo");
+  const root = path.join(temporaryRoot, "repo # space");
   const scratch = path.join(temporaryRoot, "scratch");
   const identityCapture = path.join(temporaryRoot, "build-identities.jsonl");
   const env = createNestedGitEnv();
