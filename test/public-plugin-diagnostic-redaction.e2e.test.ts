@@ -194,7 +194,7 @@ describe("public plugin diagnostic CLI proof", () => {
           generatedAtMs: Date.now(),
           installRecords: {
             [PLUGIN_ID]: {
-              source: "path",
+              source: "npm",
               sourcePath: pluginDir,
               installPath: pluginDir,
               spec: PLUGIN_ID,
@@ -257,7 +257,12 @@ describe("public plugin diagnostic CLI proof", () => {
         }
         const parsed: unknown = JSON.parse(healthStdout.slice(jsonStart, jsonEnd + 1));
         const diagnostic = findPluginDiagnostic(parsed);
-        expect(diagnostic?.reason).toBe("missing-main-entry");
+        if (!diagnostic) {
+          throw new Error(
+            `health JSON had no public diagnostic for ${PLUGIN_ID}:\n${hideSyntheticSecret(healthStdout).slice(-4000)}`,
+          );
+        }
+        expect(diagnostic.reason).toBe("missing-main-entry");
         expect(diagnostic?.detail).toBeTypeOf("string");
         expect(diagnostic?.detail).not.toContain(SYNTHETIC_SECRET);
         expect(diagnostic?.detail?.length ?? 0).toBeLessThanOrEqual(1_000);
