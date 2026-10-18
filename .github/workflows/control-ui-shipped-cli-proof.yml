@@ -1,0 +1,163 @@
+name: Secretless UI comparison shipped-command proof
+
+on:
+  push:
+    branches:
+      - codex/proof-176094-shipped-cli-20261018
+
+permissions:
+  contents: read
+
+jobs:
+  proof:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    defaults:
+      run:
+        working-directory: "source # space"
+        shell: bash
+    steps:
+      - name: Checkout the exact candidate in a special-character path
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: 3c22172e91d8db5d748fd7e08eaca4ef2353d581
+          path: "source # space"
+          fetch-depth: 3
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.21.0
+
+      - name: Set up the repository-pinned test Bun
+        uses: "./source # space/.github/actions/setup-test-bun"
+
+      - name: Install declared dependencies
+        run: |
+          set -euo pipefail
+          corepack enable
+          corepack prepare "$(node -p 'require("./package.json").packageManager')" --activate
+          node --version
+          pnpm --version
+          bun --version
+          pnpm install --frozen-lockfile
+
+      - name: Reproduce the original Bun fixture regression
+        run: |
+          set -euo pipefail
+          git restore --source=fc8788d9985d4c9a94fea722fb39571b6f040ed3 -- test/scripts/control-ui-performance-base.test.ts
+          set +e
+          OPENCLAW_VITEST_RUNTIME=bun pnpm test test/scripts/control-ui-performance-base.test.ts --maxWorkers=1 > "$RUNNER_TEMP/bun-red.log" 2>&1
+          status=$?
+          set -e
+          cat "$RUNNER_TEMP/bun-red.log"
+          git restore --source=HEAD -- test/scripts/control-ui-performance-base.test.ts
+          test "$status" -ne 0
+          grep -F 'Module not found' "$RUNNER_TEMP/bun-red.log"
+          grep -F 'repo ' "$RUNNER_TEMP/bun-red.log"
+
+      - name: Prove the repaired owner suite under Node and Bun
+        run: |
+          set -euo pipefail
+          git diff --exit-code
+          OPENCLAW_VITEST_RUNTIME=node pnpm test test/scripts/control-ui-performance-base.test.ts --maxWorkers=1 2>&1 | tee "$RUNNER_TEMP/node-green.log"
+          OPENCLAW_VITEST_RUNTIME=bun pnpm test test/scripts/control-ui-performance-base.test.ts --maxWorkers=1 2>&1 | tee "$RUNNER_TEMP/bun-green.log"
+          node scripts/check-changed.mjs --dry-run -- scripts/check-control-ui-performance-base.mts test/scripts/control-ui-performance-base.test.ts
+          pnpm exec oxfmt --check scripts/check-control-ui-performance-base.mts test/scripts/control-ui-performance-base.test.ts
+          node scripts/run-oxlint.mjs --tsconfig tsconfig.scripts.json scripts/check-control-ui-performance-base.mts test/scripts/control-ui-performance-base.test.ts
+
+      - name: Run the original PNPM comparison command in the real checkout
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import assert from "node:assert/strict";
+          import { createHash } from "node:crypto";
+          import { spawnSync } from "node:child_process";
+          import fs from "node:fs";
+          import path from "node:path";
+
+          const candidate = "3c22172e91d8db5d748fd7e08eaca4ef2353d581";
+          const original = "fc8788d9985d4c9a94fea722fb39571b6f040ed3";
+          const owner = "scripts/check-control-ui-performance-base.mts";
+          const root = fs.realpathSync(process.cwd());
+          assert.match(root, /source # space$/u);
+          const git = (...args) => {
+            const result = spawnSync("git", args, { encoding: "utf8" });
+            assert.equal(result.status, 0, result.stderr);
+            return result.stdout.trim();
+          };
+          assert.equal(git("rev-parse", "HEAD"), candidate);
+          assert.equal(git("status", "--porcelain", "--untracked-files=no"), "");
+          const pristine = fs.readFileSync(owner);
+          const control = spawnSync("git", ["show", `${original}^:${owner}`]);
+          assert.equal(control.status, 0, control.stderr.toString());
+          const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
+          const receipt = {
+            candidate, original, sourceTree: git("rev-parse", "HEAD^{tree}"),
+            node: process.version, command: ["pnpm", "ui:check-performance:base", candidate],
+            candidateOwnerHash: sha256(pristine), controlOwnerHash: sha256(control.stdout),
+            realCheckout: true, outcomes: [],
+          };
+          try {
+            for (const [mode, source] of [["raw-preload-control", control.stdout], ["exact-candidate", pristine]]) {
+              fs.writeFileSync(owner, source);
+              if (mode === "exact-candidate") {
+                assert.equal(git("status", "--porcelain", "--untracked-files=no"), "");
+              }
+              const started = performance.now();
+              const result = spawnSync("pnpm", ["ui:check-performance:base", candidate], {
+                encoding: "utf8", maxBuffer: 32 * 1024 * 1024,
+              });
+              const output = `${result.stdout ?? ""}${result.stderr ?? ""}`;
+              fs.writeFileSync(path.join(process.env.RUNNER_TEMP, `shipped-${mode}.log`), output);
+              console.log(`=== ${mode}: exit=${result.status} wallMs=${Math.round(performance.now()-started)} ===`);
+              console.log(output);
+              assert.equal(result.error, undefined);
+              assert.equal(result.signal, null);
+              assert.match(output, /Control UI comparison: working-tree head/u);
+              if (mode === "raw-preload-control") {
+                assert.notEqual(result.status, 0);
+                assert.match(output, /ERR_MODULE_NOT_FOUND/u);
+                assert.match(output, /tsx\.mjs/u);
+              } else {
+                assert.match(output, /Base CSS sidecars normalized with the candidate's canonical compressor\./u);
+                assert.match(output, /startup CSS gzip vs base:/u);
+                assert.equal(result.status, 0, "The real comparison must reach its successful budget verdict.");
+              }
+              receipt.outcomes.push({mode, exit: result.status, wallMs: Math.round(performance.now()-started), outputSha256: sha256(output)});
+            }
+          } finally {
+            fs.writeFileSync(owner, pristine);
+            receipt.ownerRestored = sha256(fs.readFileSync(owner)) === receipt.candidateOwnerHash;
+            fs.writeFileSync(path.join(process.env.RUNNER_TEMP, "shipped-cli-receipt.json"), JSON.stringify(receipt, null, 2));
+            console.log(JSON.stringify(receipt, null, 2));
+          }
+          assert.equal(receipt.ownerRestored, true);
+          assert.equal(git("status", "--porcelain", "--untracked-files=no"), "");
+          NODE
+
+      - name: Check the proof workflow with the repository owner
+        run: |
+          set -euo pipefail
+          proof_path=.github/workflows/control-ui-shipped-cli-proof.yml
+          test ! -e "$proof_path"
+          git fetch --no-tags --depth=1 origin "$GITHUB_SHA"
+          git show "$GITHUB_SHA:$proof_path" > "$proof_path"
+          trap 'rm -f -- .github/workflows/control-ui-shipped-cli-proof.yml' EXIT
+          pnpm check:workflows
+          git diff --check
+
+      - name: Preserve public synthetic proof output
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: control-ui-shipped-cli-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/bun-red.log
+            ${{ runner.temp }}/node-green.log
+            ${{ runner.temp }}/bun-green.log
+            ${{ runner.temp }}/shipped-*.log
+            ${{ runner.temp }}/shipped-cli-receipt.json
+          if-no-files-found: error
+          retention-days: 30
