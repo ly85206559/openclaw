@@ -21,6 +21,18 @@ function hideSyntheticSecret(text: string): string {
   return text.split(SYNTHETIC_SECRET).join("[synthetic-secret]");
 }
 
+function proofProcessEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...base, OPENCLAW_LOG_LEVEL: "info" };
+  // A Vitest parent sets VITEST=true, which silences Gateway console logs.
+  // This proof has to observe a normal CLI process.
+  for (const key of Object.keys(env)) {
+    if (key === "VITEST" || key.startsWith("VITEST_")) {
+      delete env[key];
+    }
+  }
+  return env;
+}
+
 async function reserveLoopbackPort(): Promise<number> {
   const port = await new Promise<number>((resolve, reject) => {
     const server = net.createServer();
@@ -65,6 +77,9 @@ async function waitForGatewayReady(child: ChildProcess, output: { text: string }
   while (Date.now() <= deadline) {
     if (output.text.includes("gateway ready")) {
       return;
+    }
+    if (output.text.includes("refusing to report the gateway ready")) {
+      throw new Error(`gateway refused ready:\n${hideSyntheticSecret(output.text).slice(-4000)}`);
     }
     if (child.exitCode !== null) {
       const visible = hideSyntheticSecret(output.text).slice(-4000);
@@ -151,7 +166,7 @@ describe("public plugin diagnostic CLI proof", () => {
         )}\n`,
         "utf8",
       );
-      const env: NodeJS.ProcessEnv = {
+      const env = proofProcessEnv({
         ...process.env,
         HOME: root,
         USERPROFILE: root,
@@ -159,7 +174,7 @@ describe("public plugin diagnostic CLI proof", () => {
         OPENCLAW_CONFIG_PATH: configPath,
         OPENCLAW_SUPPRESS_NOTES: "1",
         OPENCLAW_GATEWAY_TOKEN: gatewayToken,
-      };
+      });
       await writePersistedInstalledPluginIndex(
         {
           version: INSTALLED_PLUGIN_INDEX_VERSION,
