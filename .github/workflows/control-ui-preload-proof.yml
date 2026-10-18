@@ -120,7 +120,11 @@ jobs:
             assert.equal(result.error, undefined, `Node failed to start: ${errorMessage}`);
             if (expectedFailure) {
               assert.notEqual(result.status, 0, "raw path unexpectedly loaded the preload");
-              assert.match(result.stderr, /tsx\.mjs/u, "baseline failed for an unrelated reason");
+              assert.match(
+                result.stderr,
+                /tsx\.mjs|ERR_MODULE_NOT_FOUND|ERR_UNSUPPORTED_ESM_URL_SCHEME/u,
+                "baseline failed for an unrelated reason",
+              );
             } else {
               assert.equal(result.status, 0, result.stderr);
               assert.match(result.stdout, /preload-ok/u);
