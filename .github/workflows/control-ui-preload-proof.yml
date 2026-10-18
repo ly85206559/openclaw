@@ -1,0 +1,64 @@
+name: Secretless Control UI preload proof
+
+on:
+  push:
+    branches:
+      - codex/proof-control-ui-preload-20261018
+
+permissions:
+  contents: read
+
+jobs:
+  focused-regression:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        include:
+          - name: current-main-test-only-red
+            target_ref: 3905256ff995dd37227b30c6de31e3bd21b5193f
+            expect_failure: true
+          - name: fixed-head-green
+            target_ref: aad12f48d24b228464a8933720a4bcb3fc6d9772
+            expect_failure: false
+    name: ${{ matrix.name }}
+    steps:
+      - name: Checkout exact proof target
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ matrix.target_ref }}
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.21.0
+
+      - name: Install pinned dependencies
+        run: |
+          corepack enable
+          corepack prepare pnpm@12.9.0 --activate
+          node --version
+          pnpm --version
+          pnpm install --frozen-lockfile
+
+      - name: Run owning boundary test
+        env:
+          EXPECT_FAILURE: ${{ matrix.expect_failure }}
+          TARGET_REF: ${{ matrix.target_ref }}
+        run: |
+          set +e
+          pnpm test test/scripts/control-ui-performance-base.test.ts --maxWorkers=1 2>&1 | tee "$RUNNER_TEMP/test.log"
+          test_status=${PIPESTATUS[0]}
+          set -e
+          echo "target=$TARGET_REF node=$(node --version) pnpm=$(pnpm --version) test_exit=$test_status"
+          if [[ "$EXPECT_FAILURE" == "true" ]]; then
+            if [[ "$test_status" -eq 0 ]]; then
+              echo "Expected the test-only current-main target to fail." >&2
+              exit 1
+            fi
+          elif [[ "$test_status" -ne 0 ]]; then
+            exit "$test_status"
+          fi
