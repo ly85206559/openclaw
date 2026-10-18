@@ -55,6 +55,7 @@ jobs:
           pnpm install --frozen-lockfile
 
       - name: Run owning boundary test
+        if: runner.os == 'Linux'
         shell: bash
         env:
           EXPECT_FAILURE: ${{ matrix.expect_failure }}
@@ -73,3 +74,58 @@ jobs:
           elif [[ "$test_status" -ne 0 ]]; then
             exit "$test_status"
           fi
+
+      - name: Run native Windows Node preload boundary
+        if: runner.os == 'Windows'
+        shell: bash
+        env:
+          EXPECT_FAILURE: ${{ matrix.expect_failure }}
+          TARGET_REF: ${{ matrix.target_ref }}
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from "node:assert/strict";
+          import { spawnSync } from "node:child_process";
+          import fs from "node:fs";
+          import os from "node:os";
+          import path from "node:path";
+          import { pathToFileURL } from "node:url";
+
+          const checkoutRoot = process.cwd();
+          const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "control-ui preload #"));
+          const repoRoot = path.join(tempRoot, "repo # space");
+          const expectedFailure = process.env.EXPECT_FAILURE === "true";
+          const files = [
+            "scripts/tsx.mjs",
+            "scripts/lib/tsx-cli-shim.mjs",
+            "scripts/lib/local-check-runtime.mts",
+            "scripts/lib/managed-cleanup-handoff.mts",
+          ];
+          try {
+            for (const file of files) {
+              const target = path.join(repoRoot, file);
+              fs.mkdirSync(path.dirname(target), { recursive: true });
+              fs.copyFileSync(path.join(checkoutRoot, file), target);
+            }
+            fs.symlinkSync(path.join(checkoutRoot, "node_modules"), path.join(repoRoot, "node_modules"), "junction");
+            const loaderPath = path.join(repoRoot, "scripts/tsx.mjs");
+            const importArg = expectedFailure ? loaderPath : pathToFileURL(loaderPath).href;
+            const result = spawnSync(
+              process.execPath,
+              ["--import", importArg, "-e", "process.stdout.write('preload-ok')"],
+              { cwd: repoRoot, encoding: "utf8" },
+            );
+            const errorMessage = result.error?.message ?? "";
+            console.log(`target=${process.env.TARGET_REF} node=${process.version} mode=${expectedFailure ? "raw-path" : "file-url"} exit=${result.status} spawnError=${errorMessage}`);
+            if (result.stderr) console.log(result.stderr.trim());
+            assert.equal(result.error, undefined, `Node failed to start: ${errorMessage}`);
+            if (expectedFailure) {
+              assert.notEqual(result.status, 0, "raw path unexpectedly loaded the preload");
+              assert.match(result.stderr, /tsx\.mjs/u, "baseline failed for an unrelated reason");
+            } else {
+              assert.equal(result.status, 0, result.stderr);
+              assert.match(result.stdout, /preload-ok/u);
+            }
+          } finally {
+            fs.rmSync(tempRoot, { recursive: true, force: true });
+          }
+          NODE
