@@ -1,11 +1,11 @@
 // Real CLI proof that a running Gateway health response redacts and bounds
 // public plugin-verification diagnostics (#135420).
-import { type ChildProcess, spawn, spawnSync } from "node:child_process";
+import { ChildProcess, spawn, spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { isSupportedOpenClawNodeVersion } from "../node-version.mjs";
 import type { OpenClawConfig } from "../src/config/types.js";
 import {
@@ -80,7 +80,7 @@ function stopProcessTree(child: ChildProcess | undefined): void {
 
 async function waitForGatewayReady(child: ChildProcess, output: { text: string }): Promise<void> {
   const deadline = Date.now() + 3 * 60 * 1000;
-  while (Date.now() <= deadline) {
+  while (true) {
     // Subsystem formatting drops the repeated "gateway" word, so the line is "[gateway] ready".
     if (output.text.includes("[gateway] ready")) {
       return;
@@ -91,6 +91,10 @@ async function waitForGatewayReady(child: ChildProcess, output: { text: string }
     if (child.exitCode !== null) {
       const visible = hideSyntheticSecret(output.text).slice(-4000);
       throw new Error(`gateway exited ${child.exitCode} before ready:\n${visible}`);
+    }
+    // A busy worker may resume after the deadline with readiness already buffered.
+    if (Date.now() > deadline) {
+      break;
     }
     await new Promise<void>((resolve) => {
       setTimeout(resolve, 250);
@@ -138,6 +142,25 @@ function findPluginDiagnostic(value: unknown): { reason?: string; detail?: strin
 }
 
 describe("public plugin diagnostic CLI proof", () => {
+  it.each([true, false])(
+    "checks observed readiness before an expired deadline: %s",
+    async (ready) => {
+      const clock = vi.spyOn(Date, "now").mockReturnValueOnce(0).mockReturnValue(180_001);
+      try {
+        const result = waitForGatewayReady(new ChildProcess(), {
+          text: ready ? "[gateway] ready" : "",
+        });
+        if (ready) {
+          await expect(result).resolves.toBeUndefined();
+        } else {
+          await expect(result).rejects.toThrow("timed out waiting for gateway ready");
+        }
+      } finally {
+        clock.mockRestore();
+      }
+    },
+  );
+
   it.runIf(isSupportedOpenClawNodeVersion(process.versions.node))(
     "redacts and bounds a synthetic verification diagnostic in gateway health JSON",
     async () => {
