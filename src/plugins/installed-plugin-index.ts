@@ -3,7 +3,13 @@ import type { OpenClawConfig } from "../config/types.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { withBundledPluginEnablementCompat } from "./bundled-compat.js";
 import { isBundledProviderCompatPlugin } from "./bundled-provider-compat.js";
-import { normalizePluginsConfig, resolveEffectivePluginActivationState } from "./config-state.js";
+import {
+  createPluginActivationSource,
+  normalizePluginsConfig,
+  resolveEffectiveEnableState,
+  resolveEffectivePluginActivationState,
+  type PluginActivationConfigSource,
+} from "./config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
 import { discoverOpenClawPlugins, type PluginDiscoveryResult } from "./discovery.js";
 import { normalizeInstallRecordMap } from "./installed-plugin-index-install-records.js";
@@ -11,8 +17,12 @@ import {
   resolveCompatRegistryVersion,
   resolveInstalledPluginIndexPolicyHash,
 } from "./installed-plugin-index-policy.js";
-import { buildInstalledPluginIndexRecords } from "./installed-plugin-index-record-builder.js";
+import {
+  buildInstalledPluginIndexRecords,
+  type InstalledPluginIndexInventoryRecord,
+} from "./installed-plugin-index-record-builder.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-record-reader.js";
+import { resolveInstalledPluginIndexStorePath } from "./installed-plugin-index-store-path.js";
 import {
   INSTALLED_PLUGIN_INDEX_MIGRATION_VERSION,
   INSTALLED_PLUGIN_INDEX_VERSION,
@@ -79,6 +89,11 @@ function buildInstalledPluginIndex(
         }
       : baseDiscovery;
   const registry = loadPluginManifestRegistryCore({
+    registryPath: resolveInstalledPluginIndexStorePath({
+      env,
+      stateDir: params.stateDir,
+      filePath: params.pluginIndexFilePath,
+    }),
     config: params.config,
     workspaceDir: params.workspaceDir,
     env,
@@ -88,19 +103,17 @@ function buildInstalledPluginIndex(
   });
   const diagnostics = [...(registry.diagnostics ?? [])];
   const generatedAtMs = (params.now?.() ?? new Date()).getTime();
-  const activationConfig = withBundledPluginEnablementCompat({
+  const plugins = projectInstalledPluginIndexPolicy({
+    plugins: buildInstalledPluginIndexRecords({
+      candidates: discovery.candidates,
+      registry,
+      env,
+      diagnostics,
+      installRecords,
+    }),
     config: params.config,
     env,
-    pluginIds: registry.plugins.filter(isBundledProviderCompatPlugin).map((plugin) => plugin.id),
-    activation: "defaults",
-  });
-  const plugins = buildInstalledPluginIndexRecords({
-    candidates: discovery.candidates,
-    registry,
-    config: activationConfig,
-    env,
-    diagnostics,
-    installRecords,
+    artifactPreservingReadOnly: params.artifactPreservingReadOnly,
   });
 
   return {
@@ -110,7 +123,9 @@ function buildInstalledPluginIndex(
       hostContractVersion: resolveCompatibilityHostVersion(env),
       compatRegistryVersion: resolveCompatRegistryVersion(),
       migrationVersion: INSTALLED_PLUGIN_INDEX_MIGRATION_VERSION,
-      policyHash: resolveInstalledPluginIndexPolicyHash(params.config, env),
+      policyHash: resolveInstalledPluginIndexPolicyHash(params.config, env, {
+        artifactPreservingReadOnly: params.artifactPreservingReadOnly,
+      }),
       generatedAtMs,
       ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
       ...(params.refreshReason ? { refreshReason: params.refreshReason } : {}),
@@ -121,6 +136,37 @@ function buildInstalledPluginIndex(
     discovery: params.candidates ? undefined : discovery,
     manifestRegistry: registry,
   };
+}
+
+/**
+ * Activation is the only config-owned index fact. A policy change re-projects the
+ * same disk inventory in memory; only install, uninstall or source changes rescan.
+ */
+export function projectInstalledPluginIndexPolicy(params: {
+  plugins: readonly InstalledPluginIndexInventoryRecord[];
+  config?: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  artifactPreservingReadOnly?: boolean;
+}): InstalledPluginIndexRecord[] {
+  const activationConfig = withBundledPluginEnablementCompat({
+    config: params.config,
+    env: params.env,
+    pluginIds: params.plugins.filter(isInstalledBundledProvider).map((plugin) => plugin.pluginId),
+    activation: "defaults",
+    artifactPreservingReadOnly: params.artifactPreservingReadOnly,
+  });
+  const normalizedConfig = normalizePluginsConfig(activationConfig?.plugins);
+  return params.plugins.map((plugin) => ({
+    ...plugin,
+    enabled: resolveEffectiveEnableState({
+      id: plugin.pluginId,
+      origin: plugin.origin,
+      channelIds: plugin.contributions?.channels,
+      config: normalizedConfig,
+      rootConfig: activationConfig,
+      enabledByDefault: isPluginEnabledByDefaultForPlatform(plugin),
+    }).enabled,
+  }));
 }
 
 export function loadInstalledPluginIndex(
@@ -159,47 +205,77 @@ export function refreshInstalledPluginIndex(
   return buildInstalledPluginIndex({ ...params, refreshReason: params.reason }).index;
 }
 
-export function getInstalledPluginRecord(
-  index: InstalledPluginIndex,
-  pluginId: string,
-): InstalledPluginIndexRecord | undefined {
-  return index.plugins.find((plugin) => plugin.pluginId === pluginId);
-}
-
 export function isInstalledPluginEnabled(
   index: InstalledPluginIndex,
   pluginId: string,
   config?: OpenClawConfig,
   env?: NodeJS.ProcessEnv,
 ): boolean {
-  const record = getInstalledPluginRecord(index, pluginId);
-  if (!record) {
-    return false;
+  const record = index.plugins.find((plugin) => plugin.pluginId === pluginId);
+  if (!record || !config) {
+    return record?.enabled ?? false;
   }
-  if (!config) {
-    return record.enabled;
-  }
-  const activationConfig = withBundledPluginEnablementCompat({
-    config,
-    env,
-    pluginIds: isBundledProviderCompatPlugin({
-      origin: record.origin,
-      providers: record.contributions?.providers,
-      contracts: record.contributions?.contracts,
-    })
-      ? [record.pluginId]
-      : [],
-    activation: "defaults",
-  });
-  const normalizedConfig = normalizePluginsConfig(activationConfig?.plugins);
-  const state = resolveEffectivePluginActivationState({
-    id: record.pluginId,
+  return createInstalledPluginEnabledPredicate([record], config, env)(pluginId);
+}
+
+function isInstalledBundledProvider(record: InstalledPluginIndexInventoryRecord): boolean {
+  return isBundledProviderCompatPlugin({
     origin: record.origin,
-    config: normalizedConfig,
-    rootConfig: activationConfig,
-    enabledByDefault: isPluginEnabledByDefaultForPlatform(record),
+    providers: record.contributions?.providers,
+    contracts: record.contributions?.contracts,
   });
-  // The index records startup policy; current activation is evaluated against
-  // the same package facts without making the startup enablement sticky.
-  return state.enabled;
+}
+
+/** Prepare live policy for one synchronous operation, never across config/root changes. */
+export function createInstalledPluginEnabledPredicate(
+  plugins: readonly InstalledPluginIndexRecord[],
+  config?: OpenClawConfig,
+  env?: NodeJS.ProcessEnv,
+): (pluginId: string) => boolean {
+  let source: PluginActivationConfigSource | undefined;
+  let bundledSource: PluginActivationConfigSource | undefined;
+  let records: Map<string, InstalledPluginIndexRecord> | undefined;
+  return (pluginId) => {
+    if (!records) {
+      records = new Map();
+      // Inventory is fixed for this operation; retain the first duplicate like find().
+      for (const entry of plugins) {
+        if (!records.has(entry.pluginId)) {
+          records.set(entry.pluginId, entry);
+        }
+      }
+    }
+    const record = records.get(pluginId);
+    if (!record || !config) {
+      return record?.enabled ?? false;
+    }
+    let activationSource: PluginActivationConfigSource;
+    if (isInstalledBundledProvider(record)) {
+      if (!bundledSource) {
+        const bundledConfig = withBundledPluginEnablementCompat({
+          config,
+          env,
+          pluginIds: plugins.filter(isInstalledBundledProvider).map((entry) => entry.pluginId),
+          activation: "defaults",
+        });
+        // Provider compat may extend an allowlist; non-provider owners must retain the original.
+        bundledSource =
+          bundledConfig === config
+            ? (source ??= createPluginActivationSource({ config }))
+            : createPluginActivationSource({ config: bundledConfig });
+      }
+      activationSource = bundledSource;
+    } else {
+      activationSource = source ??= createPluginActivationSource({ config });
+    }
+    return resolveEffectivePluginActivationState({
+      id: record.pluginId,
+      origin: record.origin,
+      channelIds: record.contributions?.channels,
+      config: activationSource.plugins,
+      rootConfig: activationSource.rootConfig,
+      activationSource,
+      enabledByDefault: isPluginEnabledByDefaultForPlatform(record),
+    }).enabled;
+  };
 }

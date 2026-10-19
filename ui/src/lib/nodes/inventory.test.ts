@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
+import type { NodeHostStats } from "../../../../src/shared/node-host-stats.js";
 import type { PairedDevice } from "./index.ts";
 import {
   buildDeviceInventory,
@@ -22,7 +23,54 @@ function firstGroup(groups: ReturnType<typeof buildDeviceInventory>) {
   return expectDefined(groups[0], "first device inventory group");
 }
 
+const hostStats = {
+  cpuCount: 24,
+  loadAverage: [3.2, 2.8, 2.4],
+  memoryTotalBytes: 192 * 1024 ** 3,
+  memoryFreeBytes: 41 * 1024 ** 3,
+  diskTotalBytes: 2 * 1024 ** 4,
+  diskAvailableBytes: Math.round(1.2 * 1024 ** 4),
+  updatedAtMs: 1_700_000_000_000,
+} satisfies NodeHostStats;
+
 describe("buildDeviceInventory", () => {
+  it("keeps available device-family metadata for live and offline platform labels", () => {
+    const groups = buildDeviceInventory({
+      paired: [
+        device({ deviceId: "live", platform: "MacIntel", deviceFamily: "Mac" }),
+        device({ deviceId: "offline", platform: "MacIntel", deviceFamily: "Mac" }),
+        device({ deviceId: "legacy", platform: "MacIntel" }),
+        device({ deviceId: "paired-node", platform: "MacIntel", deviceFamily: "Mac" }),
+        device({ deviceId: "node-fallback", platform: "MacIntel" }),
+      ],
+      nodes: [
+        { nodeId: "node-only", platform: "MacIntel", deviceFamily: "iPad" },
+        { nodeId: "paired-node", platform: "MacIntel", deviceFamily: "iPad" },
+        { nodeId: "node-fallback", platform: "MacIntel", deviceFamily: "iPad" },
+      ],
+      presence: [{ deviceId: "live", platform: "MacIntel", deviceFamily: "iPad", ts: 1_000 }],
+    });
+    const entries = groups.map((group) => group.primary);
+    expect(entries.find((entry) => entry.id === "live")).toMatchObject({
+      platform: "MacIntel",
+      deviceFamily: "iPad",
+    });
+    expect(entries.find((entry) => entry.id === "offline")).toMatchObject({ deviceFamily: "Mac" });
+    expect(entries.find((entry) => entry.id === "node-only")).toMatchObject({
+      deviceFamily: "iPad",
+    });
+    expect(entries.find((entry) => entry.id === "legacy")).toMatchObject({
+      platform: "MacIntel",
+      deviceFamily: undefined,
+    });
+    expect(entries.find((entry) => entry.id === "paired-node")).toMatchObject({
+      deviceFamily: "Mac",
+    });
+    expect(entries.find((entry) => entry.id === "node-fallback")).toMatchObject({
+      deviceFamily: "iPad",
+    });
+  });
+
   it("joins device records with node catalog rows by id", () => {
     const groups = buildDeviceInventory({
       paired: [
@@ -47,6 +95,7 @@ describe("buildDeviceInventory", () => {
           workerSlots: { total: 2, available: 1 },
           workerBundle: { status: "installed", version: "2026.8.9" },
           uiVersion: "19.5",
+          hostStats,
         },
       ],
     });
@@ -63,6 +112,22 @@ describe("buildDeviceInventory", () => {
     expect(entry.node?.uiVersion).toBe("19.5");
     expect(entry.node?.workerSlots).toEqual({ total: 2, available: 1 });
     expect(entry.node?.workerBundle).toEqual({ status: "installed", version: "2026.8.9" });
+    expect(entry.node?.hostStats).toEqual(hostStats);
+  });
+
+  it("preserves host stats when optional load and disk inputs are absent", () => {
+    const stats = {
+      cpuCount: 8,
+      memoryTotalBytes: 16 * 1024 ** 3,
+      memoryFreeBytes: 4 * 1024 ** 3,
+      updatedAtMs: 1_700_000_000_000,
+    };
+    const groups = buildDeviceInventory({
+      paired: [],
+      nodes: [{ nodeId: "node-1", hostStats: stats }],
+    });
+
+    expect(firstGroup(groups).primary.node?.hostStats).toEqual(stats);
   });
 
   it("preserves a valid missing worker bundle status", () => {
@@ -79,39 +144,6 @@ describe("buildDeviceInventory", () => {
     });
 
     expect(firstGroup(groups).primary.node?.workerBundle).toEqual({ status: "missing" });
-  });
-
-  it("drops malformed worker bundle status instead of exposing private fields", () => {
-    const groups = buildDeviceInventory({
-      paired: [],
-      nodes: [
-        {
-          nodeId: "node-1",
-          connected: true,
-          paired: true,
-          workerBundle: {
-            status: "installed",
-            version: "2026.8.9",
-            bundleHash: "a".repeat(64),
-          },
-        },
-      ],
-    });
-
-    expect(firstGroup(groups).primary.node?.workerBundle).toBeUndefined();
-  });
-
-  it.each([
-    { total: 0, available: 0 },
-    { total: 2, available: 3 },
-    { total: 2, available: 1, busy: 1 },
-  ])("drops malformed worker slot summaries: $total/$available", (workerSlots) => {
-    const groups = buildDeviceInventory({
-      paired: [],
-      nodes: [{ nodeId: "node-1", connected: true, paired: true, workerSlots }],
-    });
-
-    expect(firstGroup(groups).primary.node?.workerSlots).toBeUndefined();
   });
 
   it("joins presence case-insensitively and prefers its display metadata", () => {

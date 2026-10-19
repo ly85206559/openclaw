@@ -1,155 +1,138 @@
-import { spawnSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect } from "vitest";
+import type { MacScriptFixture } from "./mac-script-fixture.test-support.js";
 
 const systemPath = "/usr/bin:/bin:/usr/sbin:/sbin";
 
-export function runMacFixtureTool(command: string, args: string[], root: string) {
-  const result = spawnSync(command, args, {
+export async function runMacFixtureTool(
+  command: string,
+  args: string[],
+  root: string,
+  mac: MacScriptFixture,
+) {
+  const result = await mac.run(command, args, {
     encoding: "utf8",
     cwd: root,
     env: { HOME: root, TMPDIR: root, PATH: systemPath },
   });
-  expect(result.status, `${command}: ${result.error ?? result.stderr}`).toBe(0);
+  expect(result, `${command}: ${result.stderr}`).toMatchObject({ error: undefined, status: 0 });
   return result.stdout.trim();
 }
 
-type NativeFixtures = Record<
-  | "arm64"
-  | "x86_64"
-  | "universal"
-  | "fat64"
-  | "universalArchive"
-  | "coff"
-  | "pe"
-  | "armLibrary"
-  | "intelLibrary"
-  | "universalLibrary"
-  | "elf"
-  | "armArchive"
-  | "intelArchive",
-  Buffer
->;
-let nativeFixtures: NativeFixtures | undefined;
-const nativeObjects = new Map<"arm64" | "x86_64", Buffer>();
+type PreparedNativeFixtures = Awaited<ReturnType<typeof compileMacNativeFixtures>>;
+let nativeFixtures: Promise<PreparedNativeFixtures> | undefined;
 
-export function macObjectFixture(root: string, arch: "arm64" | "x86_64") {
-  compiledMacNativeFixtures(root);
-  const object = nativeObjects.get(arch);
-  if (!object) {
-    throw new Error(`Missing compiled ${arch} object fixture`);
-  }
-  return object;
+export async function macObjectFixture(
+  root: string,
+  arch: "arm64" | "x86_64",
+  mac: MacScriptFixture,
+) {
+  return (await prepareMacNativeFixtures(root, mac)).objects[arch];
 }
 
-export function macFatContainerFixture(root: string, slices: readonly Buffer[], fat64 = false) {
-  const inputs = slices.map((bytes, index) => {
+export async function macFatContainerFixture(
+  root: string,
+  slices: readonly Buffer[],
+  fat64: boolean,
+  mac: MacScriptFixture,
+) {
+  const inputs = [];
+  for (const [index, bytes] of slices.entries()) {
     const file = path.join(root, `fat-container-input-${index}`);
-    writeFileSync(file, bytes);
-    return file;
-  });
+    await writeFile(file, bytes);
+    inputs.push(file);
+  }
   const output = path.join(root, "fat-container");
-  runMacFixtureTool(
+  await runMacFixtureTool(
     "/usr/bin/lipo",
     ["-create", ...(fat64 ? ["-fat64"] : []), ...inputs, "-output", output],
     root,
+    mac,
   );
-  return readFileSync(output);
+  return readFile(output);
 }
 
-export function singleSliceMacFat64(root: string, arch: "arm64" | "x86_64"): Buffer {
-  const input = path.join(root, `fat64-input-${arch}`);
-  const output = path.join(root, `fat64-single-${arch}`);
-  writeFileSync(input, compiledMacNativeFixtures(root)[arch]);
-  runMacFixtureTool("/usr/bin/lipo", ["-create", "-fat64", input, "-output", output], root);
-  expect(runMacFixtureTool("/usr/bin/lipo", ["-archs", output], root)).toBe(arch);
-  const bytes = readFileSync(output);
+export async function singleSliceMacFat64(
+  root: string,
+  arch: "arm64" | "x86_64",
+  mac: MacScriptFixture,
+) {
+  const bytes = await macFatContainerFixture(
+    root,
+    [(await compiledMacNativeFixtures(root, mac))[arch]],
+    true,
+    mac,
+  );
+  const output = path.join(root, "fat-container");
+  expect(await runMacFixtureTool("/usr/bin/lipo", ["-archs", output], root, mac)).toBe(arch);
   expect(bytes.subarray(0, 4).toString("hex")).toBe("cafebabf");
   return bytes;
 }
 
-export function compiledMacNativeFixtures(root: string): NativeFixtures {
+export async function compiledMacNativeFixtures(root: string, mac: MacScriptFixture) {
+  return (await prepareMacNativeFixtures(root, mac)).binaries;
+}
+
+function prepareMacNativeFixtures(root: string, mac: MacScriptFixture) {
   if (nativeFixtures) {
     return nativeFixtures;
   }
-  const source = path.join(root, "inert.c");
-  writeFileSync(source, "int main(void) { return 0; }\n");
-  const files = {
-    arm64: path.join(root, "arm64"),
-    x86_64: path.join(root, "x86_64"),
-    universal: path.join(root, "universal"),
-    fat64: path.join(root, "fat64"),
-    universalArchive: path.join(root, "universal.a"),
-    coff: path.join(root, "windows.obj"),
-    armLibrary: path.join(root, "arm-library"),
-    intelLibrary: path.join(root, "intel-library"),
-    universalLibrary: path.join(root, "universal-library"),
-    elf: path.join(root, "elf"),
-    armArchive: path.join(root, "arm.a"),
-    intelArchive: path.join(root, "intel.a"),
-  };
-  for (const arch of ["arm64", "x86_64"] as const) {
-    for (const dynamic of [false, true]) {
-      const output = dynamic
-        ? files[arch === "arm64" ? "armLibrary" : "intelLibrary"]
-        : files[arch];
-      runMacFixtureTool(
-        "/usr/bin/xcrun",
-        [
-          "clang",
-          "-arch",
-          arch,
-          "-mmacosx-version-min=14.0",
-          "-Wl,-no_adhoc_codesign",
-          ...(dynamic ? ["-dynamiclib"] : []),
-          source,
-          "-o",
-          output,
-        ],
-        root,
-      );
-      expect(runMacFixtureTool("/usr/bin/lipo", ["-archs", output], root)).toBe(arch);
+  // The first case owns preparation; only complete in-memory bytes are shared.
+  // A failed flight rejects its borrowers, but must not poison later case lifetimes.
+  const preparation = mac.lifetime.run(() => compileMacNativeFixtures(root, mac));
+  nativeFixtures = preparation;
+  void preparation.catch(() => {
+    if (nativeFixtures === preparation) {
+      nativeFixtures = undefined;
     }
-    const object = path.join(root, `${arch}.o`);
-    const archive = files[arch === "arm64" ? "armArchive" : "intelArchive"];
-    runMacFixtureTool("/usr/bin/xcrun", ["clang", "-arch", arch, "-c", source, "-o", object], root);
-    nativeObjects.set(arch, readFileSync(object));
-    runMacFixtureTool("/usr/bin/ar", ["rcs", archive, object], root);
-    expect(runMacFixtureTool("/usr/bin/lipo", ["-archs", archive], root)).toBe(arch);
+  });
+  return preparation;
+}
+
+async function compileMacNativeFixtures(root: string, mac: MacScriptFixture) {
+  const tool = (command: string, args: string[]) => runMacFixtureTool(command, args, root, mac);
+  const at = (name: string) => path.join(root, name);
+  const source = path.join(root, "inert.c");
+  await writeFile(source, "int main(void) { return 0; }\n");
+  for (const [arch, prefix] of [
+    ["arm64", "arm"],
+    ["x86_64", "intel"],
+  ] as const) {
+    for (const dynamic of [false, true]) {
+      const output = at(dynamic ? `${prefix}-library` : arch);
+      await tool("/usr/bin/xcrun", [
+        "clang",
+        "-arch",
+        arch,
+        "-mmacosx-version-min=14.0",
+        "-Wl,-no_adhoc_codesign",
+        ...(dynamic ? ["-dynamiclib"] : []),
+        source,
+        "-o",
+        output,
+      ]);
+      expect(await tool("/usr/bin/lipo", ["-archs", output])).toBe(arch);
+    }
+    await tool("/usr/bin/xcrun", ["clang", "-arch", arch, "-c", source, "-o", at(`${arch}.o`)]);
+    await tool("/usr/bin/ar", ["rcs", at(`${prefix}.a`), at(`${arch}.o`)]);
+    expect(await tool("/usr/bin/lipo", ["-archs", at(`${prefix}.a`)])).toBe(arch);
   }
-  runMacFixtureTool(
-    "/usr/bin/lipo",
-    ["-create", files.arm64, files.x86_64, "-output", files.universal],
-    root,
-  );
-  runMacFixtureTool(
-    "/usr/bin/lipo",
-    ["-create", files.armLibrary, files.intelLibrary, "-output", files.universalLibrary],
-    root,
-  );
-  runMacFixtureTool(
-    "/usr/bin/xcrun",
-    ["clang", "-target", "x86_64-unknown-linux-gnu", "-c", source, "-o", files.elf],
-    root,
-  );
-  expect(runMacFixtureTool("/usr/bin/file", ["-b", files.elf], root)).toContain("ELF");
-  runMacFixtureTool(
-    "/usr/bin/lipo",
-    ["-create", "-fat64", files.arm64, files.x86_64, "-output", files.fat64],
-    root,
-  );
-  runMacFixtureTool(
-    "/usr/bin/lipo",
-    ["-create", files.armArchive, files.intelArchive, "-output", files.universalArchive],
-    root,
-  );
-  runMacFixtureTool(
-    "/usr/bin/xcrun",
-    ["clang", "-target", "x86_64-pc-windows-msvc", "-c", source, "-o", files.coff],
-    root,
-  );
-  expect(runMacFixtureTool("/usr/bin/file", ["-b", files.coff], root)).toContain("COFF");
+  for (const [arm, intel, output, extra] of [
+    ["arm64", "x86_64", "universal", []],
+    ["arm-library", "intel-library", "universal-library", []],
+    ["arm64", "x86_64", "fat64", ["-fat64"]],
+    ["arm.a", "intel.a", "universal.a", []],
+  ] as const) {
+    await tool("/usr/bin/lipo", ["-create", ...extra, at(arm), at(intel), "-output", at(output)]);
+  }
+  for (const [target, output, format] of [
+    ["x86_64-unknown-linux-gnu", "elf", "ELF"],
+    ["x86_64-pc-windows-msvc", "windows.obj", "COFF"],
+  ] as const) {
+    await tool("/usr/bin/xcrun", ["clang", "-target", target, "-c", source, "-o", at(output)]);
+    expect(await tool("/usr/bin/file", ["-b", at(output)])).toContain(format);
+  }
   // Minimal inert PE32+ image: DOS header, NT/optional headers, one .text section.
   const pe = Buffer.alloc(1024);
   pe.write("MZ");
@@ -174,24 +157,25 @@ export function compiledMacNativeFixtures(root: string): NativeFixtures {
   pe.writeUInt32LE(512, 412);
   pe.writeUInt32LE(0x60000020, 428);
   pe[512] = 0xc3;
-  writeFileSync(path.join(root, "windows.exe"), pe);
-  expect(
-    runMacFixtureTool("/usr/bin/file", ["-b", path.join(root, "windows.exe")], root),
-  ).toContain("PE32+");
-  nativeFixtures = {
-    arm64: readFileSync(files.arm64),
-    x86_64: readFileSync(files.x86_64),
-    universal: readFileSync(files.universal),
-    fat64: readFileSync(files.fat64),
-    universalArchive: readFileSync(files.universalArchive),
-    coff: readFileSync(files.coff),
-    pe,
-    armLibrary: readFileSync(files.armLibrary),
-    intelLibrary: readFileSync(files.intelLibrary),
-    universalLibrary: readFileSync(files.universalLibrary),
-    elf: readFileSync(files.elf),
-    armArchive: readFileSync(files.armArchive),
-    intelArchive: readFileSync(files.intelArchive),
+  const peFile = path.join(root, "windows.exe");
+  await writeFile(peFile, pe);
+  expect(await tool("/usr/bin/file", ["-b", peFile])).toContain("PE32+");
+  return {
+    binaries: {
+      arm64: await readFile(at("arm64")),
+      x86_64: await readFile(at("x86_64")),
+      universal: await readFile(at("universal")),
+      fat64: await readFile(at("fat64")),
+      universalArchive: await readFile(at("universal.a")),
+      coff: await readFile(at("windows.obj")),
+      pe,
+      armLibrary: await readFile(at("arm-library")),
+      intelLibrary: await readFile(at("intel-library")),
+      universalLibrary: await readFile(at("universal-library")),
+      elf: await readFile(at("elf")),
+      armArchive: await readFile(at("arm.a")),
+      intelArchive: await readFile(at("intel.a")),
+    },
+    objects: { arm64: await readFile(at("arm64.o")), x86_64: await readFile(at("x86_64.o")) },
   };
-  return nativeFixtures;
 }

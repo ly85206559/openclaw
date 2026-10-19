@@ -1,20 +1,19 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { readVisibleSessionTranscriptMessageEntries } from "openclaw/plugin-sdk/session-transcript-runtime";
-import { describe, expect, it, vi } from "vitest";
+import { useSessionStoreTempDirs } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { createCodexCatalogHomeResolver } from "../session-catalog-homes.js";
 import { resolveCodexAppServerHomeDir } from "./auth-start-options.js";
 import { resolveCodexBindingAppServerConnection } from "./binding-connection.js";
 import { createFakeCodexAppServerClient } from "./codex-app-server.test-fixtures.js";
+import type { CodexPluginConfig } from "./config-contracts.js";
+import { resolveCodexSupervisionAppServerRuntimeOptions } from "./config-runtime.js";
 import { createCodexTestHostCapabilities } from "./host-capability.test-support.js";
-import {
-  buildCodexAppServerConnectionFingerprint,
-  replaceCodexCatalogConnectionHomes,
-} from "./plugin-app-cache-key.js";
+import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import { isJsonObject } from "./protocol.js";
 import {
   createCodexAppServerBindingStore,
@@ -23,7 +22,7 @@ import {
 } from "./session-binding.js";
 import { createCodexTestBindingStateStore } from "./session-binding.test-helpers.js";
 import { createCodexTestModel } from "./test-support.js";
-import { startOrResumeThread } from "./thread-lifecycle.js";
+import { startOrResumeThread } from "./thread-lifecycle-run.js";
 import { importCodexThreadHistoryToTranscript } from "./transcript-mirror.js";
 import {
   createForkTestRuntime,
@@ -35,30 +34,28 @@ import {
 
 vi.mock("openclaw/plugin-sdk/session-catalog", async (importOriginal) => ({
   ...(await importOriginal()),
-  deleteSessionUpstreamLink: vi.fn(),
-  upsertSessionUpstreamLink: vi.fn(() => true),
+  deleteSessionUpstreamLinkAsync: vi.fn(),
+  upsertSessionUpstreamLinkAsync: vi.fn(() => true),
 }));
 
 import { forkCodexUpstreamSession } from "./upstream-session-fork.js";
 
 describe("persistent upstream fork continuation", () => {
+  const sessionDirs = useSessionStoreTempDirs(afterAll, "codex-fork-home-");
   it("continues a persistent upstream fork on its secondary home and native model with applied harness configuration", async () => {
-    const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "codex-fork-home-")));
+    const root = sessionDirs.make();
     const agentDir = path.join(root, "agents", "main", "agent");
     const sourceAgentDir = path.join(root, "agents", "source", "agent");
     const secondaryHome = resolveCodexAppServerHomeDir(sourceAgentDir);
     const env = { HOME: root, CODEX_HOME: path.join(root, "primary-codex-home") };
-    const pluginConfig = {
+    const pluginConfig: CodexPluginConfig = {
       supervision: { enabled: true },
       appServer: { approvalsReviewer: "user" },
     };
     const config: OpenClawConfig = {
       agents: {
         ownership: "explicit",
-        list: [
-          { id: "main", agentDir },
-          { id: "source", agentDir: sourceAgentDir },
-        ],
+        entries: { main: { agentDir }, source: { agentDir: sourceAgentDir } },
       },
       session: { store: path.join(root, "openclaw-agent.sqlite") },
     };
@@ -90,6 +87,12 @@ describe("persistent upstream fork continuation", () => {
     const clients: ReturnType<typeof createFakeCodexAppServerClient>[] = [];
     const createClient = (home: "secondary" | "ordinary") => {
       const client = createFakeCodexAppServerClient(async (method, requestParams) => {
+        if (method === "config/read") {
+          return { config: {}, origins: {}, layers: [] };
+        }
+        if (method === "configRequirements/read") {
+          return { requirements: null };
+        }
         if (method === "skills/list") {
           return { data: [] };
         }
@@ -176,14 +179,15 @@ describe("persistent upstream fork continuation", () => {
       await Promise.all(
         [agentDir, secondaryHome, env.CODEX_HOME].map((dir) => fs.mkdir(dir, { recursive: true })),
       );
-      const sourceHome = createCodexCatalogHomeResolver({
-        config,
-        getRuntimeConfig: () => config,
-        getPluginConfig: () => pluginConfig,
-        env,
-      })
-        .forAgent("main")
-        .find((home) => home.appServer.start.env?.CODEX_HOME === secondaryHome);
+      const sourceHome = (
+        await createCodexCatalogHomeResolver({
+          resolveRuntimeOptions: resolveCodexSupervisionAppServerRuntimeOptions,
+          config,
+          getRuntimeConfig: () => config,
+          getPluginConfig: () => pluginConfig,
+          env,
+        }).forAgent("main")
+      ).find((home) => home.appServer.start.env?.CODEX_HOME === secondaryHome);
       expect(sourceHome).toBeDefined();
       const fingerprint = buildCodexAppServerConnectionFingerprint(sourceHome!.appServer, agentDir);
       params.upstream.ref = { connectionFingerprint: fingerprint, threadId: "thread-source" };
@@ -268,8 +272,8 @@ describe("persistent upstream fork continuation", () => {
       ];
       const developerInstructions = "Follow the child agent's current instructions.";
       const continueFork = async (store: CodexAppServerBindingStore, nativeClient = native) => {
-        const connection = resolveCodexBindingAppServerConnection({
-          binding: await store.read(identity),
+        const connection = await resolveCodexBindingAppServerConnection({
+          binding: store.read(identity),
           pluginConfig,
           config,
           agentDir,
@@ -341,8 +345,6 @@ describe("persistent upstream fork continuation", () => {
       for (const client of clients) {
         client.close();
       }
-      replaceCodexCatalogConnectionHomes([]);
-      await fs.rm(root, { recursive: true, force: true });
     }
   });
 });
