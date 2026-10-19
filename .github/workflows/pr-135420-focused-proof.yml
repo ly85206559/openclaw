@@ -1,4 +1,4 @@
-name: PR 135420 Bun identity and remaining gates
+name: PR 135420 exact candidate Node and Bun proof
 
 on:
   workflow_dispatch:
@@ -15,7 +15,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: 7c8b97b90894c684196b8aa6ed8f8985440ed06d
+          ref: 6fa1336f54f8ca0104389285abf939df8ed2b1be
           fetch-depth: 2
           persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -27,15 +27,32 @@ jobs:
         run: |
           corepack enable
           pnpm install --frozen-lockfile
+      - name: Check the touched surface before expensive runtime preparation
+        run: |
+          set -euo pipefail
+          node_modules/.bin/oxfmt --check test/public-plugin-diagnostic-redaction.e2e.test.ts
+          node scripts/run-oxlint.mjs --tsconfig test/tsconfig/tsconfig.test.root.json test/public-plugin-diagnostic-redaction.e2e.test.ts
+          git diff --check
+      - name: Check the exact proof workflow through its canonical owner
+        env:
+          CARRIER_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=1 origin "$CARRIER_SHA"
+          workflow=.github/workflows/pr-135420-focused-proof.yml
+          trap 'git show "HEAD:$workflow" > "$workflow"' EXIT
+          git show "$CARRIER_SHA:$workflow" > "$workflow"
+          pnpm check:workflows
+          git diff --check
       - name: Prepare the exact candidate runtime once through its canonical owner
         run: |
           set -euo pipefail
           mkdir -p proof-results
-          test "$(git rev-parse HEAD)" = 7c8b97b90894c684196b8aa6ed8f8985440ed06d
+          test "$(git rev-parse HEAD)" = 6fa1336f54f8ca0104389285abf939df8ed2b1be
           node --import ./scripts/tsx.mjs --input-type=module -e 'import { runE2eGlobalSetup } from "./scripts/lib/vitest-build-prerequisites.mts"; await runE2eGlobalSetup();' > proof-results/runtime-prepare.log 2>&1
           cat proof-results/runtime-prepare.log
           git diff --exit-code
-      - name: Prove actual Bun worker identity and both complete focused files
+      - name: Prove both complete files on Node and actual Bun workers
         shell: bash
         run: |
           set -euo pipefail
@@ -46,7 +63,7 @@ jobs:
           import { spawnSync } from 'node:child_process';
           import path from 'node:path';
           import { stripVTControlCharacters } from 'node:util';
-          const candidate = '7c8b97b90894c684196b8aa6ed8f8985440ed06d';
+          const candidate = '6fa1336f54f8ca0104389285abf939df8ed2b1be';
           const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
           const git = (...args) => {
             const result = spawnSync('git', args, { encoding: 'utf8' });
@@ -64,12 +81,35 @@ jobs:
           assert.equal(executableHash, '0f46c6ce133341ba52d2f7b3321488c53b62dd78bb30162367abc3f0373ce8ec');
           const receipt = {
             candidate, sourceTree: git('rev-parse', 'HEAD^{tree}'),
+            node: process.version, nodeExecutable: process.execPath,
             bun, revision: revision.stdout.trim(), executableHash,
             nodeRedGreenRun: '39219584685',
-            limitation: 'That prior run failed its lint configuration; its cells named bun were duplicate Node runs. This run supplies actual Bun, not repeated Node red/green.',
+            limitation: 'Prior39219584685 Node RED/GREEN remains historical; its Bun labels were duplicate Node and lint failed. Actual Bun39224861443 passed owner4/readiness2 but Bun-spawned CLI health failed unsupported WebSocket receiver. This candidate keeps Bun workers and uses the documented Node CLI subprocess; it does not fix or claim Bun Gateway transport.',
             sources: Object.fromEntries(['src/plugins/runtime-degraded-state.ts', 'src/plugins/runtime-degraded-state.test.ts', 'test/public-plugin-diagnostic-redaction.e2e.test.ts'].map((file) => [file, hash(readFileSync(file))])),
             cells: [],
           };
+          for (const [name, file, expected] of [
+            ['node-owner', 'src/plugins/runtime-degraded-state.test.ts', 4],
+            ['node-gateway-cli', 'test/public-plugin-diagnostic-redaction.e2e.test.ts', 3],
+          ]) {
+            const args = ['scripts/run-vitest.mjs', 'run', file, '--maxWorkers=1', '--reporter=verbose'];
+            const start = performance.now();
+            const result = spawnSync(process.execPath, args, {
+              env: {...process.env, OPENCLAW_E2E_USE_PREBUILT_DIST: '1'},
+              encoding: 'utf8', timeout: 15 * 60 * 1000, maxBuffer: 16 * 1024 * 1024,
+            });
+            const output = (result.stdout ?? '') + '\n' + (result.stderr ?? '');
+            const plainOutput = stripVTControlCharacters(output);
+            writeFileSync('proof-results/' + name + '.log', output);
+            process.stdout.write(output);
+            receipt.cells.push({name, runtime: 'node', command: process.execPath, args, exit: result.status, signal: result.signal, wallMs: Math.round(performance.now() - start), outputHash: hash(output)});
+            writeFileSync('proof-results/receipt.json', JSON.stringify(receipt, null, 2));
+            assert.equal(result.error, undefined);
+            assert.equal(result.signal, null);
+            assert.equal(result.status, 0);
+            assert.match(plainOutput, new RegExp('Tests\\s+' + expected + ' passed'));
+            if (name === 'node-gateway-cli') assert.match(plainOutput, /public plugin diagnostic CLI proof: detailLength=1000 containsSyntheticCredential=false reason=missing-main-entry boundedTo1000=true/);
+          }
           writeFileSync('proof-results/require-bun-worker.ts', `import { beforeAll } from 'vitest';
           import { realpathSync } from 'node:fs';
           beforeAll(() => {
@@ -96,7 +136,7 @@ jobs:
             const plainOutput = stripVTControlCharacters(output);
             writeFileSync('proof-results/bun-' + name + '.log', output);
             process.stdout.write(output);
-            const cell = {name, command: bun, args, exit: result.status, signal: result.signal, wallMs: Math.round(performance.now() - start), outputHash: hash(output)};
+            const cell = {name, runtime: 'bun', command: bun, args, exit: result.status, signal: result.signal, wallMs: Math.round(performance.now() - start), outputHash: hash(output)};
             receipt.cells.push(cell);
             writeFileSync('proof-results/receipt.json', JSON.stringify(receipt, null, 2));
             assert.equal(result.error, undefined);
@@ -111,27 +151,10 @@ jobs:
           receipt.sourceUnchanged = true;
           writeFileSync('proof-results/receipt.json', JSON.stringify(receipt, null, 2));
           NODE
-      - name: Check the touched surface with its actual root-test config
-        run: |
-          set -euo pipefail
-          node_modules/.bin/oxfmt --check test/public-plugin-diagnostic-redaction.e2e.test.ts
-          node scripts/run-oxlint.mjs --tsconfig test/tsconfig/tsconfig.test.root.json test/public-plugin-diagnostic-redaction.e2e.test.ts
-          git diff --check
-      - name: Check the exact proof workflow through its canonical owner
-        env:
-          CARRIER_SHA: ${{ github.sha }}
-        run: |
-          set -euo pipefail
-          git fetch --no-tags --depth=1 origin "$CARRIER_SHA"
-          workflow=.github/workflows/pr-135420-focused-proof.yml
-          trap 'git show "HEAD:$workflow" > "$workflow"' EXIT
-          git show "$CARRIER_SHA:$workflow" > "$workflow"
-          pnpm check:workflows
-          git diff --check
       - name: Preserve exact runtime identity, raw logs and failures
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: public-diagnostic-bun-${{ github.run_id }}
+          name: public-diagnostic-runtime-${{ github.run_id }}
           path: proof-results/
           retention-days: 30
