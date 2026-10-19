@@ -42,11 +42,7 @@ function resolveDisplayContent(content: unknown): {
 
 export function isAssistantHeartbeatAckForDisplay(message: unknown): boolean {
   const entry = asOptionalObjectRecord(message);
-  if (!entry) {
-    return false;
-  }
-  const role = normalizeLowercaseStringOrEmpty(entry.role);
-  if (role !== "assistant") {
+  if (!entry || normalizeLowercaseStringOrEmpty(entry.role) !== "assistant") {
     return false;
   }
   if (typeof entry.senderLabel === "string" && entry.senderLabel.trim()) {
@@ -59,5 +55,6 @@ export function isAssistantHeartbeatAckForDisplay(message: unknown): boolean {
   if (hasVisibleNonTextContent) {
     return false;
   }
-  return stripHeartbeatTokenForDisplay(text).shouldSkip;
+  // Reasoning-only rows have no answer text, but that is not a heartbeat acknowledgement.
+  return text.trim().length > 0 && stripHeartbeatTokenForDisplay(text).shouldSkip;
 }

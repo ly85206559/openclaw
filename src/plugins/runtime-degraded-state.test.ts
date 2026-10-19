@@ -5,7 +5,12 @@ import { registerSecretValueForRedaction } from "../logging/secret-redaction-reg
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
 import { withTempDirSync } from "../test-helpers/temp-dir.js";
 import {
+  buildDegradedPluginsFromVerificationFailures,
+  clearActiveDegradedPlugin,
+  findActiveDegradedPlugin,
+  listActiveDegradedPlugins,
   pluginInstallPathMatchesRoot,
+  setActiveDegradedPlugins,
   toPublicPluginVerificationDiagnostic,
 } from "./runtime-degraded-state.js";
 
@@ -66,4 +71,33 @@ describe("toPublicPluginVerificationDiagnostic", () => {
     expect(diagnostic.detail).toHaveLength(999);
     expect(diagnostic.detail).not.toMatch(/[\uD800-\uDFFF]$/u);
   });
+});
+
+it("keeps quarantine snapshots stable across caller edits, replacement, and clearing", () => {
+  const previous = listActiveDegradedPlugins();
+  try {
+    const plugins = buildDegradedPluginsFromVerificationFailures([
+      { pluginId: "example", reason: "missing-package-json", detail: "package.json is missing" },
+    ]);
+    setActiveDegradedPlugins(plugins);
+    const snapshot = listActiveDegradedPlugins();
+
+    plugins.length = 0;
+    expect(listActiveDegradedPlugins()).toHaveLength(1);
+
+    setActiveDegradedPlugins(
+      buildDegradedPluginsFromVerificationFailures([
+        { pluginId: "example", reason: "missing-main-entry", detail: "main entry is missing" },
+      ]),
+    );
+    expect(findActiveDegradedPlugin("example")?.diagnostic.reason).toBe("missing-main-entry");
+    expect(snapshot.map((plugin) => plugin.diagnostic.reason)).toEqual(["missing-package-json"]);
+
+    clearActiveDegradedPlugin("example");
+    expect(findActiveDegradedPlugin("example")).toBeUndefined();
+    expect(listActiveDegradedPlugins()).toEqual([]);
+    expect(snapshot.map((plugin) => plugin.diagnostic.reason)).toEqual(["missing-package-json"]);
+  } finally {
+    setActiveDegradedPlugins(previous);
+  }
 });

@@ -9,7 +9,14 @@ const roots: string[] = [];
 function createRoot(): string {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-node-skills-")));
   roots.push(root);
-  return root;
+  const skillsDir = path.join(root, "skills");
+  fs.mkdirSync(skillsDir);
+  return skillsDir;
+}
+
+function scanAt(skillsDir: string) {
+  vi.stubEnv("OPENCLAW_STATE_DIR", path.dirname(skillsDir));
+  return scanNodeHostedSkills();
 }
 
 function writeSkill(
@@ -26,6 +33,7 @@ function writeSkill(
 }
 
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.unstubAllEnvs();
   for (const root of roots.splice(0)) {
     fs.rmSync(root, { recursive: true, force: true });
@@ -69,47 +77,30 @@ describe("scanNodeHostedSkills", () => {
   });
 
   it("treats a missing skills directory as an empty fresh-node inventory", () => {
-    const warn = vi.fn();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
-    expect(scanNodeHostedSkills({ skillsDir: path.join(createRoot(), "missing"), warn })).toEqual(
-      [],
-    );
+    vi.stubEnv("OPENCLAW_STATE_DIR", createRoot());
+    expect(scanNodeHostedSkills()).toEqual([]);
     expect(warn).not.toHaveBeenCalled();
   });
 
-  it("loads descriptors and preserves the full SKILL.md content", () => {
+  it("publishes the same bounded content that supplied the skill metadata", () => {
     const root = createRoot();
-    const content = writeSkill(root, "release-helper", "Prepare a release", "# Release\nDo it.");
+    const original = writeSkill(root, "a-stable", "Original description", "# Original");
+    const invalidDir = path.join(root, "b-invalid");
+    fs.mkdirSync(invalidDir);
+    const invalidFile = path.join(invalidDir, "SKILL.md");
+    fs.writeFileSync(invalidFile, "# Missing frontmatter\n");
+    const warn = vi.spyOn(console, "warn").mockImplementation((message: string) => {
+      if (message.includes(invalidFile)) {
+        writeSkill(root, "a-stable", "Replacement description", "# Replacement");
+      }
+    });
 
-    expect(scanNodeHostedSkills({ skillsDir: root })).toEqual([
-      { name: "release-helper", description: "Prepare a release", content },
+    expect(scanAt(root)).toEqual([
+      { name: "a-stable", description: "Original description", content: original },
     ]);
-  });
-
-  it("loads JSON5-style metadata frontmatter", () => {
-    const root = createRoot();
-    const skillDir = path.join(root, "json5-metadata");
-    fs.mkdirSync(skillDir);
-    const content = `---
-name: json5-metadata
-description: JSON5-style metadata
-metadata:
-  {
-    "openclaw":
-      {
-        "requires":
-          {
-            "env": ["EXAMPLE_VAR"],
-          },
-      },
-  }
----
-`;
-    fs.writeFileSync(path.join(skillDir, "SKILL.md"), content);
-
-    expect(scanNodeHostedSkills({ skillsDir: root })).toEqual([
-      { name: "json5-metadata", description: "JSON5-style metadata", content },
-    ]);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining(invalidFile));
   });
 
   it("skips invalid and oversized skills with warnings", () => {
@@ -132,9 +123,9 @@ metadata:
       path.join(mismatchedDir, "SKILL.md"),
       "---\nname: frontmatter-name\ndescription: Mismatched\n---\n",
     );
-    const warn = vi.fn();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
-    const skills = scanNodeHostedSkills({ skillsDir: root, warn });
+    const skills = scanAt(root);
 
     expect(skills.map((skill) => skill.name)).toEqual(["valid-skill"]);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("description is required"));
@@ -144,7 +135,7 @@ metadata:
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("directory, name, and frontmatter"));
   });
 
-  it("keeps nested diagnostics separate from the current candidate", () => {
+  it("does not inspect nested skills after rejecting the named candidate", () => {
     const root = createRoot();
     const candidateDir = path.join(root, "candidate");
     fs.mkdirSync(path.join(candidateDir, "nested"), { recursive: true });
@@ -152,10 +143,10 @@ metadata:
     fs.writeFileSync(candidateFile, "# Missing frontmatter\n");
     const nestedFile = path.join(candidateDir, "nested", "SKILL.md");
     fs.writeFileSync(nestedFile, "---\nname: [nested\ndescription: Malformed nested skill\n---\n");
-    const warn = vi.fn();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
-    expect(scanNodeHostedSkills({ skillsDir: root, warn })).toEqual([]);
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining(nestedFile));
+    expect(scanAt(root)).toEqual([]);
+    expect(warn).not.toHaveBeenCalledWith(expect.stringContaining(nestedFile));
     expect(warn).toHaveBeenCalledWith(
       expect.stringContaining(`${candidateFile}): description is required`),
     );
@@ -169,9 +160,9 @@ metadata:
       path.join(root, "SKILL.md"),
       "---\nname: skills\ndescription: Root skill\n---\n",
     );
-    const warn = vi.fn();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
-    expect(scanNodeHostedSkills({ skillsDir: root, warn })).toEqual([
+    expect(scanAt(root)).toEqual([
       { name: "valid-child", description: "Valid child", content: childContent },
     ]);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("named child directory"));
@@ -184,9 +175,9 @@ metadata:
     const brokenDir = path.join(root, "broken-child");
     fs.mkdirSync(brokenDir);
     fs.symlinkSync("SKILL.md", path.join(brokenDir, "SKILL.md"));
-    const warn = vi.fn();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
-    expect(scanNodeHostedSkills({ skillsDir: root, warn })).toEqual([
+    expect(scanAt(root)).toEqual([
       { name: "valid-child", description: "Valid child", content: childContent },
     ]);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("skill scan skipped"));
@@ -198,8 +189,8 @@ metadata:
     for (let index = 0; index < 65; index += 1) {
       writeSkill(countRoot, `count-${String(index).padStart(2, "0")}`, "Counted");
     }
-    const countWarn = vi.fn();
-    expect(scanNodeHostedSkills({ skillsDir: countRoot, warn: countWarn })).toHaveLength(64);
+    const countWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(scanAt(countRoot)).toHaveLength(64);
     expect(countWarn).toHaveBeenCalledWith(expect.stringContaining("exceeds 64 skills"));
 
     const totalRoot = createRoot();
@@ -211,8 +202,8 @@ metadata:
         "x".repeat(60 * 1024),
       );
     }
-    const totalWarn = vi.fn();
-    expect(scanNodeHostedSkills({ skillsDir: totalRoot, warn: totalWarn })).toHaveLength(8);
+    const totalWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(scanAt(totalRoot)).toHaveLength(8);
     expect(totalWarn).toHaveBeenCalledWith(expect.stringContaining("exceeds 524288 total bytes"));
   });
 });

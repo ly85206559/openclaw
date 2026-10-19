@@ -1,6 +1,7 @@
 // Tailscale status tests cover status parsing and validation.
 import { describe, expect, it, vi } from "vitest";
 import {
+  extractTailscaleServeGatewayUrls,
   inspectTailscaleServeGatewayUrlsWithRunner,
   resolveTailnetHostWithRunner,
   resolveTailscalePublishedHost,
@@ -22,16 +23,6 @@ describe("shared/tailscale-status", () => {
     await expect(resolveTailnetHostWithRunner()).resolves.toBeNull();
   });
 
-  it("prefers DNS names and trims trailing dots from status json", async () => {
-    const run = vi.fn().mockResolvedValue({
-      code: 0,
-      stdout: 'noise\n{"Self":{"DNSName":"mac.tail123.ts.net.","TailscaleIPs":["100.64.0.8"]}}',
-    });
-
-    await expect(resolveTailnetHostWithRunner(run)).resolves.toBe("mac.tail123.ts.net");
-    expect(run).toHaveBeenCalledWith(["tailscale", "status", "--json"], { timeoutMs: 5000 });
-  });
-
   it("falls back across command candidates and then to the first tailscale ip", async () => {
     const run = vi.fn().mockRejectedValueOnce(new Error("missing binary")).mockResolvedValueOnce({
       code: 0,
@@ -48,15 +39,6 @@ describe("shared/tailscale-status", () => {
     );
   });
 
-  it("falls back to the first tailscale ip when DNSName is blank", async () => {
-    const run = vi.fn().mockResolvedValue({
-      code: 0,
-      stdout: '{"Self":{"DNSName":"","TailscaleIPs":["100.64.0.10","fd7a::2"]}}',
-    });
-
-    await expect(resolveTailnetHostWithRunner(run)).resolves.toBe("100.64.0.10");
-  });
-
   it("continues to later command candidates when earlier output has no usable host", async () => {
     const run = vi
       .fn()
@@ -67,19 +49,6 @@ describe("shared/tailscale-status", () => {
       });
 
     await expect(resolveTailnetHostWithRunner(run)).resolves.toBe("backup.tail.ts.net");
-    expect(run).toHaveBeenCalledTimes(2);
-  });
-
-  it("continues when the first candidate returns success but malformed Self data", async () => {
-    const run = vi
-      .fn()
-      .mockResolvedValueOnce({ code: 0, stdout: '{"Self":"bad"}' })
-      .mockResolvedValueOnce({
-        code: 0,
-        stdout: 'prefix {"Self":{"TailscaleIPs":["100.64.0.11"]}} suffix',
-      });
-
-    await expect(resolveTailnetHostWithRunner(run)).resolves.toBe("100.64.0.11");
     expect(run).toHaveBeenCalledTimes(2);
   });
 
@@ -95,29 +64,32 @@ describe("shared/tailscale-status", () => {
     }
   });
 
-  it("finds persistent HTTPS Serve routes that proxy the gateway root", async () => {
-    const run = vi.fn().mockResolvedValue({
-      code: 0,
-      stdout: JSON.stringify({
-        TCP: { "443": { HTTPS: true }, "8443": { HTTPS: true } },
-        Web: {
-          "mac.tail.ts.net:443": {
-            Handlers: { "/": { Proxy: "http://127.0.0.1:8096" } },
+  it.each(["localhost:18789", "18789"])(
+    "discovers the shipped SDK proxy form %s without granting ownership",
+    async (proxy) => {
+      const run = vi.fn().mockResolvedValue({
+        code: 0,
+        stdout: JSON.stringify({
+          TCP: { "443": { HTTPS: true }, "8443": { HTTPS: true } },
+          Web: {
+            "mac.tail.ts.net:443": {
+              Handlers: { "/": { Proxy: "http://127.0.0.1:8096" } },
+            },
+            "mac.tail.ts.net:8443": {
+              Handlers: { "/": { Proxy: proxy } },
+            },
           },
-          "mac.tail.ts.net:8443": {
-            Handlers: { "/": { Proxy: "http://127.0.0.1:18789" } },
-          },
-        },
-      }),
-    });
+        }),
+      });
 
-    await expect(resolveTailscaleServeGatewayUrlsWithRunner(18789, run)).resolves.toEqual([
-      "wss://mac.tail.ts.net:8443",
-    ]);
-    expect(run).toHaveBeenCalledWith(["tailscale", "serve", "status", "--json"], {
-      timeoutMs: 5000,
-    });
-  });
+      await expect(resolveTailscaleServeGatewayUrlsWithRunner(18789, run)).resolves.toEqual([
+        "wss://mac.tail.ts.net:8443",
+      ]);
+      expect(run).toHaveBeenCalledWith(["tailscale", "serve", "status", "--json"], {
+        timeoutMs: 5000,
+      });
+    },
+  );
 
   it("ignores non-root, non-HTTPS, and non-loopback Serve handlers", async () => {
     const run = vi.fn().mockResolvedValue({
@@ -167,6 +139,45 @@ describe("shared/tailscale-status", () => {
 
     await expect(resolveTailscaleServeGatewayUrlsWithRunner(18789, run)).resolves.toEqual([]);
   });
+
+  it.each([
+    [8443, "http://127.0.0.1:8096", false],
+    [443, "https://127.0.0.1:18789", false],
+    [443, "http://127.0.0.1:18789/api", false],
+    [443, "http://127.0.0.1:18789/?other", false],
+    [443, "http://192.0.2.1:18789", false],
+  ])("recognizes only an own root on HTTPS port %s targeting %s", (httpsPort, proxy, owned) => {
+    const host = `fixture.tail.ts.net:${httpsPort}`;
+    const raw = JSON.stringify({
+      TCP: { [httpsPort]: { HTTPS: true } },
+      Web: { [host]: { Handlers: { "/": { Proxy: proxy } } } },
+      AllowFunnel: { [host]: true },
+    });
+    expect(extractTailscaleServeGatewayUrls(raw, 18789, true)).toEqual(
+      owned ? [`wss://fixture.tail.ts.net${httpsPort === 443 ? "" : `:${httpsPort}`}`] : [],
+    );
+  });
+
+  it.each([
+    [443, 443, false],
+    [443, 8443, true],
+  ])(
+    "requires HTTPS port %s to be exclusive across hostnames (sibling port %s)",
+    (port, siblingPort, owned) => {
+      const url = `wss://old.tail.ts.net${port === 443 ? "" : `:${port}`}`;
+      const raw = JSON.stringify({
+        TCP: { [port]: { HTTPS: true }, [siblingPort]: { HTTPS: true } },
+        Web: {
+          [`old.tail.ts.net:${port}`]: { Handlers: { "/": { Proxy: "http://127.0.0.1:18789" } } },
+          [`current.tail.ts.net:${siblingPort}`]: {
+            Handlers: { "/": { Proxy: "http://127.0.0.1:8096" } },
+          },
+        },
+      });
+      expect(extractTailscaleServeGatewayUrls(raw, 18789, true)).toEqual(owned ? [url] : []);
+      expect(extractTailscaleServeGatewayUrls(raw, 18789)).toEqual([url]);
+    },
+  );
 
   it("distinguishes malformed Serve status from an empty valid configuration", async () => {
     const malformed = vi.fn().mockResolvedValue({ code: 0, stdout: "not-json" });

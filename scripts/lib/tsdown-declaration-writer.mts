@@ -2,14 +2,16 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { ensureKyselyTypes } from "../generate-kysely-types.mts";
 import {
   prepareTsdownBuildExecution,
   TSDOWN_DECLARATION_EXTENSIONS,
-  TSDOWN_DECLARATION_TOOL_INPUTS,
   TSDOWN_UNIFIED_CACHE_ENV,
 } from "../tsdown-build.mts";
 import {
+  finalizeBuildStepCache,
   portableRelativePath,
+  restoreBuildStepCacheOutputs,
   resolveBuildStepCacheState,
   resolveTsdownCompilerFiles,
   type BuildCacheStep,
@@ -17,6 +19,8 @@ import {
 import { CompilerInputSnapshot } from "./compiler-input-snapshot.mts";
 import { publishStagedDeclarations } from "./declaration-stage.mts";
 import { withDistArtifactOwnership } from "./dist-artifact-ownership.mts";
+import { hasUnjoinedWork } from "./managed-child-process.mts";
+import { resolveTsdownDeclarationGeneratorInputs } from "./tsdown-declaration-generator-inputs.mts";
 import {
   createDeclarationStage,
   readDeclarationInputs,
@@ -27,21 +31,41 @@ export async function writeTsdownDeclarations(
   groups: readonly string[],
   label: string,
   previousOutputs: (root: string) => string[],
+  generatorEntry: string,
 ) {
-  const root = process.cwd();
-  let staging: string | undefined;
+  const root = fs.realpathSync.native(process.cwd());
+  const stages: string[] = [];
+  const createStage = () => {
+    const stage = createDeclarationStage(root);
+    stages.push(stage);
+    return stage;
+  };
   const failures: unknown[] = [];
   try {
-    await withDistArtifactOwnership(root, async () => {
+    // The private child retains declared cwd ownership; snapshot/output paths are physical.
+    await withDistArtifactOwnership(process.cwd(), async () => {
+      await ensureKyselyTypes(root);
       const { default: configs }: { default: typeof import("../../tsdown.config.ts").default } =
         await import(pathToFileURL(path.join(root, "tsdown.config.ts")).href);
-      staging = createDeclarationStage(root);
+      const staging = createStage();
       const output = path.join(staging, "dist");
-      const required: string[] = [];
-      const identity = TSDOWN_UNIFIED_CACHE_ENV.map((name) =>
+      const environment = TSDOWN_UNIFIED_CACHE_ENV.map((name) =>
         JSON.stringify([name, process.env[name] ?? ""]),
       );
-      for (const name of groups) {
+      const cacheEnabled = process.env.OPENCLAW_BUILD_CACHE !== "0";
+      const generatorInputs = cacheEnabled
+        ? resolveTsdownDeclarationGeneratorInputs(root, generatorEntry)
+        : [];
+      // All groups share configuration, topology, tools and overlapping source reads.
+      const before = cacheEnabled
+        ? new CompilerInputSnapshot(root, {
+            toolchainFiles: resolveTsdownCompilerFiles(),
+            generatorInputs,
+            isGeneratorInput: (file) => /(?:^|\/)(?:package|openclaw\.plugin)\.json$/u.test(file),
+          })
+        : undefined;
+      const liveDist = path.join(root, "dist");
+      const prepared = groups.map((name) => {
         const config = configs.find((candidate: { name?: string }) => candidate.name === name);
         if (
           !config?.dts ||
@@ -53,20 +77,21 @@ export async function writeTsdownDeclarations(
         ) {
           throw new Error(`Missing canonical declaration group ${name}`);
         }
-        // Runtime worker entries are absolute; declaration partitions are checkout-relative.
+        // Runtime worker entries are absolute; declaration roots are checkout-relative.
         const entries = Object.entries(config.entry).map(
           ([entry, inputs]) =>
             [entry, [inputs].flat().map((input) => path.resolve(root, input))] as const,
         );
-        for (const source of config.dts.entry) {
+        const required = config.dts.entry.map((source) => {
           const resolved = path.resolve(root, source);
           const selected = entries.find(([, inputs]) => inputs.includes(resolved));
           if (!selected) {
             throw new Error(`Missing canonical declaration entry for ${source}`);
           }
-          required.push(`${selected[0]}.d.ts`);
-        }
-        identity.push(
+          return `${selected[0]}.d.ts`;
+        });
+        const identity = [
+          ...environment,
           JSON.stringify({
             name,
             entry: Object.fromEntries(
@@ -78,118 +103,122 @@ export async function writeTsdownDeclarations(
             declarations: config.dts.entry,
             sourcemap: config.sourcemap,
           }),
+        ];
+        const stage = createStage();
+        const groupOutput = path.join(stage, "dist");
+        requestDeclarationInputs(groupOutput, name, config.dts.entry);
+        const receipt = `compiler-inputs/${name}.json`;
+        const step: BuildCacheStep = {
+          label: `${label}-${name}`,
+          cache: {
+            env: TSDOWN_UNIFIED_CACHE_ENV,
+            inputs: generatorInputs,
+            // Successful publication includes the compiler membership receipt.
+            outputs: [{ path: "dist", extensions: TSDOWN_DECLARATION_EXTENSIONS }, receipt],
+            requiredOutputs: [...required.map((entry) => `dist/${entry}`), receipt],
+            restore: "always",
+          },
+        };
+        const params = {
+          rootDir: root,
+          artifactRoot: stage,
+          env: {
+            ...process.env,
+            OPENCLAW_BUILD_PRIVATE_QA: process.env.OPENCLAW_BUILD_PRIVATE_QA === "1" ? "1" : "0",
+          },
+          inputSignature: before
+            ? (inputs: string[]) => before.signature("tsconfig.json", identity, inputs, liveDist)
+            : undefined,
+        };
+        const state = before ? resolveBuildStepCacheState(step, params) : undefined;
+        // Record the lookup before compilation replaces the signature and cache record.
+        console.error(
+          `[${label}] ${name}: cache ${state?.fresh ? "hit" : "miss"} (${state?.reason ?? "disabled"})`,
         );
-        if (process.env.OPENCLAW_BUILD_CACHE !== "0") {
-          requestDeclarationInputs(output, name, config.dts.entry);
-        }
-      }
+        return { name, output: groupOutput, required, identity, step, params, state };
+      });
+      const required = prepared.flatMap((group) => group.required);
       if (!required.length) {
         throw new Error("Canonical declaration selection is empty");
       }
-      const args = [
-        "--config",
-        "tsdown.config.ts",
-        ...groups.flatMap((group) => ["--filter", group]),
-        "--out-dir",
-        output,
-      ];
-      const plan = prepareTsdownBuildExecution(
-        { args },
-        {
-          // The staging directory is fresh. In particular, do not prune live runtime
-          // symlinks or source outputs, and never clean between declaration groups.
-          cleanup() {},
-          reportShortfall(shortfall) {
-            console.error(shortfall.message);
-          },
-        },
-      );
-      if (!plan) {
-        throw new Error("Insufficient memory for declaration build");
+      for (const group of prepared) {
+        if (group.state?.fresh && !restoreBuildStepCacheOutputs(group.state, group.params)) {
+          throw new Error("Declaration cache changed before restoration; rerun the build");
+        }
       }
-      const generatorInputs = [
-        ...TSDOWN_DECLARATION_TOOL_INPUTS,
-        "tsdown.config.ts",
-        "scripts/write-plugin-sdk-entry-dts.ts",
-        "scripts/write-unified-entry-dts.ts",
-        "scripts/lib/tsdown-declaration-writer.mts",
-        "scripts/lib/declaration-stage.mts",
-        "scripts/lib/compiler-input-snapshot.mts",
-        "scripts/lib/tsdown-declaration-inputs.mts",
-        "src/infra/runtime-process-entrypoints.ts",
-        "extensions/memory-core/src/memory/manager-search-knn-entrypoint.ts",
-      ];
-      const step: BuildCacheStep = {
-        label,
-        cache: {
-          env: TSDOWN_UNIFIED_CACHE_ENV,
-          inputs: generatorInputs,
-          outputs: [{ path: "dist", extensions: TSDOWN_DECLARATION_EXTENSIONS }],
-          requiredOutputs: required.map((entry) => `dist/${entry}`),
-          restore: "always",
-        },
-      };
-      const snapshot = () =>
-        new CompilerInputSnapshot(root, {
-          toolchainFiles: resolveTsdownCompilerFiles(),
-          generatorInputs,
-          // Config evaluation reads generator modules and package/plugin metadata.
-          // Keep those bytes conservative; only ordinary compiler sources narrow.
-          isGeneratorInput: (file) =>
-            file.startsWith("scripts/") ||
-            /(?:^|\/)(?:package|openclaw\.plugin)\.json$/u.test(file),
-        });
-      const before = snapshot();
-      const liveDist = path.join(root, "dist");
-      const inputSignature = (inputs: string[]) =>
-        before.signature("tsconfig.json", identity, inputs, liveDist);
-      const params = {
-        rootDir: root,
-        artifactRoot: staging,
-        env: {
-          ...process.env,
-          OPENCLAW_BUILD_PRIVATE_QA: process.env.OPENCLAW_BUILD_PRIVATE_QA === "1" ? "1" : "0",
-        },
-        inputSignature,
-      };
-      const state =
-        process.env.OPENCLAW_BUILD_CACHE === "0"
-          ? undefined
-          : resolveBuildStepCacheState(step, params);
-      const startedAt = Date.now();
+      const misses = prepared.filter((group) => !group.state?.fresh);
+      let plan: ReturnType<typeof prepareTsdownBuildExecution> = null;
+      for (const group of misses) {
+        const next = prepareTsdownBuildExecution(
+          {
+            args: [
+              "--config",
+              "tsdown.config.ts",
+              "--filter",
+              group.name,
+              "--out-dir",
+              group.output,
+            ],
+          },
+          {
+            // Only cache misses launch compilers and need their memory admission.
+            cleanup() {},
+            reportShortfall(shortfall) {
+              console.error(shortfall.message);
+            },
+          },
+        );
+        if (!next) {
+          throw new Error("Insufficient memory for declaration build");
+        }
+        if (plan) {
+          plan.invocations.push(...next.invocations);
+        } else {
+          plan = next;
+        }
+      }
       await publishStagedDeclarations(
         plan,
+        prepared.map((group) => ({ output: group.output, required: group.required })),
         output,
         liveDist,
         required,
         previousOutputs(root).map((file) => portableRelativePath(liveDist, file)),
-        state
-          ? {
-              step,
-              state,
-              params,
-              sealInputs: () =>
-                snapshot().seal(
-                  "tsconfig.json",
-                  identity,
-                  readDeclarationInputs(output, groups),
-                  before,
-                  startedAt,
-                  liveDist,
-                ),
+        () => {
+          for (const group of prepared) {
+            const inputs = readDeclarationInputs(group.output, group.name);
+            if (group.state && before) {
+              group.state.signature = before.signature(
+                "tsconfig.json",
+                group.identity,
+                inputs,
+                liveDist,
+              );
+              group.state.consumedInputs = inputs;
             }
-          : undefined,
+          }
+        },
       );
+      for (const group of prepared) {
+        if (group.state && !group.state.fresh) {
+          finalizeBuildStepCache(group.step, group.state, group.params);
+        }
+      }
+      if (prepared.every((group) => group.state?.fresh)) {
+        console.log(`[${label}] restored complete cached generation`);
+      }
     });
   } catch (error) {
     failures.push(error);
   }
-  try {
-    if (staging) {
-      fs.rmSync(staging, { recursive: true, force: true });
+  // An unjoined child may still be writing a stage; retain its inputs and error
+  // under the checkout's existing fail-closed ownership until explicit recovery.
+  for (const stage of failures.some(hasUnjoinedWork) ? [] : stages) {
+    try {
+      fs.rmSync(stage, { recursive: true, force: true });
+    } catch (error) {
+      failures.push(error);
     }
-  } catch (error) {
-    failures.push(error);
   }
   // The private entry observes this after module evaluation. Keep unjoined build
   // metadata even if removing the private staging tree also failed.

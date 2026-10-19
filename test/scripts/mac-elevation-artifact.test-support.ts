@@ -1,15 +1,6 @@
-import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import {
-  chmodSync,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  readdirSync,
-  rmSync,
-  symlinkSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { chmod, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect } from "vitest";
 import {
@@ -28,8 +19,8 @@ export const buildInfo = {
 };
 const authority = "Developer ID Application: OpenClaw Foundation (FWJYW4S8P8)";
 const entitlements = "<plist><dict/></plist>\n";
-export const workerRoot = "Contents/Resources/node-worker";
-export const workerDist = "lib/node_modules/openclaw/dist";
+export const runtimeRoot = "Contents/Resources/runtime";
+export const runtimeDist = "lib/node_modules/openclaw/dist";
 export const addon = "lib/node_modules/native [fixture]/addon.node";
 // Universal file output repeats the path; names must not choose the binary format.
 export const library = "lib/node_modules/native [fixture]/library ERROR COFF.dylib";
@@ -39,15 +30,15 @@ function digest(contents: string | Buffer) {
   return createHash("sha256").update(contents).digest("hex");
 }
 
-export function write(file: string, contents: string | Buffer, mode = 0o644) {
-  mkdirSync(path.dirname(file), { recursive: true });
-  writeFileSync(file, contents);
-  chmodSync(file, mode);
+export async function write(file: string, contents: string | Buffer, mode = 0o644) {
+  await mkdir(path.dirname(file), { recursive: true });
+  await writeFile(file, contents);
+  await chmod(file, mode);
 }
 
-export function artifactFixture(mac: MacScriptFixture) {
+export async function artifactFixture(mac: MacScriptFixture) {
   const root = mac.createTempDir("openclaw-elevation-native-");
-  const binaries = compiledMacNativeFixtures(root);
+  const binaries = await compiledMacNativeFixtures(root, mac);
   const home = path.join(root, "home [portable]");
   const payload = path.join(root, "payload [archive]");
   const app = path.join(payload, "OpenClaw.app");
@@ -58,12 +49,12 @@ export function artifactFixture(mac: MacScriptFixture) {
   const calls = path.join(home, "policy-calls");
   const fileCalls = path.join(home, "file-calls");
   const forbidden = path.join(home, "forbidden-calls");
-  mkdirSync(bin, { recursive: true });
-  write(installer, readFileSync("scripts/mac-elevation-host.sh"), 0o555);
-  write(calls, "");
-  write(fileCalls, "");
+  await mkdir(bin, { recursive: true });
+  await write(installer, readFileSync("scripts/mac-elevation-host.sh"), 0o555);
+  await write(calls, "");
+  await write(fileCalls, "");
   const fileCallCount = () => readFileSync(fileCalls, "utf8").split("\n").filter(Boolean).length;
-  write(
+  await write(
     app + "/Contents/Info.plist",
     `<?xml version="1.0"?><plist version="1.0"><dict>
 <key>CFBundleIdentifier</key><string>ai.openclaw.mac</string>
@@ -72,34 +63,42 @@ export function artifactFixture(mac: MacScriptFixture) {
 <key>OpenClawGitCommit</key><string>${sourceCommit}</string>
 <key>PeekabooSourceCommit</key><string>${peekabooCommit}</string>
 <key>OpenClawBuildTimestamp</key><string>${buildInfo.builtAt}</string>
-<key>OpenClawWorkerBuildID</key><string>${buildInfo.buildId}</string>
+<key>OpenClawRuntimeBuildID</key><string>${buildInfo.buildId}</string>
 </dict></plist>`,
   );
-  write(app + "/Contents/MacOS/OpenClaw", binaries.universal, 0o755);
-  write(app + "/Contents/MacOS/openclaw-mlx-tts", binaries.universal, 0o755);
-  write(app + "/Contents/Frameworks/shared [fixture].dylib", binaries.universalLibrary, 0o755);
-  for (const arch of ["arm64", "x86_64"] as const) {
-    const worker = path.join(app, workerRoot, arch);
-    write(path.join(worker, "bin/node"), binaries[arch], 0o755);
-    write(path.join(worker, workerDist, "entry.js"), "// inert package entry\n");
-    write(path.join(worker, workerDist, "build-info.json"), JSON.stringify(buildInfo));
-    write(path.join(worker, addon), binaries[arch === "arm64" ? "armLibrary" : "intelLibrary"]);
-    write(path.join(worker, library), binaries.universalLibrary);
-    write(
-      path.join(worker, "lib/native.a"),
-      binaries[arch === "arm64" ? "armArchive" : "intelArchive"],
-    );
-    symlinkSync("../lib/node_modules/openclaw/dist/entry.js", path.join(worker, "bin/openclaw"));
-    symlinkSync("native [fixture]", path.join(worker, "lib/node_modules/native-alias"));
+  for (const [name, bytes] of [
+    ["MacOS/OpenClaw", binaries.universal],
+    ["MacOS/openclaw-mlx-tts", binaries.universal],
+    ["Frameworks/shared [fixture].dylib", binaries.universalLibrary],
+  ] as const) {
+    await write(path.join(app, "Contents", name), bytes, 0o755);
   }
-  const jq = spawnSync("/bin/sh", ["-c", "command -v jq"], {
+  const runtime = path.join(app, runtimeRoot);
+  await write(path.join(runtime, "bin/bun"), binaries.universal, 0o755);
+  for (const [name, bytes] of [
+    ["lib/libsqlite3.dylib", binaries.universalLibrary],
+    ["lib/node_modules/openclaw/openclaw.mjs", "// inert CLI entry\n"],
+    [`${runtimeDist}/mac-node-worker.js`, "// inert worker entry\n"],
+    [`${runtimeDist}/extensions/browser/setup-entry.js`, "// inert browser entry\n"],
+    [`${runtimeDist}/control-ui/index.html`, "<!doctype html>\n"],
+    [`${runtimeDist}/build-info.json`, JSON.stringify(buildInfo)],
+    [addon, binaries.universalLibrary],
+    [library, binaries.universalLibrary],
+    ["lib/native.a", binaries.universalArchive],
+    ["lib/node_modules/native-darwin-arm64/addon.node", binaries.armLibrary],
+    ["lib/node_modules/native-darwin-x86_64/addon.node", binaries.intelLibrary],
+  ] as const) {
+    await write(path.join(runtime, name), bytes);
+  }
+  await symlink("native [fixture]", path.join(runtime, "lib/node_modules/native-alias"));
+  const jq = await mac.run("/bin/sh", ["-c", "command -v jq"], {
     encoding: "utf8",
     env: { PATH: process.env.PATH },
   });
-  expect(jq.status, jq.stderr).toBe(0);
-  symlinkSync(jq.stdout.trim(), path.join(bin, "jq"));
+  expect(jq, jq.stderr).toMatchObject({ error: undefined, status: 0 });
+  await symlink(jq.stdout.trim(), path.join(bin, "jq"));
   const bashEnv = path.join(home, "intercepts.bash");
-  write(
+  await write(
     bashEnv,
     `
 record() { printf '%s\\n' "$*" >>"$TEST_CALLS"; }
@@ -110,14 +109,14 @@ shasum() {
   if [[ -n "\${WORK_ROOT:-}" && "\${1:-}" == "$WORK_ROOT/OpenClaw.app/Contents/MacOS/OpenClaw" ]]; then record candidate-helper-hash; fi
   /usr/bin/openssl dgst -sha256 -r "$@"
 }
-for tool in launchctl open kill pkill killall pgrep lsof defaults diskutil sqlite3 security osascript openclaw node python python3 curl ssh; do
+for tool in launchctl open kill pkill killall pgrep lsof defaults diskutil sqlite3 security osascript openclaw node bun python python3 curl ssh; do
   eval "$tool() { deny $tool; }"
 done
 codesign() (
   record codesign "$@"
   target="\${!#}"
   if [[ "$*" == *--entitlements* ]]; then
-    if [[ "$TEST_FAULT" == apple-events && "$target" == *'/arm64/${addon}' ||
+    if [[ "$TEST_FAULT" == apple-events && "$target" == *'/${addon}' ||
           "$TEST_FAULT" == bundle-events && "$target" == *'/fixture.xpc' ]]; then
       printf '%s\\n' '<plist><dict><key>com.apple.security.automation.apple-events</key><true/></dict></plist>'
     elif [[ "$TEST_FAULT" == mlx && "$target" == */openclaw-mlx-tts ]]; then
@@ -143,9 +142,9 @@ codesign() (
     if [[ -f "$target" ]]; then LC_ALL=C IFS= read -r -d '' -n 8 prefix <"$target" || true; fi
     [[ "$prefix" != $'!<arch>\\n' && "$target" != *'/lib/universal.a' && "$target" != *'/lib/archive64 [*]' ]] || exit 1
     [[ "\${prefix:0:4}" != $'\\xca\\xfe\\xba\\xbf' ]] || format=generic
-    [[ "$TEST_FAULT" != archive-node || "$target" != */arm64/bin/node ]] || exit 1
+    [[ "$TEST_FAULT" != archive-bun || "$target" != */runtime/bin/bun ]] || exit 1
     # These fixture resource kinds have no native signature, even when executable.
-    if [[ "$target" == *'/lib/object-resource '* || "$TEST_FAULT" == *-node && "$target" == */arm64/bin/node ]]; then format=generic; fi
+    if [[ "$target" == *'/lib/object-resource '* || "$TEST_FAULT" == *-bun && "$target" == */runtime/bin/bun ]]; then format=generic; fi
     for arch in arm64 x86_64; do
       if [[ "$*" == *"--arch $arch"* ]]; then
         [[ "$TEST_FAULT" != "team-$arch" ]] || team=WRONGTEAM
@@ -155,7 +154,7 @@ codesign() (
     done
     [[ "$*" != *'--arch x86_64'* || "$hash" == WRONGHASH ]] || hash=FIXTUREX8664
     for arch in arm64 x86_64; do
-      if [[ "$target" == *"/$arch/${addon}" ]]; then
+      if [[ "$target" == *"/${addon}" && "$*" == *"--arch $arch"* ]]; then
         [[ "$TEST_FAULT" != "generic-native-$arch" ]] || format=generic
         [[ "$TEST_FAULT" != "missing-native-format-$arch" ]] || format=''
       fi
@@ -215,11 +214,12 @@ plutil() {
     "security",
     "openclaw",
     "node",
+    "bun",
     "python3",
     "curl",
     "ssh",
   ]) {
-    write(
+    await write(
       path.join(bin, tool),
       '#!/bin/sh\nprintf "%s\\n" "forbidden PATH fallthrough" >>"$TEST_FORBIDDEN"\nexit 97\n',
       0o755,
@@ -233,7 +233,6 @@ plutil() {
     TEST_CALLS: calls,
     TEST_FILE_CALLS: fileCalls,
     TEST_FORBIDDEN: forbidden,
-    TEST_FAULT: "",
   };
   const run = async (args: string[], fault = "") => {
     const result = await mac.run("/bin/bash", args, {
@@ -252,6 +251,8 @@ plutil() {
     );
     return result;
   };
+  const architectures = (name: string) =>
+    runMacFixtureTool("/usr/bin/lipo", ["-archs", `${app}/Contents/MacOS/${name}`], root, mac);
   const receipt = {
     schemaVersion: 1,
     kind: "openclaw-elevation-artifact",
@@ -269,21 +270,17 @@ plutil() {
     teamIdentifier: "FWJYW4S8P8",
     cdhashes: { arm64: "FIXTUREARM64", x86_64: "FIXTUREX8664" },
     architectures: {
-      main: runMacFixtureTool("/usr/bin/lipo", ["-archs", app + "/Contents/MacOS/OpenClaw"], root),
-      helper: runMacFixtureTool(
-        "/usr/bin/lipo",
-        ["-archs", app + "/Contents/MacOS/openclaw-mlx-tts"],
-        root,
-      ),
+      main: await architectures("OpenClaw"),
+      helper: await architectures("openclaw-mlx-tts"),
     },
     entitlementsSha256: { main: digest(entitlements), helper: digest(entitlements) },
     notarizationId: "12345678-1234-1234-1234-123456789abc",
   };
-  const verify = (fault = "") => {
-    rmSync(archive, { force: true });
-    runMacFixtureTool("/usr/bin/ditto", ["-c", "-k", payload, archive], root);
+  const verify = async (fault = "") => {
+    await rm(archive, { force: true });
+    await runMacFixtureTool("/usr/bin/ditto", ["-c", "-k", payload, archive], root, mac);
     receipt.archiveSha256 = digest(readFileSync(archive));
-    write(receiptPath, JSON.stringify(receipt));
+    await write(receiptPath, JSON.stringify(receipt));
     return run(
       [
         installer,
@@ -298,11 +295,11 @@ plutil() {
       fault,
     );
   };
-  const verifyProgram = (program: string, fault: string) => {
+  const verifyProgram = async (program: string, fault: string) => {
     const script = readFileSync(installer, "utf8");
     // Retain actual owners and cleanup, but exclude every operational entrypoint.
-    chmodSync(installer, 0o755);
-    write(
+    await chmod(installer, 0o755);
+    await write(
       installer,
       `${script.slice(0, script.lastIndexOf("\nrefresh_runtime_paths\n"))}
 prepare_authenticated_artifact_inputs "$ARTIFACT_RECEIPT" "$ARCHIVE" "\${BASH_SOURCE[0]}"
@@ -311,6 +308,18 @@ ${program}`,
     );
     receipt.installerSha256 = digest(readFileSync(installer));
     return verify(fault);
+  };
+  const sections = (...ranges: [string, string][]) => {
+    const script = readFileSync(installer, "utf8");
+    return ranges
+      .map(([start, end]) => script.slice(script.indexOf(start), script.indexOf(end)))
+      .join("\n");
+  };
+  const runProgram = async (name: string, body: string, fault = "") => {
+    const file = path.join(home, `${name}.bash`);
+    // BASH_ENV is read for a script file, not for -c on system Bash.
+    await write(file, `set -euo pipefail\n${body}`);
+    return run([file, app], fault);
   };
   return {
     app,
@@ -321,21 +330,10 @@ ${program}`,
     fileCallCount,
     at: (relative: string) => path.join(app, relative),
     verifyCode() {
-      // Measure discovery independently of ZIP extraction and receipt verification;
-      // full portable-artifact cases below still exercise those boundaries.
-      const script = readFileSync(installer, "utf8");
-      const helpers = script.slice(
-        script.indexOf("plist_value() {"),
-        script.indexOf("\nelevation_app_is_cua_free() {"),
+      return runProgram(
+        "verify-code",
+        `${sections(["fail() {", "\nusage() {"], ["plist_value() {", "\nelevation_app_is_cua_free() {"])}\nverify_elevation_code "$1"\nprintf 'Elevation code verified\\n'`,
       );
-      const fail = script.slice(script.indexOf("fail() {"), script.indexOf("\nusage() {"));
-      const verifier = path.join(home, "verify-code.bash");
-      // System Bash reads BASH_ENV for a script file, but not for -c here.
-      write(
-        verifier,
-        `set -euo pipefail\n${fail}\n${helpers}\nverify_elevation_code "$1"\nprintf 'Elevation code verified\\n'`,
-      );
-      return run([verifier, app]);
     },
     verifyReceiptConditionally(fault: string) {
       return verifyProgram(
@@ -360,22 +358,15 @@ printf 'Staged copy verified: %s\\n' "$STAGED_INSTALL_APP_PATH"
       );
     },
     recoveryPlan(fault: string) {
-      const script = readFileSync(installer, "utf8");
-      const functions = (
-        [
-          ["fail() {", "\nusage() {"],
-          ["plist_value() {", "\nelevation_plist_binds_app() {"],
-          ["verify_elevation_app() {", "\nverify_rollback_app() {"],
-          ["recover_host() {", "\nuninstall_host() {"],
-        ] as const
-      ).map(([start, end]) => script.slice(script.indexOf(start), script.indexOf(end)));
-      const planner = path.join(home, "recovery-plan.bash");
-      // Keep the real recovery conditional, but exit before receipt/transaction work.
-      // The existing BASH_ENV still intercepts policy and denies live tools.
-      write(
-        planner,
-        `set -euo pipefail
-${functions.join("\n")}
+      return runProgram(
+        "recovery-plan",
+        `
+${sections(
+  ["fail() {", "\nusage() {"],
+  ["plist_value() {", "\nelevation_plist_binds_app() {"],
+  ["verify_elevation_app() {", "\nverify_rollback_app() {"],
+  ["recover_host() {", "\nuninstall_host() {"],
+)}
 APP_PATH="$1"
 EXPECTED_BUNDLE_ID=ai.openclaw.mac
 EXPECTED_TEAM_ID=FWJYW4S8P8
@@ -387,8 +378,8 @@ verify_install_receipt() { deny recovery-receipt-work; }
 recover_host
 deny recovery-continued
 `,
+        fault,
       );
-      return run([planner, app], fault);
     },
     verify,
   };

@@ -1,8 +1,13 @@
+import "../../test-utils/prepare-compiled-subprocesses.js";
 import path from "node:path";
+import { setImmediate as flushImmediate } from "node:timers/promises";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
+import { createSessionStoreSummaryReaderStub } from "../../config/sessions/session-store-summary.test-support.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { AsyncWorkScope } from "../../shared/async-work-scope.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 
 type DeadlineAccount = {
   accountId: string;
@@ -47,15 +52,17 @@ function createDeadlinePlugin(params: {
   };
 }
 
-async function collectDeadlineSnapshot(params: {
-  timeoutMs: number;
-  audience?: "public" | "admin";
-}) {
+async function collectDeadlineSnapshot(params: { audience?: "public" | "admin" } = {}) {
   return await collectGatewayHealthSnapshot({
     audience: params.audience ?? "admin",
     probe: true,
-    timeoutMs: params.timeoutMs,
   });
+}
+
+async function flushHealthPreparation() {
+  await vi.advanceTimersByTimeAsync(0);
+  // The fake deadline clock does not drive the real yield after a session read.
+  await flushImmediate();
 }
 
 describe("gateway health collection deadline", () => {
@@ -63,13 +70,13 @@ describe("gateway health collection deadline", () => {
     vi.doMock("../../config/config.js", () => ({
       getRuntimeConfig: () => testConfig,
     }));
-    // Store paths reach real SQLite target resolution, which inspects the agent
-    // database beside them; a shared /tmp path would read machine-wide state.
     vi.doMock("../../config/sessions/paths.js", () => ({
       resolveSessionStorePathCore: () => sessionStorePath,
     }));
-    vi.doMock("../../config/sessions/session-accessor.js", () => ({
-      readSessionStoreSummaryReadOnly,
+    vi.doMock("../../config/sessions/session-entry-read-runtime.js", () => ({
+      withSessionStoreReaderInWorker: createSessionStoreSummaryReaderStub(
+        readSessionStoreSummaryReadOnly,
+      ),
     }));
     vi.doMock("../../channels/plugins/read-only.js", () => ({
       listReadOnlyChannelPluginsForConfig: () => healthPluginsForTest,
@@ -90,7 +97,7 @@ describe("gateway health collection deadline", () => {
     readSessionStoreSummaryReadOnly.mockReset();
     testConfig = {};
     healthPluginsForTest = [];
-    await collectGatewayHealthSnapshot({ audience: "admin", probe: false, timeoutMs: 50 });
+    await collectGatewayHealthSnapshot({ audience: "admin", probe: false });
   });
 
   afterEach(() => {
@@ -103,28 +110,91 @@ describe("gateway health collection deadline", () => {
     const probe = vi.fn(async () => ({ ok: true }));
     healthPluginsForTest = [createDeadlinePlugin({ accountIds: ["default"], probe })];
     readSessionStoreSummaryReadOnly.mockImplementationOnce(() => {
-      vi.advanceTimersByTime(50);
+      vi.advanceTimersByTime(7_000);
       return { count: 0, recent: [], byAgent: new Map() };
     });
 
-    const snap = await collectDeadlineSnapshot({ timeoutMs: 50 });
+    const snap = await collectDeadlineSnapshot();
     const channel = snap.channels["deadline-test"];
 
     expect(snap.sessions.path).toBe(
       path.join(path.dirname(sessionStorePath), "openclaw-agent.sqlite"),
     );
-    expect(channel?.probe).toMatchObject({ ok: false, timedOut: true });
-    expect(channel?.accounts?.default?.probe).toMatchObject({ ok: false, timedOut: true });
+    expect(channel?.probe).toEqual({
+      timedOut: true,
+      error: "health collection timed out after 7000ms",
+    });
+    expect(channel?.accounts?.default?.probe).toEqual({
+      timedOut: true,
+      error: "health collection timed out after 7000ms",
+    });
     expect(probe).not.toHaveBeenCalled();
   }, 1_000);
 
-  it("preserves healthy accounts when one probe never settles", async () => {
+  it.each([
+    { audience: "public" as const, channelId: "imessage", retained: true },
+    { audience: "public" as const, channelId: "deadline-test", retained: false },
+  ])(
+    "retains an observed negative through a slow summary ($audience, $channelId)",
+    async ({ audience, channelId, retained }) => {
+      vi.useFakeTimers();
+      const scope = new AsyncWorkScope();
+      const enteredSummary = createDeferredCore();
+      const releaseSummary = createDeferredCore();
+      const error =
+        "imsg cannot access /Users/synthetic/Library/Messages/chat.db. Grant Full Disk Access.";
+      const plugin = createDeadlinePlugin({
+        accountIds: ["default"],
+        probe: async () => ({ ok: false, error }),
+      });
+      healthPluginsForTest = [
+        {
+          ...plugin,
+          id: channelId,
+          status: {
+            ...plugin.status,
+            buildChannelSummary: async ({ snapshot }) => {
+              enteredSummary.resolve();
+              await releaseSummary.promise;
+              return { ...snapshot };
+            },
+          },
+        },
+      ];
+      const collecting = scope.track(() => collectDeadlineSnapshot({ audience }));
+      try {
+        await flushHealthPreparation();
+        await enteredSummary.promise;
+        await vi.advanceTimersByTimeAsync(7_000);
+        const result = await collecting;
+        expect(result.channels[channelId]?.probe).toEqual(
+          retained
+            ? {
+                ok: false,
+                error:
+                  "imsg cannot access ~/Library/Messages/chat.db. Grant Full Disk Access to the Gateway/launcher process and restart Gateway.",
+              }
+            : { timedOut: true, error: "health collection timed out after 7000ms" },
+        );
+        expect(JSON.stringify(result)).not.toContain("/Users/synthetic");
+      } finally {
+        releaseSummary.resolve();
+        await scope.drain();
+        await collecting;
+      }
+    },
+  );
+
+  it("preserves healthy accounts at the deadline and retains unfinished probe work", async () => {
     vi.useFakeTimers();
+    const scope = new AsyncWorkScope();
+    const slowProbe = createDeferredCore<Record<string, unknown>>();
     const accountIds = ["default", "fast-1", "fast-2", "fast-3", "fast-4", "fast-5"];
     const started: string[] = [];
-    let releaseSlowProbe: (() => void) | undefined;
     let active = 0;
     let maxActive = 0;
+    let snapshotPromise: ReturnType<typeof collectDeadlineSnapshot> | undefined;
+    let draining: Promise<void> | undefined;
     healthPluginsForTest = [
       createDeadlinePlugin({
         accountIds,
@@ -133,12 +203,11 @@ describe("gateway health collection deadline", () => {
           active += 1;
           maxActive = Math.max(maxActive, active);
           if (account.accountId === "default") {
-            return await new Promise<Record<string, unknown>>((resolve) => {
-              releaseSlowProbe = () => {
-                active -= 1;
-                resolve({ ok: true });
-              };
-            });
+            try {
+              return await slowProbe.promise;
+            } finally {
+              active -= 1;
+            }
           }
           await Promise.resolve();
           active -= 1;
@@ -147,20 +216,37 @@ describe("gateway health collection deadline", () => {
       }),
     ];
 
-    const snapshotPromise = collectDeadlineSnapshot({ timeoutMs: 50 });
-    await vi.advanceTimersByTimeAsync(0);
-    await vi.advanceTimersByTimeAsync(50);
-    const snap = await snapshotPromise;
-    const channel = snap.channels["deadline-test"];
+    try {
+      snapshotPromise = scope.track(() => collectDeadlineSnapshot());
+      await flushHealthPreparation();
+      await vi.advanceTimersByTimeAsync(7_000);
+      const snap = await snapshotPromise;
+      const channel = snap.channels["deadline-test"];
 
-    expect(started).toEqual(accountIds);
-    expect(maxActive).toBeLessThanOrEqual(5);
-    expect(channel?.probe).toMatchObject({ ok: false, timedOut: true });
-    for (const accountId of accountIds.slice(1)) {
-      expect(channel?.accounts?.[accountId]?.probe).toMatchObject({ ok: true });
+      expect(started).toEqual(accountIds);
+      expect(maxActive).toBeLessThanOrEqual(5);
+      expect(channel?.probe).toEqual({
+        timedOut: true,
+        error: "health collection timed out after 7000ms",
+      });
+      for (const accountId of accountIds.slice(1)) {
+        expect(channel?.accounts?.[accountId]?.probe).toMatchObject({ ok: true });
+      }
+      let drained = false;
+      draining = scope.drain().then(() => {
+        drained = true;
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(drained).toBe(false);
+      slowProbe.resolve({ ok: true });
+      await draining;
+      expect(active).toBe(0);
+    } finally {
+      slowProbe.resolve({ ok: true });
+      await Promise.allSettled([snapshotPromise, slowProbe.promise]);
+      await (draining ?? scope.drain());
+      await vi.advanceTimersByTimeAsync(0);
     }
-    releaseSlowProbe?.();
-    await vi.advanceTimersByTimeAsync(0);
   }, 1_000);
 
   it("does not start queued probes after the aggregate deadline", async () => {
@@ -188,25 +274,63 @@ describe("gateway health collection deadline", () => {
       }),
     ];
 
-    const snapshotPromise = collectDeadlineSnapshot({ timeoutMs: 50, audience: "public" });
-    await vi.advanceTimersByTimeAsync(0);
-    expect(started).toEqual(accountIds.slice(0, 5));
-    await vi.advanceTimersByTimeAsync(50);
-    const snap = await snapshotPromise;
-    const channel = snap.channels["deadline-test"];
+    const snapshotPromise = collectDeadlineSnapshot({ audience: "public" });
+    try {
+      await flushHealthPreparation();
+      expect(started).toEqual(accountIds.slice(0, 5));
+      await vi.advanceTimersByTimeAsync(7_000);
+      const snap = await snapshotPromise;
+      const channel = snap.channels["deadline-test"];
 
-    expect(started).toEqual(accountIds.slice(0, 5));
-    for (const accountId of accountIds) {
-      expect(channel?.accounts?.[accountId]?.probe).toMatchObject({
-        ok: false,
-        timedOut: true,
-      });
+      expect(started).toEqual(accountIds.slice(0, 5));
+      for (const accountId of accountIds) {
+        expect(channel?.accounts?.[accountId]?.probe).toEqual({
+          error: "health collection timed out after 7000ms",
+          timedOut: true,
+        });
+      }
+    } finally {
+      for (const release of releaseProbes) {
+        release();
+      }
+      await vi.advanceTimersByTimeAsync(7_000);
+      await snapshotPromise;
     }
-    for (const release of releaseProbes) {
-      release();
-    }
-    await vi.advanceTimersByTimeAsync(0);
   }, 1_000);
+
+  it.each([
+    { stepMs: 60_000, probe: { ok: true } },
+    {
+      stepMs: -60_000,
+      probe: { error: "health collection timed out after 7000ms", timedOut: true },
+    },
+  ])(
+    "keeps the 7s budget when the wall clock steps $stepMs ms",
+    async ({ stepMs, probe }) => {
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout", "performance"] });
+      const slowProbe = createDeferredCore<Record<string, unknown>>();
+      healthPluginsForTest = [
+        createDeadlinePlugin({
+          accountIds: ["default"],
+          probe: async () => (stepMs > 0 ? { ok: true } : await slowProbe.promise),
+        }),
+      ];
+      readSessionStoreSummaryReadOnly.mockImplementation(() => {
+        // setSystemTime moves only Date; performance.now() keeps monotonic time.
+        vi.setSystemTime(Date.now() + stepMs);
+        return { count: 0, recent: [], byAgent: new Map() };
+      });
+
+      const snapshotPromise = collectDeadlineSnapshot();
+      await flushHealthPreparation();
+      await vi.advanceTimersByTimeAsync(7_000);
+      const snap = await snapshotPromise;
+      slowProbe.resolve({ ok: true });
+
+      expect(snap.channels["deadline-test"]?.accounts?.default?.probe).toEqual(probe);
+    },
+    1_000,
+  );
 
   it("retains timed-out permits across repeated health collections", async () => {
     vi.useFakeTimers();
@@ -232,31 +356,35 @@ describe("gateway health collection deadline", () => {
       }),
     ];
 
-    const firstSnapshot = collectDeadlineSnapshot({ timeoutMs: 50 });
-    await vi.advanceTimersByTimeAsync(0);
-    expect(started).toEqual(accountIds);
-    await vi.advanceTimersByTimeAsync(50);
-    await firstSnapshot;
+    const firstSnapshot = collectDeadlineSnapshot();
+    try {
+      await flushHealthPreparation();
+      expect(started).toEqual(accountIds);
+      await vi.advanceTimersByTimeAsync(7_000);
+      await firstSnapshot;
 
-    const secondSnapshot = collectDeadlineSnapshot({ timeoutMs: 50 });
-    await vi.advanceTimersByTimeAsync(0);
-    expect(started).toEqual(accountIds);
-    await vi.advanceTimersByTimeAsync(50);
-    const second = await secondSnapshot;
+      const secondSnapshot = collectDeadlineSnapshot();
+      await flushHealthPreparation();
+      expect(started).toEqual(accountIds);
+      await vi.advanceTimersByTimeAsync(7_000);
+      const second = await secondSnapshot;
 
-    expect(started).toEqual(accountIds);
-    expect(active).toBe(5);
-    expect(maxActive).toBe(5);
-    for (const accountId of accountIds) {
-      expect(second.channels["deadline-test"]?.accounts?.[accountId]?.probe).toMatchObject({
-        ok: false,
-        timedOut: true,
-      });
+      expect(started).toEqual(accountIds);
+      expect(active).toBe(5);
+      expect(maxActive).toBe(5);
+      for (const accountId of accountIds) {
+        expect(second.channels["deadline-test"]?.accounts?.[accountId]?.probe).toEqual({
+          error: "health collection timed out after 7000ms",
+          timedOut: true,
+        });
+      }
+    } finally {
+      for (const release of releaseProbes) {
+        release();
+      }
+      await vi.advanceTimersByTimeAsync(7_000);
+      await firstSnapshot;
     }
-    for (const release of releaseProbes) {
-      release();
-    }
-    await vi.advanceTimersByTimeAsync(0);
     expect(active).toBe(0);
   }, 1_000);
 });

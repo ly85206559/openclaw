@@ -18,7 +18,6 @@ export type XcresultSummary = {
 };
 
 export function collectIosScreenshotEvidence(options: {
-  family: string;
   screenshotDirectory: string;
   xcresultDirectory: string;
   outputDirectory: string;
@@ -31,8 +30,3 @@ export function reduceIosScreenshotEvidence(options: {
   outputRoot: string;
   expectedProvenance: IosScreenshotProvenance;
 }): Record<string, unknown>;
-
-export function parseIosScreenshotEvidenceArgs(argv: string[]): {
-  command: string | undefined;
-  options: Record<string, string>;
-};
