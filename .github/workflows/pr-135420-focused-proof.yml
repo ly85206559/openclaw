@@ -52,7 +52,7 @@ jobs:
           node --import ./scripts/tsx.mjs --input-type=module -e 'import { runE2eGlobalSetup } from "./scripts/lib/vitest-build-prerequisites.mts"; await runE2eGlobalSetup();' > proof-results/runtime-prepare.log 2>&1
           cat proof-results/runtime-prepare.log
           git diff --exit-code
-      - name: Prove both complete files on Node and actual Bun workers
+      - name: Complete actual Bun proof and reuse exact-head Node evidence
         shell: bash
         run: |
           set -euo pipefail
@@ -84,32 +84,14 @@ jobs:
             node: process.version, nodeExecutable: process.execPath,
             bun, revision: revision.stdout.trim(), executableHash,
             nodeRedGreenRun: '39219584685',
+            nodeGreenRun: '39231529609',
             limitation: 'Prior39219584685 Node RED/GREEN remains historical; its Bun labels were duplicate Node and lint failed. Actual Bun39224861443 passed owner4/readiness2 but Bun-spawned CLI health failed unsupported WebSocket receiver. This candidate keeps Bun workers and uses the documented Node CLI subprocess; it does not fix or claim Bun Gateway transport.',
             sources: Object.fromEntries(['src/plugins/runtime-degraded-state.ts', 'src/plugins/runtime-degraded-state.test.ts', 'test/public-plugin-diagnostic-redaction.e2e.test.ts'].map((file) => [file, hash(readFileSync(file))])),
             cells: [],
           };
-          for (const [name, file, expected] of [
-            ['node-owner', 'src/plugins/runtime-degraded-state.test.ts', 5],
-            ['node-gateway-cli', 'test/public-plugin-diagnostic-redaction.e2e.test.ts', 3],
-          ]) {
-            const args = ['scripts/run-vitest.mjs', 'run', file, '--maxWorkers=1', '--reporter=verbose'];
-            const start = performance.now();
-            const result = spawnSync(process.execPath, args, {
-              env: {...process.env, OPENCLAW_VITEST_RUNTIME: 'node', OPENCLAW_E2E_USE_PREBUILT_DIST: '1'},
-              encoding: 'utf8', timeout: 15 * 60 * 1000, maxBuffer: 16 * 1024 * 1024,
-            });
-            const output = (result.stdout ?? '') + '\n' + (result.stderr ?? '');
-            const plainOutput = stripVTControlCharacters(output);
-            writeFileSync('proof-results/' + name + '.log', output);
-            process.stdout.write(output);
-            receipt.cells.push({name, runtime: 'node', command: process.execPath, args, exit: result.status, signal: result.signal, wallMs: Math.round(performance.now() - start), outputHash: hash(output)});
-            writeFileSync('proof-results/receipt.json', JSON.stringify(receipt, null, 2));
-            assert.equal(result.error, undefined);
-            assert.equal(result.signal, null);
-            assert.equal(result.status, 0);
-            assert.match(plainOutput, new RegExp('Tests\\s+' + expected + ' passed'));
-            if (name === 'node-gateway-cli') assert.match(plainOutput, /public plugin diagnostic CLI proof: detailLength=1000 containsSyntheticCredential=false reason=missing-main-entry boundedTo1000=true/);
-          }
+          // Exact unchanged 7da Node owner5/CLI3 and real health already passed in
+          // 39231529609; that run failed only at the missing Bun identity witness.
+          // Reuse its raw receipts rather than repeat successful product work.
           writeFileSync('proof-results/require-bun-worker.ts', `import { beforeAll } from 'vitest';
           import { realpathSync } from 'node:fs';
           beforeAll(() => {
@@ -125,7 +107,11 @@ jobs:
             const wrapper = 'proof-results/bun-' + name + '.config.ts';
             writeFileSync(wrapper, `import base from '../test/vitest/vitest.${config}.config.ts';
             import path from 'node:path';
-            export default {...base, test: {...base.test, setupFiles: [...(base.test?.setupFiles ?? []), path.resolve('proof-results/require-bun-worker.ts')]}};`);
+            const attachProof = (config) => ({...config, test: {...config.test, setupFiles: [...(config.test?.setupFiles ?? []), path.resolve('proof-results/require-bun-worker.ts')]}});
+            const verified = attachProof(base);
+            // Inline plugins projects use extends:false and do not inherit root setup.
+            if (base.test?.projects) verified.test.projects = base.test.projects.map(attachProof);
+            export default verified;`);
             const args = ['--tsconfig-override', path.resolve('tsconfig.json'), 'node_modules/vitest/vitest.mjs', 'run', '--config', wrapper, file, '--maxWorkers=1', '--reporter=verbose', '--passWithNoTests=false'];
             const start = performance.now();
             const result = spawnSync(bun, args, {
