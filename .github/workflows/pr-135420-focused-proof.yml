@@ -148,7 +148,7 @@ jobs:
           git diff --check
       - name: Preserve synthetic proof receipts
         if: always()
-        uses: actions/upload-artifact@88c7c066e54f4de41105a2d281614a57c015317d3 # v7.0.0
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: public-diagnostic-ready-${{ github.run_id }}
           path: proof-results/
