@@ -1,4 +1,4 @@
-name: PR 135420 readiness and diagnostic proof
+name: PR 135420 Bun identity and remaining gates
 
 on:
   workflow_dispatch:
@@ -11,7 +11,7 @@ permissions:
 jobs:
   focused-tests:
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -23,117 +23,97 @@ jobs:
           node-version: 24.16.0
       - name: Set up the canonical checksum-pinned Bun test runtime
         uses: openclaw/openclaw/.github/actions/setup-test-bun@8102bc63bdc108f83c071e17f9de2d912507b14e
-      - name: Enable Corepack
-        run: corepack enable
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-      - name: Prove the original failure and the exact candidate through the Gateway CLI
-        shell: bash
+      - name: Install exact-source frozen dependencies
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+      - name: Prepare the exact candidate runtime once through its canonical owner
         run: |
           set -euo pipefail
           mkdir -p proof-results
+          test "$(git rev-parse HEAD)" = 7c8b97b90894c684196b8aa6ed8f8985440ed06d
+          node --import ./scripts/tsx.mjs --input-type=module -e 'import { runE2eGlobalSetup } from "./scripts/lib/vitest-build-prerequisites.mts"; await runE2eGlobalSetup();' > proof-results/runtime-prepare.log 2>&1
+          cat proof-results/runtime-prepare.log
+          git diff --exit-code
+      - name: Prove actual Bun worker identity and both complete focused files
+        shell: bash
+        run: |
+          set -euo pipefail
           node --input-type=module <<'NODE'
           import assert from 'node:assert/strict';
           import { createHash } from 'node:crypto';
-          import { readFileSync, writeFileSync } from 'node:fs';
+          import { readFileSync, writeFileSync, realpathSync } from 'node:fs';
           import { spawnSync } from 'node:child_process';
+          import path from 'node:path';
           const candidate = '7c8b97b90894c684196b8aa6ed8f8985440ed06d';
-          const original = '60ca3b4cd5b4893d4a61e7bd770ad15e3ea99a03';
-          const test = 'test/public-plugin-diagnostic-redaction.e2e.test.ts';
-          const owner = 'src/plugins/runtime-degraded-state.ts';
-          const hash = (value) => createHash('sha256').update(value).digest('hex');
-          function git(...args) {
+          const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
+          const git = (...args) => {
             const result = spawnSync('git', args, { encoding: 'utf8' });
             assert.equal(result.status, 0, result.stderr);
             return result.stdout.trim();
-          }
-          assert.equal(git('rev-parse', 'HEAD'), candidate);
-          const sourceTest = readFileSync(test, 'utf8');
-          const sourceOwner = readFileSync(owner, 'utf8');
-          const receipt = {
-            candidate, original, sourceTree: git('rev-parse', 'HEAD^{tree}'),
-            node: process.version,
-            bun: spawnSync('bun', ['--revision'], { encoding: 'utf8' }).stdout.trim(),
-            testHash: hash(sourceTest), ownerHash: hash(sourceOwner), cells: [],
           };
-          function runCell(name, file, runtime, filter) {
-            const args = ['scripts/run-vitest.mjs', 'run', file, '--maxWorkers=1', '--reporter', 'verbose'];
-            if (filter) args.push('-t', filter);
+          assert.equal(git('rev-parse', 'HEAD'), candidate);
+          const executable = spawnSync('which', ['bun'], { encoding: 'utf8' });
+          assert.equal(executable.status, 0);
+          const bun = realpathSync(executable.stdout.trim());
+          const revision = spawnSync(bun, ['--revision'], { encoding: 'utf8' });
+          assert.equal(revision.status, 0);
+          assert.equal(revision.stdout.trim(), '1.4.4-canary.1+7bd4fdff3');
+          const executableHash = hash(readFileSync(bun));
+          assert.equal(executableHash, '0f46c6ce133341ba52d2f7b3321488c53b62dd78bb30162367abc3f0373ce8ec');
+          const receipt = {
+            candidate, sourceTree: git('rev-parse', 'HEAD^{tree}'),
+            bun, revision: revision.stdout.trim(), executableHash,
+            nodeRedGreenRun: '39219584685',
+            limitation: 'That prior run failed its lint configuration; its cells named bun were duplicate Node runs. This run supplies actual Bun, not repeated Node red/green.',
+            sources: Object.fromEntries(['src/plugins/runtime-degraded-state.ts', 'src/plugins/runtime-degraded-state.test.ts', 'test/public-plugin-diagnostic-redaction.e2e.test.ts'].map((file) => [file, hash(readFileSync(file))])),
+            cells: [],
+          };
+          writeFileSync('proof-results/require-bun-worker.ts', `import { beforeAll } from 'vitest';
+          import { realpathSync } from 'node:fs';
+          beforeAll(() => {
+            if (!process.versions.bun || realpathSync(process.execPath) !== process.env.OPENCLAW_PROOF_BUN_EXECUTABLE) throw new Error('Expected the checksum-pinned Bun worker, not a Node fallback');
+            process.stderr.write('bun-worker-proof:' + JSON.stringify({bun: process.versions.bun, executable: realpathSync(process.execPath)}) + '\\n');
+          });`);
+          // The old head lacks the runtime selector. Match the current canonical
+          // vitest-test-runtime.mts contract explicitly; preserve each original config.
+          for (const [name, config, file, expected] of [
+            ['owner', 'plugins', 'src/plugins/runtime-degraded-state.test.ts', 4],
+            ['gateway-cli', 'e2e', 'test/public-plugin-diagnostic-redaction.e2e.test.ts', 3],
+          ]) {
+            const wrapper = 'proof-results/bun-' + name + '.config.ts';
+            writeFileSync(wrapper, `import base from '../test/vitest/vitest.${config}.config.ts';
+            import path from 'node:path';
+            export default {...base, test: {...base.test, setupFiles: [...(base.test?.setupFiles ?? []), path.resolve('proof-results/require-bun-worker.ts')]}};`);
+            const args = ['--tsconfig-override', path.resolve('tsconfig.json'), 'node_modules/vitest/vitest.mjs', 'run', '--config', wrapper, file, '--maxWorkers=1', '--reporter=verbose', '--passWithNoTests=false'];
             const start = performance.now();
-            const result = spawnSync(process.execPath, args, {
-              env: { ...process.env, OPENCLAW_VITEST_RUNTIME: runtime },
+            const result = spawnSync(bun, args, {
+              env: {...process.env, NODE_DISABLE_COMPILE_CACHE: '1', OPENCLAW_E2E_USE_PREBUILT_DIST: '1', OPENCLAW_PROOF_BUN_EXECUTABLE: bun},
               encoding: 'utf8', timeout: 15 * 60 * 1000, maxBuffer: 16 * 1024 * 1024,
             });
-            const output = `${result.stdout ?? ''}\n${result.stderr ?? ''}`;
-            writeFileSync(`proof-results/${name}.log`, output);
+            const output = (result.stdout ?? '') + '\n' + (result.stderr ?? '');
+            writeFileSync('proof-results/bun-' + name + '.log', output);
             process.stdout.write(output);
+            const cell = {name, command: bun, args, exit: result.status, signal: result.signal, wallMs: Math.round(performance.now() - start), outputHash: hash(output)};
+            receipt.cells.push(cell);
+            writeFileSync('proof-results/receipt.json', JSON.stringify(receipt, null, 2));
             assert.equal(result.error, undefined);
             assert.equal(result.signal, null);
-            const cell = { name, runtime, exit: result.status, wallMs: Math.round(performance.now() - start), outputHash: hash(output) };
-            receipt.cells.push(cell);
-            console.log(JSON.stringify(cell));
-            return { ...cell, output };
+            assert.equal(result.status, 0);
+            assert.match(output, /bun-worker-proof:/);
+            assert.match(output, new RegExp('Tests\\s+' + expected + ' passed'));
+            if (name === 'gateway-cli') assert.match(output, /public plugin diagnostic CLI proof: detailLength=1000 containsSyntheticCredential=false reason=missing-main-entry boundedTo1000=true/);
           }
-          try {
-            const oldTest = git('show', `${original}:${test}`);
-            const start = 'async function waitForGatewayReady(';
-            const end = '\nfunction findPluginDiagnostic(';
-            const oldWait = oldTest.slice(oldTest.indexOf(start), oldTest.indexOf(end));
-            assert.ok(oldWait.includes('while (Date.now() <= deadline)'));
-            writeFileSync(test, sourceTest.slice(0, sourceTest.indexOf(start)) + oldWait + sourceTest.slice(sourceTest.indexOf(end)));
-            const readinessRed = runCell('readiness-original-red', test, 'node', 'checks observed readiness before an expired deadline');
-            assert.equal(readinessRed.exit, 1);
-            assert.match(readinessRed.output, /timed out waiting for gateway ready/);
-            assert.match(readinessRed.output, /1 failed.*1 passed/);
-            writeFileSync(test, sourceTest);
-
-            const expression = 'truncateUtf16Safe(redactToolPayloadText(privatePathRedactedDetail), 1_000)';
-            assert.ok(sourceOwner.includes(expression));
-            writeFileSync(owner, sourceOwner.replace(expression, 'privatePathRedactedDetail'));
-            const unitRed = runCell('public-projection-original-red', 'src/plugins/runtime-degraded-state.test.ts', 'node');
-            assert.equal(unitRed.exit, 1);
-            assert.match(unitRed.output, /2 failed.*2 passed/);
-            const cliRed = runCell('gateway-cli-original-red', test, 'node', 'redacts and bounds a synthetic');
-            assert.equal(cliRed.exit, 1);
-            assert.match(cliRed.output, /not to contain 'fixture-only-public-diagnostic-value'/);
-            writeFileSync(owner, sourceOwner);
-            assert.equal(git('diff', '--name-only'), '');
-
-            // The baseline build is stamped with this HEAD; restoring clean source alone can reuse it.
-            const rebuildStart = performance.now();
-            const rebuild = spawnSync(process.execPath, ['scripts/run-node.mjs', '--version'], {
-              env: { ...process.env, OPENCLAW_FORCE_BUILD: '1', OPENCLAW_BUILD_PRIVATE_QA: '1', OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: '0' },
-              encoding: 'utf8', timeout: 15 * 60 * 1000, maxBuffer: 16 * 1024 * 1024,
-            });
-            const rebuildOutput = `${rebuild.stdout ?? ''}\n${rebuild.stderr ?? ''}`;
-            writeFileSync('proof-results/restored-candidate-build.log', rebuildOutput);
-            process.stdout.write(rebuildOutput);
-            receipt.runtimeRebuild = { exit: rebuild.status, wallMs: Math.round(performance.now() - rebuildStart), ownerHash: hash(readFileSync(owner)), outputHash: hash(rebuildOutput) };
-            assert.equal(rebuild.error, undefined);
-            assert.equal(rebuild.signal, null);
-            assert.equal(rebuild.status, 0);
-
-            for (const runtime of ['node', 'bun']) {
-              const unit = runCell(`public-projection-${runtime}-green`, 'src/plugins/runtime-degraded-state.test.ts', runtime);
-              assert.equal(unit.exit, 0);
-              const cli = runCell(`gateway-cli-${runtime}-green`, test, runtime);
-              assert.equal(cli.exit, 0);
-              assert.match(cli.output, /3 passed/);
-              assert.match(cli.output, /public plugin diagnostic CLI proof: detailLength=1000 containsSyntheticCredential=false reason=missing-main-entry boundedTo1000=true/);
-            }
-          } finally {
-            writeFileSync(test, sourceTest);
-            writeFileSync(owner, sourceOwner);
-            receipt.restored = hash(readFileSync(test)) === receipt.testHash && hash(readFileSync(owner)) === receipt.ownerHash;
-            writeFileSync('proof-results/receipt.json', JSON.stringify(receipt, null, 2));
-            assert.ok(receipt.restored);
-          }
+          assert.equal(git('diff', '--name-only'), '');
+          for (const [file, expected] of Object.entries(receipt.sources)) assert.equal(hash(readFileSync(file)), expected);
+          receipt.sourceUnchanged = true;
+          writeFileSync('proof-results/receipt.json', JSON.stringify(receipt, null, 2));
           NODE
-      - name: Check the touched surface
+      - name: Check the touched surface with its actual root-test config
         run: |
           set -euo pipefail
           node_modules/.bin/oxfmt --check test/public-plugin-diagnostic-redaction.e2e.test.ts
-          node scripts/run-oxlint.mjs --tsconfig test/tsconfig/tsconfig.test.root.e2e.json test/public-plugin-diagnostic-redaction.e2e.test.ts
+          node scripts/run-oxlint.mjs --tsconfig test/tsconfig/tsconfig.test.root.json test/public-plugin-diagnostic-redaction.e2e.test.ts
           git diff --check
       - name: Check the exact proof workflow through its canonical owner
         env:
@@ -146,10 +126,10 @@ jobs:
           git show "$CARRIER_SHA:$workflow" > "$workflow"
           pnpm check:workflows
           git diff --check
-      - name: Preserve synthetic proof receipts
+      - name: Preserve exact runtime identity, raw logs and failures
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: public-diagnostic-ready-${{ github.run_id }}
+          name: public-diagnostic-bun-${{ github.run_id }}
           path: proof-results/
           retention-days: 30
