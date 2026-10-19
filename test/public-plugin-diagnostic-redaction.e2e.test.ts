@@ -22,6 +22,8 @@ import { resolveCompatibilityHostVersion } from "../src/version.js";
 const PLUGIN_ID = "fixture-public-diagnostic";
 const SYNTHETIC_SECRET = "fixture-only-public-diagnostic-value";
 const SYNTHETIC_BEARER = `Bearer ${SYNTHETIC_SECRET}`;
+// Match package scripts: the CLI uses Node even when the test worker uses Bun.
+const cliExecutable = process.versions.bun ? "node" : process.execPath;
 
 function hideSyntheticSecret(text: string): string {
   return text.split(SYNTHETIC_SECRET).join("[synthetic-secret]");
@@ -231,7 +233,7 @@ describe("public plugin diagnostic CLI proof", () => {
 
       const output = { text: "" };
       const gateway = spawn(
-        process.execPath,
+        cliExecutable,
         [
           path.join(process.cwd(), "openclaw.mjs"),
           "gateway",
@@ -262,7 +264,7 @@ describe("public plugin diagnostic CLI proof", () => {
       try {
         await waitForGatewayReady(gateway, output);
         const health = spawnSync(
-          process.execPath,
+          cliExecutable,
           [path.join(process.cwd(), "openclaw.mjs"), "health", "--json", "--timeout", "30000"],
           { cwd: process.cwd(), env, encoding: "utf8", timeout: 60_000 },
         );
