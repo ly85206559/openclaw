@@ -99,6 +99,20 @@ jobs:
             writeFileSync(owner, sourceOwner);
             assert.equal(git('diff', '--name-only'), '');
 
+            // The baseline build is stamped with this HEAD; restoring clean source alone can reuse it.
+            const rebuildStart = performance.now();
+            const rebuild = spawnSync(process.execPath, ['scripts/run-node.mjs', '--version'], {
+              env: { ...process.env, OPENCLAW_FORCE_BUILD: '1', OPENCLAW_BUILD_PRIVATE_QA: '1', OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: '0' },
+              encoding: 'utf8', timeout: 15 * 60 * 1000, maxBuffer: 16 * 1024 * 1024,
+            });
+            const rebuildOutput = `${rebuild.stdout ?? ''}\n${rebuild.stderr ?? ''}`;
+            writeFileSync('proof-results/restored-candidate-build.log', rebuildOutput);
+            process.stdout.write(rebuildOutput);
+            receipt.runtimeRebuild = { exit: rebuild.status, wallMs: Math.round(performance.now() - rebuildStart), ownerHash: hash(readFileSync(owner)), outputHash: hash(rebuildOutput) };
+            assert.equal(rebuild.error, undefined);
+            assert.equal(rebuild.signal, null);
+            assert.equal(rebuild.status, 0);
+
             for (const runtime of ['node', 'bun']) {
               const unit = runCell(`public-projection-${runtime}-green`, 'src/plugins/runtime-degraded-state.test.ts', runtime);
               assert.equal(unit.exit, 0);
