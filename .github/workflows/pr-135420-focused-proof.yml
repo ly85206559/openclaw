@@ -45,6 +45,7 @@ jobs:
           import { readFileSync, writeFileSync, realpathSync } from 'node:fs';
           import { spawnSync } from 'node:child_process';
           import path from 'node:path';
+          import { stripVTControlCharacters } from 'node:util';
           const candidate = '7c8b97b90894c684196b8aa6ed8f8985440ed06d';
           const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
           const git = (...args) => {
@@ -92,6 +93,7 @@ jobs:
               encoding: 'utf8', timeout: 15 * 60 * 1000, maxBuffer: 16 * 1024 * 1024,
             });
             const output = (result.stdout ?? '') + '\n' + (result.stderr ?? '');
+            const plainOutput = stripVTControlCharacters(output);
             writeFileSync('proof-results/bun-' + name + '.log', output);
             process.stdout.write(output);
             const cell = {name, command: bun, args, exit: result.status, signal: result.signal, wallMs: Math.round(performance.now() - start), outputHash: hash(output)};
@@ -100,9 +102,9 @@ jobs:
             assert.equal(result.error, undefined);
             assert.equal(result.signal, null);
             assert.equal(result.status, 0);
-            assert.match(output, /bun-worker-proof:/);
-            assert.match(output, new RegExp('Tests\\s+' + expected + ' passed'));
-            if (name === 'gateway-cli') assert.match(output, /public plugin diagnostic CLI proof: detailLength=1000 containsSyntheticCredential=false reason=missing-main-entry boundedTo1000=true/);
+            assert.match(plainOutput, /bun-worker-proof:/);
+            assert.match(plainOutput, new RegExp('Tests\\s+' + expected + ' passed'));
+            if (name === 'gateway-cli') assert.match(plainOutput, /public plugin diagnostic CLI proof: detailLength=1000 containsSyntheticCredential=false reason=missing-main-entry boundedTo1000=true/);
           }
           assert.equal(git('diff', '--name-only'), '');
           for (const [file, expected] of Object.entries(receipt.sources)) assert.equal(hash(readFileSync(file)), expected);
