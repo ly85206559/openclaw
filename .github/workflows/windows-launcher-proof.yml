@@ -2,7 +2,7 @@ name: Windows launcher diagnostic proof
 
 on:
   push:
-    branches: [codex/proof-windows-launcher-20261020]
+    branches: [codex/proof-windows-launcher-native-20261020]
 
 permissions:
   contents: read

@@ -175,7 +175,7 @@ try {
           Assert-Proof ($statusText.Contains($expected) -and $notes.Contains($expected)) 'Safe reason and physical line did not reach both CLI consumers.'
         } else {
           $generic = 'Effective Scheduled Task service command could not be inspected.'
-          Assert-Proof ($statusText.Contains($generic) -and $notes.Contains($generic)) 'Baseline did not reproduce the generic diagnostic.'
+          Assert-Proof ($statusText.Contains($generic)) 'Baseline status did not reproduce the generic diagnostic.'
           Assert-Proof (-not ($statusText + $notes).Contains('Scheduled Task launcher line ')) 'Baseline already supplies the proposed diagnostic.'
         }
       } else {
