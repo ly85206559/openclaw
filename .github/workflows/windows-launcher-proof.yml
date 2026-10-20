@@ -69,14 +69,18 @@ jobs:
           pnpm --silent openclaw --version
           if ($LASTEXITCODE -ne 0) { throw 'Canonical CLI preparation failed.' }
           if (git status --porcelain --untracked-files=no) { throw 'Tracked source became dirty before native proof.' }
-      - name: Cache the real public Git update target without changing the source head
+      - name: Cache the real published candidate branch as the dry-run update target
         working-directory: source
         run: |
-          git remote set-url origin https://github.com/openclaw/openclaw.git
-          if ($LASTEXITCODE -ne 0) { throw 'Could not configure the public update source.' }
-          git fetch --no-tags --depth=1 origin +refs/heads/main:refs/remotes/origin/main
-          if ($LASTEXITCODE -ne 0) { throw 'Could not cache the actual public update target.' }
-          git rev-parse refs/remotes/origin/main | Set-Content -LiteralPath "$env:GITHUB_WORKSPACE/artifacts/update-target.txt"
+          git config branch.main.remote origin
+          if ($LASTEXITCODE -ne 0) { throw 'Could not configure the isolated Git update source.' }
+          git config branch.main.merge refs/heads/codex/windows-launcher-diagnostic-20261020
+          if ($LASTEXITCODE -ne 0) { throw 'Could not select the published candidate branch.' }
+          git fetch --no-tags --depth=1 origin +refs/heads/codex/windows-launcher-diagnostic-20261020:refs/remotes/origin/codex/windows-launcher-diagnostic-20261020
+          if ($LASTEXITCODE -ne 0) { throw 'Could not cache the real candidate update target.' }
+          $target = (git rev-parse refs/remotes/origin/codex/windows-launcher-diagnostic-20261020).Trim()
+          if ($LASTEXITCODE -ne 0 -or $target -cne $env:FIXED_HEAD) { throw 'Candidate update target changed before proof.' }
+          $target | Set-Content -LiteralPath "$env:GITHUB_WORKSPACE/artifacts/update-target.txt"
       - name: Exercise actual status and dry-run update
         run: |
           & ./controller/proof/windows-launcher-proof.ps1 -Mode proof -Phase '${{ matrix.phase }}' -SourceRoot "$env:GITHUB_WORKSPACE/source" -OutputDir "$env:GITHUB_WORKSPACE/artifacts"
