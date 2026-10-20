@@ -84,7 +84,8 @@ function Invoke-ProofCli([string]$Case, [string]$Command, [hashtable]$Environmen
     if ($null -ne $value) { $start.Environment[$key] = $value }
   }
   foreach ($key in $Environment.Keys) { $start.Environment[$key] = $Environment[$key] }
-  $pnpm = (Get-Command pnpm.cmd -CommandType Application).Source
+  $pnpm = (Get-Command pnpm.cmd -CommandType Application | Select-Object -First 1).Source
+  Assert-Proof (Test-Path -LiteralPath $pnpm -PathType Leaf) 'A single pnpm application must be selected.'
   # cmd.exe owns quoting here; ArgumentList would apply C-runtime quote escaping.
   $start.Arguments = '/d /s /c ""' + $pnpm + '" --silent openclaw --profile ' + $Environment.OPENCLAW_PROFILE + ' ' + $Command + '"'
   $process = [Diagnostics.Process]::new()
@@ -128,7 +129,8 @@ try {
     $receipt.sourceHead = (& git -C $SourceRoot rev-parse HEAD).Trim()
     Assert-Proof ($LASTEXITCODE -eq 0) 'Could not read exact source head.'
     Assert-Proof (-not (& git -C $SourceRoot status --porcelain --untracked-files=no)) 'Source must be clean before proof.'
-    $node = (Get-Command node.exe -CommandType Application).Source
+    $node = (Get-Command node.exe -CommandType Application | Select-Object -First 1).Source
+    Assert-Proof (Test-Path -LiteralPath $node -PathType Leaf) 'A single Node application must be selected.'
     $entry = Join-Path $SourceRoot 'dist/entry.js'
     Assert-Proof (Test-Path -LiteralPath $entry -PathType Leaf) 'Canonical CLI build must finish before task registration.'
     $accountHome = [Environment]::GetFolderPath([Environment+SpecialFolder]::UserProfile)
@@ -165,7 +167,7 @@ try {
         COREPACK_ENABLE_DOWNLOAD_PROMPT = '0'; NO_COLOR = '1'
       }
       $before = Get-TaskSnapshot $name $launcher
-      $status = Invoke-ProofCli $case 'gateway status --deep --json' $childEnv
+      $status = Invoke-ProofCli $case 'gateway status --deep --timeout 60000 --json' $childEnv
       Assert-Unchanged $before (Get-TaskSnapshot $name $launcher)
       $update = Invoke-ProofCli $case 'update --dry-run --json' $childEnv
       Assert-Unchanged $before (Get-TaskSnapshot $name $launcher)
@@ -188,6 +190,8 @@ try {
         }
       } else {
         Assert-Proof ($null -ne $status.service.command) 'Literal control command was rejected.'
+        Assert-Proof (($status.service.command.programArguments[0] -ieq $node) -and
+          ($status.cli.runtime.execPath -ieq $node)) 'Literal control must use the single selected CLI Node executable.'
         Assert-Proof ($status.service.runtime.status -eq 'stopped') 'Never-run literal control must be stopped.'
         Assert-Proof (($status.service.command.programArguments -contains 'gateway') -and
           ($status.service.command.programArguments -contains "$port")) 'Literal control lost its actual command arguments.'
