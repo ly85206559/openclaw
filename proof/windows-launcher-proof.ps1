@@ -18,6 +18,7 @@ $scheduler = New-Object -ComObject 'Schedule.Service'
 $scheduler.Connect()
 $folder = $scheduler.GetFolder('\')
 $created = [Collections.Generic.List[string]]::new()
+$createdProfiles = [Collections.Generic.List[string]]::new()
 $canary = 'SYNTHETIC_LAUNCHER_SECRET_' + [Guid]::NewGuid().ToString('N')
 $receipt = [ordered]@{ mode = $Mode; phase = $Phase; complete = $false; taskCleanup = $false; cases = @() }
 
@@ -30,8 +31,8 @@ function Get-TextHash([string]$Value) {
 function Find-Task([string]$Name) {
   @($folder.GetTasks(0) | Where-Object { $_.Name -ceq $Name })
 }
-function New-ProofTask([string]$Launcher, [string]$WorkingDirectory) {
-  $name = 'OpenClaw-Launcher-Proof-' + [Guid]::NewGuid().ToString('N')
+function New-ProofTask([string]$Launcher, [string]$WorkingDirectory, [string]$TaskName = '') {
+  $name = if ($TaskName) { $TaskName } else { 'OpenClaw-Launcher-Proof-' + [Guid]::NewGuid().ToString('N') }
   Assert-Proof ((Find-Task $name).Count -eq 0) 'Unique proof task already exists.'
   $definition = $scheduler.NewTask(0)
   $definition.RegistrationInfo.Description = 'Isolated OpenClaw inspection proof; never run.'
@@ -85,7 +86,7 @@ function Invoke-ProofCli([string]$Case, [string]$Command, [hashtable]$Environmen
   foreach ($key in $Environment.Keys) { $start.Environment[$key] = $Environment[$key] }
   $pnpm = (Get-Command pnpm.cmd -CommandType Application).Source
   # cmd.exe owns quoting here; ArgumentList would apply C-runtime quote escaping.
-  $start.Arguments = '/d /s /c ""' + $pnpm + '" --silent openclaw ' + $Command + '"'
+  $start.Arguments = '/d /s /c ""' + $pnpm + '" --silent openclaw --profile ' + $Environment.OPENCLAW_PROFILE + ' ' + $Command + '"'
   $process = [Diagnostics.Process]::new()
   $process.StartInfo = $start
   $started = $false
@@ -130,30 +131,37 @@ try {
     $node = (Get-Command node.exe -CommandType Application).Source
     $entry = Join-Path $SourceRoot 'dist/entry.js'
     Assert-Proof (Test-Path -LiteralPath $entry -PathType Leaf) 'Canonical CLI build must finish before task registration.'
+    $accountHome = [Environment]::GetFolderPath([Environment+SpecialFolder]::UserProfile)
+    Assert-Proof ([IO.Path]::IsPathFullyQualified($accountHome)) 'Native account home must be absolute.'
     foreach ($case in @('invalid', 'literal')) {
       $caseRoot = Join-Path $scratch $case
-      foreach ($dir in @($caseRoot, "$caseRoot/home", "$caseRoot/state", "$caseRoot/appdata", "$caseRoot/localappdata", "$caseRoot/tmp")) {
+      foreach ($dir in @($caseRoot, "$caseRoot/appdata", "$caseRoot/localappdata", "$caseRoot/tmp")) {
         $null = New-Item -ItemType Directory -Path $dir
       }
+      # Service maintenance requires the real account home and canonical named-profile identity.
+      $profile = 'proof-' + [Guid]::NewGuid().ToString('N')
+      $profileRoot = Join-Path $accountHome ('.openclaw-' + $profile)
+      Assert-Proof (-not (Test-Path -LiteralPath $profileRoot)) 'Unique proof profile already exists.'
+      $null = New-Item -ItemType Directory -Path $profileRoot
+      $createdProfiles.Add($profileRoot)
       $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
       $listener.Start()
       $port = $listener.LocalEndpoint.Port
       $listener.Stop()
-      $config = Join-Path $caseRoot 'openclaw.json'
+      $config = Join-Path $profileRoot 'openclaw.json'
       @{ gateway = @{ mode = 'local'; port = $port; auth = @{ mode = 'token'; token = 'synthetic-proof-token' } } } |
         ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $config -Encoding utf8
       $assignment = if ($case -eq 'invalid') { 'set "OPENCLAW_GATEWAY_TOKEN=' + $canary + '%USERPROFILE%"' } else { 'set "OPENCLAW_PROOF_LITERAL=literal-value"' }
-      $launcher = Join-Path $caseRoot 'gateway.cmd'
+      $launcher = Join-Path $profileRoot 'gateway.cmd'
       # Physical line 5 is intentional: comments and a blank line must still count.
-      @('@echo off', 'rem physical-line proof', '', 'rem skipped comment', $assignment,
+      @('@echo off', 'rem physical-line proof', '', ('set "OPENCLAW_PROFILE=' + $profile + '"'), $assignment,
         ('"' + $node + '" "' + $entry + '" gateway --port ' + $port + ' < NUL')) -join "`r`n" |
         Set-Content -LiteralPath $launcher -Encoding ascii -NoNewline
-      $name = New-ProofTask $launcher $caseRoot
+      $name = New-ProofTask $launcher $profileRoot ('OpenClaw Gateway (' + $profile + ')')
       $childEnv = @{
-        HOME = "$caseRoot/home"; USERPROFILE = "$caseRoot/home"; APPDATA = "$caseRoot/appdata"
+        HOME = $accountHome; USERPROFILE = $accountHome; APPDATA = "$caseRoot/appdata"
         LOCALAPPDATA = "$caseRoot/localappdata"; TEMP = "$caseRoot/tmp"; TMP = "$caseRoot/tmp"
-        OPENCLAW_STATE_DIR = "$caseRoot/state"; OPENCLAW_CONFIG_PATH = $config; OPENCLAW_WINDOWS_TASK_NAME = $name
-        OPENCLAW_TASK_SCRIPT = $launcher
+        OPENCLAW_PROFILE = $profile
         COREPACK_ENABLE_DOWNLOAD_PROMPT = '0'; NO_COLOR = '1'
       }
       $before = Get-TaskSnapshot $name $launcher
@@ -185,7 +193,7 @@ try {
           ($status.service.command.programArguments -contains "$port")) 'Literal control lost its actual command arguments.'
         Assert-Proof (-not $notes.Contains($unavailable)) 'Literal control incorrectly refused service inspection.'
       }
-      $receipt.cases += [ordered]@{ case = $case; commandPresent = $null -ne $status.service.command
+      $receipt.cases += [ordered]@{ case = $case; profile = $profile; commandPresent = $null -ne $status.service.command
         runtime = $status.service.runtime.status; dryRun = $update.dryRun; unchanged = $true; snapshot = $before }
     }
     Assert-Proof (-not (& git -C $SourceRoot status --porcelain --untracked-files=no)) 'Proof modified tracked source.'
@@ -204,6 +212,14 @@ try {
       Assert-Proof ((Find-Task $name).Count -eq 0) 'Task cleanup could not be verified.'
     }
     $receipt.taskCleanup = $true
+    foreach ($profileRoot in $createdProfiles) {
+      $resolvedProfile = [IO.Path]::GetFullPath($profileRoot)
+      Assert-Proof (([IO.Path]::GetDirectoryName($resolvedProfile) -ceq $accountHome) -and
+        ([IO.Path]::GetFileName($resolvedProfile) -cmatch '^\.openclaw-proof-[0-9a-f]{32}$')) 'Profile cleanup escaped the owned canonical identity.'
+      Remove-Item -LiteralPath $resolvedProfile -Recurse -Force
+      Assert-Proof (-not (Test-Path -LiteralPath $resolvedProfile)) 'Profile cleanup could not be verified.'
+    }
+    $receipt.profileCleanup = $true
     $resolvedScratch = [IO.Path]::GetFullPath($scratch)
     $tempPrefix = [IO.Path]::GetFullPath($env:RUNNER_TEMP).TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
     Assert-Proof ($resolvedScratch.StartsWith($tempPrefix, [StringComparison]::OrdinalIgnoreCase)) 'Scratch cleanup escaped RUNNER_TEMP.'

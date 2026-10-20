@@ -22,7 +22,7 @@ jobs:
     env:
       NODE_VERSION: 24.21.0
       COREPACK_ENABLE_DOWNLOAD_PROMPT: '0'
-      FIXED_HEAD: 0e01869e1eb780254ca6d142e650e573b7cfbda6
+      FIXED_HEAD: e3068ea63c87ff1535c247fe7b610ae925448361
     steps:
       - name: Check out proof controller
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -43,7 +43,7 @@ jobs:
           ref: ${{ matrix.phase == 'baseline' && 'e12719836f8e1f8b835496928d95ad847e453333' || env.FIXED_HEAD }}
           path: source
           persist-credentials: false
-          fetch-depth: ${{ matrix.phase == 'baseline' && 1 || 2 }}
+          fetch-depth: ${{ matrix.phase == 'baseline' && 1 || 3 }}
       - name: Set up canonical Windows Node
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
