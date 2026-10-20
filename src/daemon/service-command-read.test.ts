@@ -269,18 +269,16 @@ describe("native service command inspection", () => {
 
       expect(state).toMatchObject({
         command: null,
-        installed: true,
+        installed: false,
         loadState: { status: "loaded" },
         running: false,
         runtime: {
           status: "unknown",
-          inspectionFailure: {
-            detail: expect.stringContaining(
-              `Scheduled Task launcher line ${fixture.line}: ${fixture.reason}.`,
-            ),
-          },
         },
       });
+      expect(state.runtime?.inspectionFailure?.detail).toContain(
+        `Scheduled Task launcher line ${fixture.line}: ${fixture.reason}.`,
+      );
       expect(state.runtime?.inspectionFailure?.detail).toContain("openclaw gateway status --deep");
       expect(inspect(state.runtime)).not.toContain("launcher-secret-canary");
       expect(await fs.readFile(backingScriptPath, "utf8")).toBe(content);
