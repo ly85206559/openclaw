@@ -22,7 +22,7 @@ jobs:
     env:
       NODE_VERSION: 24.21.0
       COREPACK_ENABLE_DOWNLOAD_PROMPT: '0'
-      FIXED_HEAD: e3068ea63c87ff1535c247fe7b610ae925448361
+      FIXED_HEAD: 6b90de160f3153ca86e29d63894938b3645e0943
     steps:
       - name: Check out proof controller
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -43,7 +43,7 @@ jobs:
           ref: ${{ matrix.phase == 'baseline' && 'e12719836f8e1f8b835496928d95ad847e453333' || env.FIXED_HEAD }}
           path: source
           persist-credentials: false
-          fetch-depth: ${{ matrix.phase == 'baseline' && 1 || 3 }}
+          fetch-depth: ${{ matrix.phase == 'baseline' && 1 || 4 }}
       - name: Set up canonical Windows Node
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -74,11 +74,11 @@ jobs:
         run: |
           git config branch.main.remote origin
           if ($LASTEXITCODE -ne 0) { throw 'Could not configure the isolated Git update source.' }
-          git config branch.main.merge refs/heads/codex/windows-launcher-diagnostic-20261020
+          git config branch.main.merge refs/heads/codex/windows-launcher-diagnostic-final-20261020
           if ($LASTEXITCODE -ne 0) { throw 'Could not select the published candidate branch.' }
-          git fetch --no-tags --depth=1 origin +refs/heads/codex/windows-launcher-diagnostic-20261020:refs/remotes/origin/codex/windows-launcher-diagnostic-20261020
+          git fetch --no-tags --depth=1 origin +refs/heads/codex/windows-launcher-diagnostic-final-20261020:refs/remotes/origin/codex/windows-launcher-diagnostic-final-20261020
           if ($LASTEXITCODE -ne 0) { throw 'Could not cache the real candidate update target.' }
-          $target = (git rev-parse refs/remotes/origin/codex/windows-launcher-diagnostic-20261020).Trim()
+          $target = (git rev-parse refs/remotes/origin/codex/windows-launcher-diagnostic-final-20261020).Trim()
           if ($LASTEXITCODE -ne 0 -or $target -cne $env:FIXED_HEAD) { throw 'Candidate update target changed before proof.' }
           $target | Set-Content -LiteralPath "$env:GITHUB_WORKSPACE/artifacts/update-target.txt"
       - name: Exercise actual status and dry-run update

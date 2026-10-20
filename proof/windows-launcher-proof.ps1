@@ -78,12 +78,18 @@ function Invoke-ProofCli([string]$Case, [string]$Command, [hashtable]$Environmen
   $start.RedirectStandardOutput = $true
   $start.RedirectStandardError = $true
   $start.Environment.Clear()
-  foreach ($key in @('PATH', 'PATHEXT', 'SystemRoot', 'WINDIR', 'COMSPEC', 'ProgramFiles', 'ProgramFiles(x86)',
-      'ProgramW6432', 'PNPM_HOME', 'COREPACK_HOME', 'CI', 'GITHUB_ACTIONS', 'RUNNER_OS', 'PROCESSOR_ARCHITECTURE')) {
+  # Preserve the native bootstrap/account context allowed by resolveDiagnosticProcessEnv.
+  # The profile overrides below still isolate OpenClaw state; application credentials are not inherited.
+  foreach ($key in @('PATH', 'PATHEXT', 'SystemRoot', 'WINDIR', 'COMSPEC', 'SystemDrive',
+      'HOMEDRIVE', 'HOMEPATH', 'USERNAME', 'USERDOMAIN', 'ProgramData', 'ALLUSERSPROFILE',
+      'ProgramFiles', 'ProgramFiles(x86)', 'ProgramW6432', 'CommonProgramFiles',
+      'CommonProgramFiles(x86)', 'CommonProgramW6432', 'PSModuleAnalysisCachePath',
+      'PNPM_HOME', 'COREPACK_HOME', 'CI', 'GITHUB_ACTIONS', 'RUNNER_OS', 'PROCESSOR_ARCHITECTURE')) {
     $value = [Environment]::GetEnvironmentVariable($key)
     if ($null -ne $value) { $start.Environment[$key] = $value }
   }
   foreach ($key in $Environment.Keys) { $start.Environment[$key] = $Environment[$key] }
+  $receipt.nativeContextKeys = @($start.Environment.Keys | Sort-Object)
   $pnpm = (Get-Command pnpm.cmd -CommandType Application | Select-Object -First 1).Source
   Assert-Proof (Test-Path -LiteralPath $pnpm -PathType Leaf) 'A single pnpm application must be selected.'
   # cmd.exe owns quoting here; ArgumentList would apply C-runtime quote escaping.
