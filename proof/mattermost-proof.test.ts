@@ -91,7 +91,9 @@ it("proves pairing capacity through the registered Mattermost slash HTTP route",
           };
           const cfg = {
             commands: { text: true },
-            channels: { mattermost: { accounts: { [accountId]: {
+            channels: { mattermost: {
+              commands: { native: true, callbackPath: "/mattermost/slash" },
+              accounts: { [accountId]: {
               ...account.config, botToken: account.botToken, baseUrl,
               commands: { native: true, callbackPath: "/mattermost/slash" },
             } } } },

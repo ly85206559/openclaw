@@ -49,6 +49,7 @@ jobs:
           install-bun: "false"
           cache-mode: "off"
           semantic-checks: "true"
+      - uses: ./.github/actions/setup-ripgrep
       - name: Real registered HTTP callback and SQLite pairing store
         env:
           MATTERMOST_PROOF_PHASE: ${{ matrix.phase }}
