@@ -1,0 +1,90 @@
+name: Windows launcher diagnostic proof
+
+on:
+  push:
+    branches: [codex/proof-windows-launcher-20261020]
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    name: Native Task Scheduler / ${{ matrix.phase }}
+    runs-on: windows-2025
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        phase: [baseline, fixed]
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      NODE_VERSION: 24.21.0
+      COREPACK_ENABLE_DOWNLOAD_PROMPT: '0'
+      FIXED_HEAD: 0e01869e1eb780254ca6d142e650e573b7cfbda6
+    steps:
+      - name: Check out proof controller
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: controller
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Validate exact input
+        run: |
+          if ($env:FIXED_HEAD -cnotmatch '^[0-9a-f]{40}$') { throw 'A reviewed exact product SHA is required.' }
+      - name: Native prerequisite before installation
+        run: |
+          & ./controller/proof/windows-launcher-proof.ps1 -Mode prerequisite -Phase '${{ matrix.phase }}' -OutputDir "$env:GITHUB_WORKSPACE/artifacts"
+      - name: Check out exact clean source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ matrix.phase == 'baseline' && 'e12719836f8e1f8b835496928d95ad847e453333' || env.FIXED_HEAD }}
+          path: source
+          persist-credentials: false
+          fetch-depth: ${{ matrix.phase == 'baseline' && 1 || 2 }}
+      - name: Set up canonical Windows Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Set up canonical pinned pnpm without shared cache
+        uses: ./source/.github/actions/setup-pnpm-store-cache
+        with:
+          package-manager-file: source/package.json
+          lockfile-path: source/pnpm-lock.yaml
+          node-version: ${{ env.NODE_VERSION }}
+          cache-mode: off
+      - name: Install exact source
+        working-directory: source
+        run: |
+          pnpm install --frozen-lockfile
+          if ($LASTEXITCODE -ne 0) { throw 'Frozen installation failed.' }
+      - name: Build supported CLI before registering inspection fixtures
+        working-directory: source
+        env:
+          EXPECTED_HEAD: ${{ matrix.phase == 'baseline' && 'e12719836f8e1f8b835496928d95ad847e453333' || env.FIXED_HEAD }}
+        run: |
+          if ((git rev-parse HEAD).Trim() -cne $env:EXPECTED_HEAD) { throw 'Checkout does not match the exact proof input.' }
+          pnpm --silent openclaw --version
+          if ($LASTEXITCODE -ne 0) { throw 'Canonical CLI preparation failed.' }
+          if (git status --porcelain --untracked-files=no) { throw 'Tracked source became dirty before native proof.' }
+      - name: Cache the real public Git update target without changing the source head
+        working-directory: source
+        run: |
+          git remote set-url origin https://github.com/openclaw/openclaw.git
+          if ($LASTEXITCODE -ne 0) { throw 'Could not configure the public update source.' }
+          git fetch --no-tags --depth=1 origin +refs/heads/main:refs/remotes/origin/main
+          if ($LASTEXITCODE -ne 0) { throw 'Could not cache the actual public update target.' }
+          git rev-parse refs/remotes/origin/main | Set-Content -LiteralPath "$env:GITHUB_WORKSPACE/artifacts/update-target.txt"
+      - name: Exercise actual status and dry-run update
+        run: |
+          & ./controller/proof/windows-launcher-proof.ps1 -Mode proof -Phase '${{ matrix.phase }}' -SourceRoot "$env:GITHUB_WORKSPACE/source" -OutputDir "$env:GITHUB_WORKSPACE/artifacts"
+      - name: Preserve sanitized native evidence including failures
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-launcher-${{ matrix.phase }}
+          path: artifacts
+          if-no-files-found: error
+          retention-days: 14
