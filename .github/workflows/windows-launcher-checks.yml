@@ -15,9 +15,9 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: 0e01869e1eb780254ca6d142e650e573b7cfbda6
+          ref: e3068ea63c87ff1535c247fe7b610ae925448361
           persist-credentials: false
-          fetch-depth: 2
+          fetch-depth: 3
       - uses: ./.github/actions/setup-node-env
         with:
           node-version: "24.x"
@@ -25,16 +25,48 @@ jobs:
           cache-mode: "off"
           semantic-checks: "true"
       - uses: ./.github/actions/setup-ripgrep
-      - name: Candidate owner and affected consumers
+      - name: Original owner with corrected candidate regressions
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/launcher-checks"
-          test "$(git rev-parse HEAD)" = 0e01869e1eb780254ca6d142e650e573b7cfbda6
-          # Original artifact 39462464084: same test blob, 46 pass / five diagnostic regressions fail.
-          # Its controller failed only because Vitest's folded failure text omitted the expected detail.
-          test "$(git hash-object src/daemon/service-command-read.test.ts)" = b41b6afac6b69cb99dd4391bd67454379127c8d8
-          git diff HEAD --exit-code
+          test "$(git rev-parse HEAD)" = e3068ea63c87ff1535c247fe7b610ae925448361
+          test "$(git hash-object src/daemon/service-command-read.test.ts)" = a4687c7745ddc695368f933c0ba844736048a671
           git hash-object src/daemon/service-command-read.test.ts > "$RUNNER_TEMP/launcher-checks/test-blob.txt"
+          git checkout e12719836f8e1f8b835496928d95ad847e453333 -- src/daemon/schtasks-layout.ts src/daemon/service-inspection-error.ts
+          git hash-object src/daemon/schtasks-layout.ts src/daemon/service-inspection-error.ts > "$RUNNER_TEMP/launcher-checks/baseline-inputs.txt"
+          set +e
+          pnpm test src/daemon/service-command-read.test.ts --maxWorkers=1 --reporter=json --outputFile="$RUNNER_TEMP/launcher-checks/baseline-tests.json" > "$RUNNER_TEMP/launcher-checks/baseline-tests.log" 2>&1
+          result=$?
+          set -e
+          cat "$RUNNER_TEMP/launcher-checks/baseline-tests.log"
+          node --input-type=module - "$RUNNER_TEMP/launcher-checks/baseline-tests.json" "$result" <<'JS'
+          import fs from 'node:fs';
+          import assert from 'node:assert/strict';
+          const [file, exit] = process.argv.slice(2);
+          const r = JSON.parse(fs.readFileSync(file, 'utf8'));
+          assert.notEqual(Number(exit), 0);
+          assert.equal(r.numTotalTests, 51);
+          assert.equal(r.numPassedTests, 46);
+          assert.equal(r.numFailedTests, 5);
+          assert.equal(r.numPendingTests, 0);
+          assert.equal(r.numTodoTests, 0);
+          assert.equal(r.testResults.length, 1);
+          const suite = r.testResults[0];
+          assert.ok(suite.name.endsWith('/daemon/service-command-read.test.ts'));
+          assert.equal(suite.status, 'failed');
+          const failures = suite.assertionResults.filter(t => t.status === 'failed');
+          assert.equal(failures.length, 5);
+          assert.equal(suite.assertionResults.length, r.numTotalTests);
+          assert.ok(suite.assertionResults.every(t => t.status === 'passed' || t.status === 'failed'));
+          assert.ok(failures.every(t => t.fullName.includes('retains safe launcher failure details in service status:')));
+          assert.ok(failures.every(t => t.failureMessages.join('\n').includes('Scheduled Task launcher line')));
+          JS
+      - name: Candidate owner and affected consumers
+        run: |
+          set -euo pipefail
+          git checkout e3068ea63c87ff1535c247fe7b610ae925448361 -- src/daemon/schtasks-layout.ts src/daemon/service-inspection-error.ts
+          test "$(git hash-object src/daemon/service-command-read.test.ts)" = "$(cat "$RUNNER_TEMP/launcher-checks/test-blob.txt")"
+          git diff HEAD --exit-code
           git hash-object src/daemon/schtasks-layout.ts src/daemon/service-inspection-error.ts > "$RUNNER_TEMP/launcher-checks/fixed-inputs.txt"
           pnpm test src/daemon/service-command-read.test.ts src/daemon/schtasks.test.ts src/cli/update-cli/update-command-service-plan.test.ts --maxWorkers=1 --reporter=json --outputFile="$RUNNER_TEMP/launcher-checks/fixed-tests.json" 2>&1 | tee "$RUNNER_TEMP/launcher-checks/fixed-tests.log"
           node --input-type=module - "$RUNNER_TEMP/launcher-checks" <<'JS'
@@ -43,6 +75,7 @@ jobs:
           import assert from 'node:assert/strict';
           const dir = process.argv[2];
           const r = JSON.parse(fs.readFileSync(path.join(dir, 'fixed-tests.json'), 'utf8'));
+          const base = JSON.parse(fs.readFileSync(path.join(dir, 'baseline-tests.json'), 'utf8'));
           assert.equal(r.success, true);
           assert.equal(r.numFailedTests, 0);
           assert.equal(r.numPendingTests, 0);
@@ -58,6 +91,7 @@ jobs:
           }
           const owner = r.testResults.find(s => s.name.endsWith('/service-command-read.test.ts'));
           assert.equal(owner.assertionResults.length, 51);
+          assert.deepEqual(owner.assertionResults.map(t => t.fullName), base.testResults[0].assertionResults.map(t => t.fullName));
           assert.equal(owner.assertionResults.filter(t => t.fullName.includes('retains safe launcher failure details in service status:')).length, 5);
           assert.equal(owner.assertionResults.filter(t => t.fullName.endsWith('keeps Startup launcher parse failures generic')).length, 1);
           JS
