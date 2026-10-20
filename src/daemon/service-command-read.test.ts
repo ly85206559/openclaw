@@ -24,6 +24,7 @@ import * as ownership from "./launchd-system.js";
 import {
   buildTaskScript,
   readScheduledTaskCommand,
+  readStartupEntryCommand,
   resolveStartupEntryPaths,
   resolveTaskScriptPath,
 } from "./schtasks-layout.js";
@@ -189,7 +190,7 @@ describe("native service command inspection", () => {
     );
   });
 
-  describe("Windows aggregate Scheduler timeout transport", () => {
+  describe("Windows Scheduler inspection transport", () => {
     async function windowsFixture(present: boolean, onRead: () => void) {
       mockProcessPlatform("win32");
       const windowsEnv = {
@@ -220,7 +221,7 @@ describe("native service command inspection", () => {
           requireLoadedCommand: true,
           ...(timeoutMs === undefined ? {} : { timeoutMs }),
         });
-      return { scriptPath, run, observe };
+      return { scriptPath, run, observe, windowsEnv, backingScriptPath };
     }
     const registeredTask = (scriptPath: string, state: number) => ({
       status: 0,
@@ -232,6 +233,85 @@ describe("native service command inspection", () => {
       }),
       stderr: "",
     });
+    it.each([
+      {
+        lines: ['set "TOKEN=%launcher-secret-canary%"', "node gateway.js"],
+        reason: "invalid environment assignment",
+        line: 4,
+      },
+      {
+        lines: ["node gateway.js %launcher-secret-canary%"],
+        reason: "dynamic command",
+        line: 4,
+      },
+      {
+        lines: ["node gateway.js", "echo launcher-secret-canary"],
+        reason: "multiple commands",
+        line: 5,
+      },
+      {
+        lines: ["node gateway.js & echo launcher-secret-canary"],
+        reason: "ambiguous command",
+        line: 4,
+      },
+      {
+        lines: ["cd /d C:\\launcher-secret-canary extra", "node gateway.js"],
+        reason: "ambiguous working directory",
+        line: 4,
+      },
+    ])("retains safe launcher failure details in service status: $reason", async (fixture) => {
+      const { scriptPath, windowsEnv, backingScriptPath } = await windowsFixture(true, () => {});
+      const content = ["@echo off", "", "rem launcher-secret-canary", ...fixture.lines].join("\r\n");
+      await writeFile(backingScriptPath, content);
+      native.scheduler.mockReturnValue(registeredTask(scriptPath, 3));
+
+      const state = await readGatewayServiceState(resolveGatewayService(), { env: windowsEnv });
+
+      expect(state).toMatchObject({
+        command: null,
+        installed: true,
+        loadState: { status: "loaded" },
+        running: false,
+        runtime: {
+          status: "unknown",
+          inspectionFailure: {
+            detail: expect.stringContaining(
+              `Scheduled Task launcher line ${fixture.line}: ${fixture.reason}.`,
+            ),
+          },
+        },
+      });
+      expect(state.runtime?.inspectionFailure?.detail).toContain("openclaw gateway status --deep");
+      expect(inspect(state.runtime)).not.toContain("launcher-secret-canary");
+      expect(await fs.readFile(backingScriptPath, "utf8")).toBe(content);
+    });
+
+    it("keeps Startup launcher parse failures generic", async () => {
+      const startupPath = "C:\\openclaw-test\\startup.vbs";
+      const scriptPath = "C:\\openclaw-test\\gateway.cmd";
+      const script = '@echo off\r\nset "TOKEN=%launcher-secret-canary%"\r\nnode gateway.js';
+      const inspectedContents: string[] = [];
+      const readFile = fs.readFile;
+      vi.spyOn(fs, "readFile").mockImplementation(async (...args) => {
+        if (args[0] === startupPath) {
+          return Buffer.from(
+            'WScript.Quit CreateObject("WScript.Shell").Run("""C:\\openclaw-test\\gateway.cmd""", 0, True)',
+          );
+        }
+        if (args[0] === scriptPath) {
+          return Buffer.from(script);
+        }
+        return readFile(args[0], args[1]);
+      });
+
+      await expect(
+        readStartupEntryCommand(startupPath, {
+          onLauncherContent: (content) => inspectedContents.push(content),
+        }),
+      ).rejects.toThrow("Startup service command could not be inspected.");
+      expect(inspectedContents).toContain(script);
+    });
+
     it.each([
       ["parallel", "absent", false, false],
       ["parallel", "running", true, false],

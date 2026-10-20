@@ -22,7 +22,10 @@ import {
   ScheduledTaskInspectionError,
 } from "./schtasks-state-probe.js";
 import { resolveWindowsServiceCommandProfile } from "./service-env-merge.js";
-import { ServiceInspectionError } from "./service-inspection-error.js";
+import {
+  ServiceInspectionError,
+  type ServiceInspectionDiagnostic,
+} from "./service-inspection-error.js";
 import type {
   GatewayServiceCommandConfig,
   GatewayServiceCommandSnapshot,
@@ -269,6 +272,13 @@ async function readWindowsTaskCommand(
   const remainingTimeout = () =>
     deadline === undefined ? undefined : deadline - performance.now();
   const assertInspectionDeadline = () => assertTaskInspectionDeadline(deadline);
+  const launcherInspectionError = (
+    reason: Extract<ServiceInspectionDiagnostic, { kind: "launcher" }>["reason"],
+    line: number,
+  ) =>
+    target.kind === "scheduled-task"
+      ? new ServiceInspectionError("windows-task-inspection-failed", { kind: "launcher", reason, line })
+      : new Error("Startup service command could not be inspected.");
   try {
     assertInspectionDeadline();
     const taskName = resolveTaskName(env);
@@ -399,7 +409,7 @@ async function readWindowsTaskCommand(
     let workingDirectory = "";
     let commandLine = "";
     const environment: Record<string, string> = {};
-    for (const rawLine of content.split(/\r?\n/)) {
+    for (const [lineIndex, rawLine] of content.split(/\r?\n/).entries()) {
       const line = rawLine.trim();
       if (!line) {
         continue;
@@ -410,7 +420,7 @@ async function readWindowsTaskCommand(
       }
       if (commandLine) {
         if (requireEffective) {
-          throw new Error("Multiple Scheduled Task launcher commands");
+          throw launcherInspectionError("multiple-commands", lineIndex + 1);
         }
         break;
       }
@@ -423,7 +433,7 @@ async function readWindowsTaskCommand(
       if (lower.startsWith("set ")) {
         const assignment = parseCmdSetAssignment(rawLine.trimStart().slice(4), requireEffective);
         if (!assignment && requireEffective) {
-          throw new Error("Invalid Scheduled Task environment assignment");
+          throw launcherInspectionError("invalid-environment-assignment", lineIndex + 1);
         }
         if (assignment) {
           environment[assignment.key] = assignment.value;
@@ -433,12 +443,12 @@ async function readWindowsTaskCommand(
       // Redirection targets are shell syntax, not executable argv or cwd.
       const parsedCommand = lower.startsWith("cd /d ") ? line : stripTrailingCmdRedirections(line);
       if (parsedCommand === null && requireEffective) {
-        throw new Error("Ambiguous Scheduled Task launcher command");
+        throw launcherInspectionError("ambiguous-command", lineIndex + 1);
       }
       const effectiveLine = parsedCommand ?? line;
       // Managed literals are encoded; unresolved CMD expansion cannot prove argv or cwd.
       if (requireEffective && /[%!]/.test(effectiveLine.replace(/%%|\^!/g, ""))) {
-        throw new Error("Dynamic Scheduled Task launcher command");
+        throw launcherInspectionError("dynamic-command", lineIndex + 1);
       }
       if (lower.startsWith("cd /d ")) {
         const cdArguments = parseCmdScriptCommandLine(line);
@@ -446,7 +456,7 @@ async function readWindowsTaskCommand(
           requireEffective &&
           (stripTrailingCmdRedirections(line) !== line || cdArguments.length !== 3)
         ) {
-          throw new Error("Ambiguous Scheduled Task working directory");
+          throw launcherInspectionError("ambiguous-working-directory", lineIndex + 1);
         }
         workingDirectory = cdArguments[2] ?? "";
         continue;

@@ -272,6 +272,8 @@ Gateway status and Doctor read the Scheduled Task's numeric current state, indep
 
 Strict maintenance inspection follows the task's registered CMD or VBS launcher, or a directly registered executable with literal arguments, and rechecks its captured definition before using the result. Runtime inspection uses that registered command rather than a default launcher. Direct executable inspection does not grant ownership to rewrite the executable or its task definition. Automatic update service management still reports these custom actions as unavailable and leaves them untouched because it cannot restore a managed launcher; environment expansion and ambiguous argument quoting remain uninspectable. Deep discovery identifies OpenClaw and legacy helpers from executable or launcher evidence; an unrelated task's display name alone does not identify a service. Standard and selected task names suppress extra-service findings only when the registered action is a modern Gateway; legacy and Node actions remain visible. Doctor reports incomplete inspection separately from services eligible for existing cleanup.
 
+When Scheduled Task inspection rejects a dynamic or ambiguous command, invalid environment assignment, ambiguous working directory, or multiple commands, status and update warnings report a fixed reason and physical line number without exposing launcher contents. The command remains uninspectable; these diagnostics do not authorize service changes.
+
 `openclaw gateway status --deep` and `openclaw doctor --deep` report sibling
 profiles from the current account's Startup folder. If its Scheduled Task is
 absent, the selected modern Gateway fallback is omitted from the extra-service list. Each

@@ -31,10 +31,19 @@ const EXTERNAL_SERVICE_RECOVERY =
 
 export type ServiceInspectionReason = keyof typeof SERVICE_INSPECTION_MESSAGES;
 
+const TASK_LAUNCHER_PARSE_REASONS = {
+  "multiple-commands": "multiple commands",
+  "invalid-environment-assignment": "invalid environment assignment",
+  "ambiguous-command": "ambiguous command",
+  "dynamic-command": "dynamic command",
+  "ambiguous-working-directory": "ambiguous working directory",
+} as const;
+
 export type ServiceInspectionDiagnostic =
   | { kind: "timeout"; timeoutMs: number }
   | { kind: "spawn"; errno?: number }
   | { kind: "invalid-response" }
+  | { kind: "launcher"; reason: keyof typeof TASK_LAUNCHER_PARSE_REASONS; line: number }
   | { kind: "native"; exitCode: number | null; hresult?: number };
 
 export function isServiceInspectionReason(value: string): value is ServiceInspectionReason {
@@ -63,6 +72,8 @@ function formatServiceInspectionDiagnostic(
       return `Task Scheduler check could not start${Number.isSafeInteger(diagnostic.errno) ? ` (errno ${diagnostic.errno})` : ""}.`;
     case "invalid-response":
       return "Task Scheduler check returned an invalid response.";
+    case "launcher":
+      return `Scheduled Task launcher line ${diagnostic.line}: ${TASK_LAUNCHER_PARSE_REASONS[diagnostic.reason]}. Use a single command with literal arguments, environment values, and working directory.`;
     case "native": {
       const facts: string[] = [];
       if (Number.isSafeInteger(diagnostic.exitCode)) {
