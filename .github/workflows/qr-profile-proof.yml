@@ -8,12 +8,12 @@ permissions:
   contents: read
 
 jobs:
-  baseline:
-    name: Baseline diagnosis (product failure expected)
+  fixed:
+    name: Exact-head QR proof and focused checks
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 35
     env:
-      SOURCE_HEAD: 829ccbc8376471642ce22e90c62db0061a7a2cff
+      SOURCE_HEAD: f7d9fd82f8ef590b0045deb0142fa9b6b96ca7d1
       COREPACK_ENABLE_DOWNLOAD_PROMPT: '0'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -45,15 +45,28 @@ jobs:
           pnpm install --frozen-lockfile
           pnpm --silent openclaw --version
           test -z "$(git status --porcelain --untracked-files=no)"
-      - name: Record baseline product failure separately from diagnostic execution
+      - name: Prove default, named-profile, and legacy-alias CLI hints
         env:
-          PROOF_PHASE: baseline
+          PROOF_PHASE: fixed
         run: node controller/proof/qr-profile-proof.mjs source artifacts
+      - name: Focused tests, types, typed lint, and format parity
+        working-directory: source
+        run: |
+          set -euo pipefail
+          pnpm docs:list > ../artifacts/docs-list.txt
+          bash scripts/ci-collect-checks.sh \
+            'pnpm test src/cli/qr-cli.test.ts src/cli/profile.test.ts src/cli/run-main.profile-env.test.ts --maxWorkers=1' \
+            'pnpm tsgo:core' \
+            'node scripts/run-tsgo.mjs -p test/tsconfig/tsconfig.core.test.config-cli.json --incremental' \
+            'node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.core.json src/cli/qr-cli.ts src/cli/qr-cli.test.ts' \
+            'pnpm format:check src/cli/qr-cli.ts src/cli/qr-cli.test.ts docs/cli/qr.md' \
+            'git diff --check && test -z "$(git status --porcelain --untracked-files=no)"' \
+            2>&1 | tee ../artifacts/focused-checks.log
       - name: Preserve sanitized proof, including failures
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: qr-profile-baseline
+          name: qr-profile-fixed
           path: artifacts
           if-no-files-found: error
           retention-days: 14

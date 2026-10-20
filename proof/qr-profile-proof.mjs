@@ -21,15 +21,19 @@ try {
   const sourceHead = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: source, encoding: 'utf8' });
   assert.equal(sourceHead.status, 0);
   assert.equal(sourceHead.stdout.trim(), process.env.SOURCE_HEAD);
-  for (const profile of ['', 'proof']) {
-    const label = profile || 'default';
+  const cases = [
+    { profile: '', label: 'default', command: ['qr'] },
+    { profile: 'proof', label: 'proof', command: ['qr'] },
+    ...(phase === 'fixed' ? [{ profile: 'proof', label: 'proof-legacy', command: ['clawbot', 'qr'] }] : []),
+  ];
+  for (const { profile, label, command } of cases) {
     const home = join(scratch, label);
     const state = join(home, profile ? `.openclaw-${profile}` : '.openclaw');
     mkdirSync(state, { recursive: true });
     const configPath = join(state, 'openclaw.json');
     writeFileSync(configPath, config);
     const args = ['--silent', 'openclaw', ...(profile ? ['--profile', profile] : []),
-      'qr', '--no-ascii', '--url', 'ws://127.0.0.1:18789'];
+      ...command, '--no-ascii', '--url', 'ws://127.0.0.1:18789'];
     const result = spawnSync('pnpm', args, {
       cwd: source,
       encoding: 'utf8',
@@ -59,7 +63,7 @@ try {
       assert.deepEqual(found, [true, true], `${label}: approval hints lost their invocation context`);
     }
     assert.equal(readFileSync(configPath, 'utf8'), config, 'QR modified authored configuration');
-    receipt.cases.push({ profile: label, cliExit: result.status, setupGenerated: true,
+    receipt.cases.push({ profile: profile || 'default', command, label, cliExit: result.status, setupGenerated: true,
       expectedHints: hints, hintsPresent: found, configUnchanged: true,
       expectedProductVerdict: phase === 'baseline' && profile ? 'fail' : 'pass',
       productVerdict: found.every(Boolean) ? 'pass' : 'fail' });
