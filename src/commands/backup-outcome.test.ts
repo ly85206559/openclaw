@@ -68,6 +68,50 @@ async function receive(params: Record<string, unknown>, authority = true) {
 }
 
 describe("backup outcome ownership", () => {
+  it("rejects non-decimal byte counts without appending an outcome", async () => {
+    await fixture();
+    await backupRecordCommand(createTestRuntime(), {
+      status: "ok",
+      target: "existing",
+      bytes: 42,
+    });
+    const before = await readBackupRuns(process.env);
+    expect(before).toMatchObject([{ target: "existing", bytes: 42 }]);
+    const runtime = createTestRuntime();
+    for (const bytes of ["0x10", "0b101", "0o17", "1e3"]) {
+      await expect(
+        backupRecordCommand(runtime, { status: "ok", target: "invalid", bytes, json: true }),
+      ).rejects.toThrow("--bytes must be a nonnegative integer.");
+    }
+    expect(await readBackupRuns(process.env)).toEqual(before);
+    expect(runtime.log).not.toHaveBeenCalled();
+    expect(runtime.error).not.toHaveBeenCalled();
+  });
+
+  it("records decimal byte counts and preserves omitted bytes", async () => {
+    await fixture();
+    const runtime = createTestRuntime();
+    const cases = [
+      { target: "omitted", bytes: undefined, expected: undefined },
+      { target: "zero", bytes: "0", expected: 0 },
+      { target: "decimal", bytes: "42", expected: 42 },
+      { target: "signed", bytes: "+5", expected: 5 },
+      { target: "leading-zero", bytes: "010", expected: 10 },
+      { target: "numeric", bytes: 42, expected: 42 },
+    ];
+    for (const { target, bytes } of cases) {
+      await backupRecordCommand(runtime, { status: "ok", target, bytes });
+    }
+    const runs = await readBackupRuns(process.env);
+    expect(runs).toHaveLength(cases.length);
+    for (const { target, expected } of cases) {
+      const run = runs.find((entry) => entry.target === target);
+      expect(run).toMatchObject({ status: "ok" });
+      expect(run?.bytes).toBe(expected);
+    }
+    expect(runtime.error).not.toHaveBeenCalled();
+  });
+
   it("records offline under exclusive custody and leaves an absent database absent", async () => {
     const { databasePath } = await fixture(false);
     const runtime = createTestRuntime();
