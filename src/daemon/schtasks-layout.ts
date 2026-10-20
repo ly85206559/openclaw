@@ -277,7 +277,11 @@ async function readWindowsTaskCommand(
     line: number,
   ) =>
     target.kind === "scheduled-task"
-      ? new ServiceInspectionError("windows-task-inspection-failed", { kind: "launcher", reason, line })
+      ? new ServiceInspectionError("windows-task-inspection-failed", {
+          kind: "launcher",
+          reason,
+          line,
+        })
       : new Error("Startup service command could not be inspected.");
   try {
     assertInspectionDeadline();

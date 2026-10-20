@@ -261,7 +261,9 @@ describe("native service command inspection", () => {
       },
     ])("retains safe launcher failure details in service status: $reason", async (fixture) => {
       const { scriptPath, windowsEnv, backingScriptPath } = await windowsFixture(true, () => {});
-      const content = ["@echo off", "", "rem launcher-secret-canary", ...fixture.lines].join("\r\n");
+      const content = ["@echo off", "", "rem launcher-secret-canary", ...fixture.lines].join(
+        "\r\n",
+      );
       await writeFile(backingScriptPath, content);
       native.scheduler.mockReturnValue(registeredTask(scriptPath, 3));
 

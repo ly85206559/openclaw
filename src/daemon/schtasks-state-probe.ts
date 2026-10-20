@@ -31,7 +31,8 @@ type ScheduledTaskStateProbe =
       status: "unknown";
       detail: string;
       timeoutMs?: number;
-      diagnostic: ServiceInspectionDiagnostic;
+      // Native probes do not parse launcher contents.
+      diagnostic: Exclude<ServiceInspectionDiagnostic, { kind: "launcher" }>;
     };
 
 export class ScheduledTaskInspectionError extends ServiceInspectionError {
