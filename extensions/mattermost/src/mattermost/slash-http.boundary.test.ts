@@ -34,7 +34,7 @@ function createRuntime(dispatch: ReturnType<typeof vi.fn>) {
       pairing: {
         readAllowFromStore: async () => [],
         upsertPairingRequest: async () => ({ code: "unused" }),
-        buildPairingReply: () => "unused",
+        buildPairingReply: ({ code }: { code: string }) => `Pairing code: ${code}`,
       },
       routing: {
         resolveAgentRoute: () => ({
@@ -141,7 +141,10 @@ type Boundary = {
   holdChannel: (gate: Promise<void>) => void;
 };
 
-async function withBoundary(runBoundary: (boundary: Boundary) => Promise<void>) {
+async function withBoundary(
+  runBoundary: (boundary: Boundary) => Promise<void>,
+  options: { channelType?: "O" | "D" } = {},
+) {
   const registerHttpRoute =
     vi.fn<(route: { path: string; auth?: string; handler: SlashRouteHandler }) => void>();
   const dispatch = vi.fn(async (_params: unknown) => undefined);
@@ -207,7 +210,7 @@ async function withBoundary(runBoundary: (boundary: Boundary) => Promise<void>) 
             id: "channel-1",
             name: "town-square",
             display_name: "Town Square",
-            type: "O",
+            type: options.channelType ?? "O",
             team_id: "team-1",
           }),
         ),
@@ -361,6 +364,30 @@ async function drainCredentialPool(held: HeldRequest[], timeout = 1_000) {
 describe("Mattermost slash HTTP boundary", () => {
   afterEach(() => {
     deactivateSlashCommands();
+  });
+
+  it.each([
+    { outcome: "declined request", code: "", text: "Unauthorized." },
+    { outcome: "existing request", code: "ABCD2345", text: "Pairing code: ABCD2345" },
+  ])("answers a pairing $outcome without dispatching the command", async ({ code, text }) => {
+    await withBoundary(
+      async (boundary) => {
+        boundary.account.config.dmPolicy = "pairing";
+        // Store capacity and existing-request reuse both return created=false.
+        boundary.runtime.channel.pairing.upsertPairingRequest = async () => ({
+          code,
+          created: false,
+        });
+
+        expect(await boundary.post()).toEqual({
+          statusCode: 200,
+          body: JSON.stringify({ response_type: "ephemeral", text }),
+        });
+        expect(boundary.dispatch).not.toHaveBeenCalled();
+        expect(boundary.errors).toEqual([]);
+      },
+      { channelType: "D" },
+    );
   });
 
   it("reserves authenticated capacity and bounds each pre-authentication pool at eight", async () => {
