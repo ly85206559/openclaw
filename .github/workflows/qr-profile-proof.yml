@@ -1,0 +1,59 @@
+name: QR profile hint proof
+
+on:
+  push:
+    branches: [codex/proof-qr-profile-20261021]
+
+permissions:
+  contents: read
+
+jobs:
+  baseline:
+    name: Baseline diagnosis (product failure expected)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      SOURCE_HEAD: 829ccbc8376471642ce22e90c62db0061a7a2cff
+      COREPACK_ENABLE_DOWNLOAD_PROMPT: '0'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: controller
+          persist-credentials: false
+          fetch-depth: 1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.SOURCE_HEAD }}
+          path: source
+          persist-credentials: false
+          fetch-depth: 1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.21.0
+      - uses: ./source/.github/actions/setup-pnpm-store-cache
+        with:
+          package-manager-file: source/package.json
+          lockfile-path: source/pnpm-lock.yaml
+          node-version: 24.21.0
+          cache-mode: off
+      - name: Install exact source and prepare supported CLI
+        working-directory: source
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_HEAD"
+          pnpm install --frozen-lockfile
+          pnpm --silent openclaw --version
+          test -z "$(git status --porcelain --untracked-files=no)"
+      - name: Record baseline product failure separately from diagnostic execution
+        env:
+          PROOF_PHASE: baseline
+        run: node controller/proof/qr-profile-proof.mjs source artifacts
+      - name: Preserve sanitized proof, including failures
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: qr-profile-baseline
+          path: artifacts
+          if-no-files-found: error
+          retention-days: 14
