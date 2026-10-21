@@ -1,6 +1,10 @@
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { normalizeOptionalString, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  filterStringEntries,
+  normalizeOptionalString,
+  uniqueStrings,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { Type } from "typebox";
 import type { OpenClawPluginApi } from "../runtime-api.js";
 import { assertFeishuApiSuccess } from "./api-response.js";
@@ -24,7 +28,7 @@ import {
 import { cleanBlocksForDescendant, patchTable } from "./docx-table-ops.js";
 import type { FeishuDocxBlock, FeishuDocxBlockChild } from "./docx-types.js";
 import { resolveDocToolLocalRoots, resolveDocxUploadInput } from "./docx-upload-input.js";
-import { createFeishuToolClient, resolveFeishuToolAccount } from "./tool-account.js";
+import { resolveFeishuToolAccount } from "./tool-account.js";
 import { registerFeishuTool } from "./tool-registration.js";
 import { feishuExternalToolResult as json } from "./tool-result.js";
 
@@ -66,13 +70,7 @@ async function convertMarkdown(client: Lark.Client, markdown: string) {
 }
 
 function normalizeChildIds(children: unknown): string[] {
-  if (Array.isArray(children)) {
-    return children.filter((child): child is string => typeof child === "string");
-  }
-  if (typeof children === "string") {
-    return [children];
-  }
-  return [];
+  return typeof children === "string" ? [children] : filterStringEntries(children);
 }
 
 type DocxChildrenCreatePayload = NonNullable<
@@ -441,7 +439,6 @@ async function uploadImageBlock(
   }: Extract<FeishuDocParams, { action: "upload_image" }>,
   upload: DocxUpload,
 ) {
-  // Create an empty image block (block_type 27).
   // Per Feishu FAQ: image token cannot be set at block creation time.
   const insertRes = await client.docx.documentBlockChildren.create({
     path: { document_id: docToken, block_id: parentBlockId ?? docToken },
@@ -829,7 +826,6 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
           case "get_block":
             return json(await getBlock(client, p.doc_token, p.block_id));
           case "update_block": {
-            await getBlock(client, p.doc_token, p.block_id);
             const res = await client.docx.documentBlock.patch({
               path: { document_id: p.doc_token, block_id: p.block_id },
               data: {
@@ -892,13 +888,9 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
     description:
       "List current app permissions (scopes). Use to debug permission issues or check available capabilities.",
     parameters: Type.Object({}),
-    createExecute(ctx, cfg) {
+    createExecute(_ctx, _cfg, createClient) {
       return async (_params) => {
-        const client = createFeishuToolClient({
-          cfg,
-          defaultAccountId: ctx.agentAccountId,
-          requiredTool: { family: "scopes", label: "App Scopes" },
-        });
+        const client = createClient(undefined, "App Scopes");
         const res = await client.application.scope.list({});
         assertFeishuApiSuccess(res);
         const scopes = res.data?.scopes ?? [];

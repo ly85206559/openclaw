@@ -1,3 +1,4 @@
+import { channel } from "node:diagnostics_channel";
 import { EventEmitter, once } from "node:events";
 import { MessageChannel, type Worker } from "node:worker_threads";
 import { expect, it, vi } from "vitest";
@@ -34,6 +35,7 @@ vi.mock("node:worker_threads", async (importOriginal) => ({
 }));
 // mock-isolation: Drive exact GC windows without starting a native observer.
 vi.mock("../infra/gc-observer.js", () => ({
+  getOldGenerationAfterGcBytes: () => undefined,
   observeGcSamples: (observe: (samples: GcSample[]) => void) => {
     fixture.observe = observe;
     return () => {};
@@ -51,15 +53,20 @@ vi.mock("../logging/subsystem.js", () => ({
 }));
 
 it("warns through the memory port with parked-cell attribution, bounded cadence, and idle reset", async () => {
-  const capture = createDeferred<{
-    status: "complete";
-    result: { heap: string; cpu: string };
-  }>();
+  const profiles = { heap: "sanitized-heap", cpu: "sanitized-cpu" };
+  const profileFiles = ["synthetic.heapprofile.json", "synthetic.cpuprofile.json"];
+  const capture = createDeferred<{ status: "complete"; result: typeof profiles }>();
   fixture.capture.mockReturnValue(capture.promise);
-  fixture.write.mockResolvedValue(["synthetic.heapprofile.json", "synthetic.cpuprofile.json"]);
+  fixture.write.mockResolvedValue(profileFiles);
   const now = vi.spyOn(performance, "now").mockReturnValue(0);
-  const previousUnhandled = process.listeners("unhandledRejection");
-  const previousHandled = process.listeners("rejectionHandled");
+  const retirements: unknown[] = [];
+  const onRetirement = (workerId: unknown) => retirements.push(workerId);
+  const storm = channel("openclaw.code-mode.gc-storm");
+  storm.subscribe(onRetirement);
+  const rejectionEvents = ["unhandledRejection", "rejectionHandled"] as const;
+  const listenerSnapshots = rejectionEvents.map(
+    (event) => [event, process.listeners(event)] as const,
+  );
   const worker = Object.assign(new EventEmitter(), {
     threadId: 123,
     cpuUsage: async () => ({ user: 0, system: 0 }),
@@ -73,10 +80,11 @@ it("warns through the memory port with parked-cell attribution, bounded cadence,
   const initial = once(message.port, "message");
   receiveWorkerMemoryPort(worker, message);
   await initial;
-  const previousUnmeasured =
+  const memoryMessages = () =>
     getWorkerMessageMetrics().find(
       (row) => row.kind === "memory" && row.direction === "from_worker",
     )?.unmeasuredMessages ?? 0;
+  const previousUnmeasured = memoryMessages();
   const config = {
     timeoutMs: 5_000,
     memoryLimitBytes: 64 * 1024 * 1024,
@@ -122,6 +130,7 @@ it("warns through the memory port with parked-cell attribution, bounded cadence,
     await collect(9_999, 100);
     expect(fixture.warn).not.toHaveBeenCalled();
     await collect(10_000, 1);
+    expect(retirements).toEqual([]);
     await vi.waitFor(() => expect(fixture.warn).toHaveBeenCalledTimes(1));
     expect(fixture.warn.mock.calls[0]).toEqual([
       "Code Mode worker GC storm",
@@ -147,6 +156,7 @@ it("warns through the memory port with parked-cell attribution, bounded cadence,
     expect(JSON.stringify(fixture.warn.mock.calls)).not.toContain("private-session");
     await collect(20_000, 1000);
     expect(fixture.warn).toHaveBeenCalledTimes(1);
+    expect(retirements).toEqual([gcAttribution.workerId]);
 
     if (parked.status !== "waiting") {
       throw new Error("expected parked cell");
@@ -172,31 +182,25 @@ it("warns through the memory port with parked-cell attribution, bounded cadence,
     await collect(130_000, 1000, "incremental");
     expect(fixture.warn).toHaveBeenCalledTimes(2);
     await collect(140_000, 100);
+    expect(retirements).toEqual([gcAttribution.workerId, gcAttribution.workerId]);
     expect(fixture.warn).toHaveBeenCalledTimes(2);
     expect(fixture.capture).toHaveBeenCalledTimes(1);
-    expect(getWorkerMessageMetrics()).toContainEqual(
-      expect.objectContaining({
-        kind: "memory",
-        direction: "from_worker",
-        unmeasuredMessages: previousUnmeasured + 2,
-      }),
-    );
-    capture.resolve({
-      status: "complete",
-      result: { heap: "sanitized-heap", cpu: "sanitized-cpu" },
-    });
+    expect(memoryMessages()).toBe(previousUnmeasured + 4);
+    capture.resolve({ status: "complete", result: profiles });
     await vi.waitFor(() => expect(fixture.warn).toHaveBeenCalledTimes(3));
     expect(fixture.warn.mock.calls[2]![1]).toMatchObject({
       ...gcAttribution,
       captureStatus: "complete",
-      profileFiles: ["synthetic.heapprofile.json", "synthetic.cpuprofile.json"],
+      profileFiles,
     });
     expect(JSON.stringify(fixture.warn.mock.calls)).not.toContain("sanitized-heap");
-    expect(fixture.write).toHaveBeenCalledWith({ heap: "sanitized-heap", cpu: "sanitized-cpu" });
+    expect(fixture.write).toHaveBeenCalledWith(profiles);
     // The hourly admission resets even with no active cell; process tracing refuses capture.
     await collect(3_600_001, 0);
     fixture.tracing.mockReturnValue("v8");
     await collect(3_610_001, 101);
+    // A quiet window resets persistence; a later isolated storm cannot retire the worker.
+    expect(retirements).toHaveLength(2);
     await vi.waitFor(() => expect(fixture.warn).toHaveBeenCalledTimes(5));
     expect(fixture.warn.mock.calls[4]![1]).toMatchObject({
       activeCellCount: 0,
@@ -205,18 +209,16 @@ it("warns through the memory port with parked-cell attribution, bounded cadence,
     });
     expect(fixture.capture).toHaveBeenCalledTimes(1);
   } finally {
+    storm.unsubscribe(onRetirement);
     close();
     parent.port1.close();
     parent.port2.close();
     worker.emit("exit");
-    for (const listener of process.listeners("unhandledRejection")) {
-      if (!previousUnhandled.includes(listener)) {
-        process.removeListener("unhandledRejection", listener);
-      }
-    }
-    for (const listener of process.listeners("rejectionHandled")) {
-      if (!previousHandled.includes(listener)) {
-        process.removeListener("rejectionHandled", listener);
+    for (const [event, previous] of listenerSnapshots) {
+      for (const listener of process.listeners(event)) {
+        if (!previous.includes(listener)) {
+          process.removeListener(event, listener);
+        }
       }
     }
     now.mockRestore();

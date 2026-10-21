@@ -67,6 +67,9 @@ Advantages:
 }
 ```
 
+SearXNG uses `tools.web.search.maxResults` and `tools.web.search.timeoutSeconds`
+when a search omits `count` or `timeoutSeconds`. Per-search values override these defaults.
+
 Plugin-level settings for the SearXNG instance:
 
 ```json5

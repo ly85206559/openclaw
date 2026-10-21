@@ -53,7 +53,7 @@ export function imageTitle(image: ImageBlock): string {
   return image.alt?.trim() || image.fileName?.trim() || t("chat.imageLightbox.untitled");
 }
 
-export async function loadGalleryImage(
+async function loadGalleryImage(
   image: ImageBlock,
   opts: ImageRenderOptions | undefined,
   retryFailed: boolean,
@@ -118,18 +118,14 @@ export async function readImageOriginalBlob(
   if (!original) {
     throw new Error("Image download is unavailable");
   }
-  try {
-    const response = await fetchControlUiResource(original.src, {
-      credentials: "same-origin",
-      referrerPolicy: "no-referrer",
-    });
-    if (!response.ok) {
-      throw new Error("Image download failed");
-    }
-    return await response.blob();
-  } finally {
-    original.release?.();
+  const response = await fetchControlUiResource(original.src, {
+    credentials: "same-origin",
+    referrerPolicy: "no-referrer",
+  });
+  if (!response.ok) {
+    throw new Error("Image download failed");
   }
+  return await response.blob();
 }
 
 export function openMessageImage(

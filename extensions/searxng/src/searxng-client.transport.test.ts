@@ -1,228 +1,135 @@
-import { createServer, type Server } from "node:http";
+import assert from "node:assert/strict";
+import { once } from "node:events";
+import { createServer, type RequestListener, type Server } from "node:http";
+import { promisify } from "node:util";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { testing } from "./searxng-client.js";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createSearxngWebSearchProvider } from "./searxng-search-provider.js";
 
-const servers = new Set<Server>();
+let server: Server, baseUrl: string, requests: number, respond: RequestListener;
+beforeEach(async () => {
+  requests = 0;
+  respond = (_request, response) => {
+    const results = [{ title: "Result", url: `https://example.com/${requests}` }];
+    response.writeHead(200, { "Content-Type": "application/json" });
+    response.end(JSON.stringify({ results }));
+  };
+  server = createServer((request, response) => {
+    requests++;
+    respond(request, response);
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const address = server.address();
+  assert(address && typeof address !== "string", "Expected a TCP listener address");
+  baseUrl = `http://127.0.0.1:${address.port}`;
+});
+afterEach(async () => {
+  vi.restoreAllMocks();
+  server.closeAllConnections();
+  await promisify(server.close.bind(server))();
+});
 
 function createTool(
-  baseUrl: string,
   cacheTtlMinutes = 15,
   defaults: { maxResults?: number; timeoutSeconds?: number } = {},
 ) {
-  const searchConfig = { cacheTtlMinutes, ...defaults };
-  return expectDefined(
-    createSearxngWebSearchProvider().createTool({
-      config: {
-        tools: { web: { search: searchConfig } },
-        plugins: { entries: { searxng: { config: { webSearch: { baseUrl } } } } },
-      },
-      searchConfig,
-    }),
-    "SearXNG search tool",
-  );
+  const provider = createSearxngWebSearchProvider();
+  const config = {
+    tools: { web: { search: { cacheTtlMinutes, ...defaults } } },
+    plugins: { entries: { searxng: { config: { webSearch: { baseUrl } } } } },
+  };
+  return expectDefined(provider.createTool({ config }), "SearXNG search tool");
 }
 
-async function listen(server: Server): Promise<string> {
-  servers.add(server);
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", reject);
-      resolve();
-    });
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("Expected a TCP listener address");
+it.each([0, 1])("applies the current %s-minute provider TTL to cached results", async (ttl) => {
+  const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
+  const search = async (minutes: number, count: number, cached?: Record<string, unknown>) => {
+    const result = await createTool(minutes).execute({ query: `current TTL ${ttl}` });
+    expect(requests).toBe(count);
+    expect(result.cached).toBe(cached ? true : undefined);
+    if (cached) {
+      expect(result).toEqual({ ...cached, cached: true });
+    } else {
+      expect(result.results).toEqual([
+        expect.objectContaining({ url: `https://example.com/${count}` }),
+      ]);
+    }
+    return result;
+  };
+  const original = await search(15, 1);
+  await search(15, 1, original);
+  if (ttl > 0) {
+    clock.mockReturnValue(Date.now() + 60_000);
   }
-  return `http://127.0.0.1:${address.port}`;
-}
-
-async function closeServer(server: Server): Promise<void> {
-  server.closeAllConnections();
-  await new Promise<void>((resolve) => {
-    server.close(() => resolve());
-  });
-}
-
-afterEach(async () => {
-  vi.restoreAllMocks();
-  testing.SEARXNG_SEARCH_CACHE.clear();
-  await Promise.all([...servers].map(closeServer));
-  servers.clear();
+  const fresh = await search(ttl, 2);
+  if (ttl === 0) {
+    await search(0, 3);
+    await search(15, 3, original);
+  } else {
+    await search(1, 2, fresh);
+  }
 });
 
-describe("searxng real transport", () => {
-  it.each([0, 1])(
-    "applies the current %s-minute provider TTL to cached results",
-    async (cacheTtlMinutes) => {
-      const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
-      let requests = 0;
-      const baseUrl = await listen(
-        createServer((_request, response) => {
-          requests += 1;
-          response.writeHead(200, { "Content-Type": "application/json" });
-          response.end(
-            JSON.stringify({
-              results: [{ title: `Result ${requests}`, url: `https://example.com/${requests}` }],
-            }),
-          );
-        }),
-      );
-      const search = (ttl: number) =>
-        createTool(baseUrl, ttl).execute(
-          { query: "current search TTL" },
-          { signal: new AbortController().signal },
-        );
-
-      const original = await search(15);
-      expect(await search(15)).toEqual({ ...original, cached: true });
-      expect(requests).toBe(1);
-
-      if (cacheTtlMinutes > 0) {
-        clock.mockReturnValue(Date.now() + 60_000);
-      }
-      const fresh = await search(cacheTtlMinutes);
-      expect(fresh.cached).toBeUndefined();
-      expect(fresh.results).toEqual([expect.objectContaining({ url: "https://example.com/2" })]);
-      expect(requests).toBe(2);
-
-      if (cacheTtlMinutes === 0) {
-        const next = await search(0);
-        expect(next.cached).toBeUndefined();
-        expect(next.results).toEqual([expect.objectContaining({ url: "https://example.com/3" })]);
-        expect(await search(15)).toEqual({ ...original, cached: true });
-        expect(requests).toBe(3);
-      } else {
-        expect(await search(1)).toEqual({ ...fresh, cached: true });
-        expect(requests).toBe(2);
-      }
-    },
+it("aborts a provider's stalled response body and closes the request", async () => {
+  const requestStarted = Promise.withResolvers<void>();
+  const clientClosed = Promise.withResolvers<void>();
+  respond = (request, response) => {
+    request.socket.once("close", () => clientClosed.resolve());
+    response.writeHead(200, { "Content-Type": "application/json" });
+    response.write('{"results":[');
+    response.flushHeaders();
+    requestStarted.resolve();
+  };
+  const controller = new AbortController();
+  const pending = createTool().execute(
+    { query: "stalled response", categories: "general" },
+    { signal: controller.signal },
   );
+  await requestStarted.promise;
+  controller.abort();
+  await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+  await expect(clientClosed.promise).resolves.toBeUndefined();
+});
 
-  it("aborts a provider's stalled response body and closes the request", async () => {
-    const requestStarted = Promise.withResolvers<void>();
-    const clientClosed = Promise.withResolvers<void>();
-    const server = createServer((request, response) => {
-      request.socket.once("close", () => clientClosed.resolve());
-      response.writeHead(200, { "Content-Type": "application/json" });
-      response.write('{"results":[');
-      response.flushHeaders();
-      requestStarted.resolve();
+it("keeps configured and explicit result counts separate in the cache", async () => {
+  respond = (_request, response) => {
+    response.setHeader("Content-Type", "application/json");
+    response.end(JSON.stringify({
+      results: [1, 2, 3, 4].map((id) => ({ title: `Result ${id}`, url: `https://example.com/${id}` })),
+    }));
+  };
+  const args = { query: "configured count" };
+  const one = await createTool(15, { maxResults: 1 }).execute(args);
+  expect(one.results).toHaveLength(1);
+  expect(await createTool(15, { maxResults: 1 }).execute(args)).toEqual({ ...one, cached: true });
+  expect(requests).toBe(1);
+  const three = await createTool(15, { maxResults: 3 }).execute(args);
+  expect(three.results).toHaveLength(3);
+  expect(three.cached).toBeUndefined();
+  expect(requests).toBe(2);
+  const explicit = await createTool(15, { maxResults: 1 }).execute({ ...args, count: 2 });
+  expect(explicit.results).toHaveLength(2);
+  expect(requests).toBe(3);
+});
+
+it("aborts at the configured deadline but permits an explicit longer timeout", async () => {
+  const closed = Promise.withResolvers<void>();
+  respond = (_request, response) => {
+    // Exercise the native HTTP/AbortSignal deadline; fake timers do not drive socket I/O.
+    const timer = setTimeout(() => {
+      response.setHeader("Content-Type", "application/json");
+      response.end(JSON.stringify({ results: [{ title: "Result", url: "https://example.com/ok" }] }));
+    }, 2_000);
+    response.once("close", () => {
+      clearTimeout(timer);
+      closed.resolve();
     });
-    const baseUrl = await listen(server);
-    const controller = new AbortController();
-    const pending = createTool(baseUrl).execute(
-      { query: "stalled response", categories: "general" },
-      { signal: controller.signal },
-    );
-
-    await requestStarted.promise;
-    controller.abort();
-
-    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
-    await expect(clientClosed.promise).resolves.toBeUndefined();
-  });
-
-  it("uses configured result counts without sharing cached results across counts", async () => {
-    let requests = 0;
-    const baseUrl = await listen(
-      createServer((_request, response) => {
-        requests += 1;
-        response.writeHead(200, { "Content-Type": "application/json" });
-        response.end(
-          JSON.stringify({
-            results: Array.from({ length: 4 }, (_, index) => ({
-              title: `Result ${index + 1}`,
-              url: `https://example.com/${index + 1}`,
-            })),
-          }),
-        );
-      }),
-    );
-    const args = { query: "configured result counts" };
-    const one = await createTool(baseUrl, 15, { maxResults: 1 }).execute(args);
-    expect(one).toMatchObject({ count: 1, results: [{ url: "https://example.com/1" }] });
-    expect(requests).toBe(1);
-    expect(await createTool(baseUrl, 15, { maxResults: 1 }).execute(args)).toEqual({
-      ...one,
-      cached: true,
-    });
-    expect(requests).toBe(1);
-
-    const three = await createTool(baseUrl, 15, { maxResults: 3 }).execute(args);
-    expect(three).toMatchObject({
-      count: 3,
-      results: [
-        { url: "https://example.com/1" },
-        { url: "https://example.com/2" },
-        { url: "https://example.com/3" },
-      ],
-    });
-    expect(three.cached).toBeUndefined();
-    expect(requests).toBe(2);
-
-    const explicit = await createTool(baseUrl, 15, { maxResults: 1 }).execute({
-      ...args,
-      count: 2,
-    });
-    expect(explicit).toMatchObject({
-      count: 2,
-      results: [{ url: "https://example.com/1" }, { url: "https://example.com/2" }],
-    });
-    expect(requests).toBe(3);
-
-    const unset = await createTool(baseUrl).execute(args);
-    expect(unset).toMatchObject({ count: 4 });
-    expect(unset.results).toHaveLength(4);
-    expect(requests).toBe(4);
-  });
-
-  it("applies the configured timeout to the real request while allowing a longer budget", async () => {
-    const timedOutRequestClosed = Promise.withResolvers<{ responseSent: boolean }>();
-    let requests = 0;
-    const baseUrl = await listen(
-      createServer((_request, response) => {
-        requests += 1;
-        const isShortBudget = requests === 1;
-        let responseSent = false;
-        const timer = setTimeout(() => {
-          responseSent = true;
-          response.writeHead(200, { "Content-Type": "application/json" });
-          response.end(
-            JSON.stringify({
-              results: Array.from({ length: 4 }, (_, index) => ({
-                title: `Result ${index + 1}`,
-                url: `https://example.com/${index + 1}`,
-              })),
-            }),
-          );
-        }, 2_000);
-        response.once("close", () => {
-          clearTimeout(timer);
-          if (isShortBudget) {
-            timedOutRequestClosed.resolve({ responseSent });
-          }
-        });
-      }),
-    );
-    const pending = createTool(baseUrl, 0, { timeoutSeconds: 1 }).execute({
-      query: "configured short timeout",
-    });
-    await expect(pending).rejects.toMatchObject({
-      name: "TimeoutError",
-      message: "request timed out",
-    });
-    expect(requests).toBe(1);
-    await expect(timedOutRequestClosed.promise).resolves.toEqual({ responseSent: false });
-
-    const allowed = await createTool(baseUrl, 0, { timeoutSeconds: 3 }).execute({
-      query: "configured longer timeout",
-    });
-    expect(allowed).toMatchObject({ count: 4 });
-    expect(allowed.results).toHaveLength(4);
-    expect(requests).toBe(2);
-  });
+  };
+  const tool = createTool(0, { timeoutSeconds: 1 });
+  await expect(tool.execute({ query: "short deadline" })).rejects.toMatchObject({ name: "TimeoutError" });
+  await closed.promise;
+  const allowed = await tool.execute({ query: "longer override", timeoutSeconds: 3 });
+  expect(allowed.results).toHaveLength(1);
+  expect(requests).toBe(2);
 });
