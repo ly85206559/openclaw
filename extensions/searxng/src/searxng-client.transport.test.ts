@@ -95,9 +95,14 @@ it("aborts a provider's stalled response body and closes the request", async () 
 it("keeps configured and explicit result counts separate in the cache", async () => {
   respond = (_request, response) => {
     response.setHeader("Content-Type", "application/json");
-    response.end(JSON.stringify({
-      results: [1, 2, 3, 4].map((id) => ({ title: `Result ${id}`, url: `https://example.com/${id}` })),
-    }));
+    response.end(
+      JSON.stringify({
+        results: [1, 2, 3, 4].map((id) => ({
+          title: `Result ${id}`,
+          url: `https://example.com/${id}`,
+        })),
+      }),
+    );
   };
   const args = { query: "configured count" };
   const one = await createTool(15, { maxResults: 1 }).execute(args);
@@ -113,13 +118,15 @@ it("keeps configured and explicit result counts separate in the cache", async ()
   expect(requests).toBe(3);
 });
 
-it("aborts at the configured deadline but permits an explicit longer timeout", async () => {
+it("aborts at the configured deadline but permits a longer configured timeout", async () => {
   const closed = Promise.withResolvers<void>();
   respond = (_request, response) => {
     // Exercise the native HTTP/AbortSignal deadline; fake timers do not drive socket I/O.
     const timer = setTimeout(() => {
       response.setHeader("Content-Type", "application/json");
-      response.end(JSON.stringify({ results: [{ title: "Result", url: "https://example.com/ok" }] }));
+      response.end(
+        JSON.stringify({ results: [{ title: "Result", url: "https://example.com/ok" }] }),
+      );
     }, 2_000);
     response.once("close", () => {
       clearTimeout(timer);
@@ -127,9 +134,11 @@ it("aborts at the configured deadline but permits an explicit longer timeout", a
     });
   };
   const tool = createTool(0, { timeoutSeconds: 1 });
-  await expect(tool.execute({ query: "short deadline" })).rejects.toMatchObject({ name: "TimeoutError" });
+  await expect(tool.execute({ query: "short deadline" })).rejects.toMatchObject({
+    name: "TimeoutError",
+  });
   await closed.promise;
-  const allowed = await tool.execute({ query: "longer override", timeoutSeconds: 3 });
+  const allowed = await createTool(0, { timeoutSeconds: 3 }).execute({ query: "longer budget" });
   expect(allowed.results).toHaveLength(1);
   expect(requests).toBe(2);
 });
