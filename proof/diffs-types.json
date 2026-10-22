@@ -1,0 +1,11 @@
+{
+  "extends": "../../source/extensions/tsconfig.json",
+  "compilerOptions": {
+    "incremental": false
+  },
+  "include": [
+    "../../source/extensions/diffs/src/tool.ts",
+    "../../source/extensions/diffs/src/tool.test.ts"
+  ],
+  "exclude": []
+}
