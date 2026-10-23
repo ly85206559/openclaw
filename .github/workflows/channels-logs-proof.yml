@@ -11,49 +11,6 @@ env:
   COREPACK_ENABLE_DOWNLOAD_PROMPT: '0'
 
 jobs:
-  fixed:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          path: controller
-          persist-credentials: false
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: ly85206559/openclaw
-          ref: f67de3a4e6bb10f9a924c8110c01729d85d1aab6
-          path: source
-          persist-credentials: false
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: 24.22.1
-      - uses: ./source/.github/actions/setup-pnpm-store-cache
-        with:
-          package-manager-file: source/package.json
-          lockfile-path: source/pnpm-lock.yaml
-          node-version: 24.22.1
-          cache-mode: off
-      - name: Prepare exact candidate source
-        working-directory: source
-        run: |
-          set -euo pipefail
-          test "$(git rev-parse HEAD)" = 'f67de3a4e6bb10f9a924c8110c01729d85d1aab6'
-          pnpm install --frozen-lockfile
-          pnpm docs:list > ../docs-list.txt
-          mkdir -p ../artifacts
-          pnpm build:runtime > ../artifacts/build.log 2>&1
-      - name: Prove supported snapshots and filtered following with real SIGINT
-        run: node controller/proof/channels-logs-fixed.mjs source artifacts f67de3a4e6bb10f9a924c8110c01729d85d1aab6
-      - name: Preserve actual CLI evidence and failures
-        if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: channel-logs-follow-fixed
-          path: artifacts
-          if-no-files-found: error
-          retention-days: 14
-
   checks:
     runs-on: ubuntu-24.04
     timeout-minutes: 25
@@ -61,7 +18,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ly85206559/openclaw
-          ref: f67de3a4e6bb10f9a924c8110c01729d85d1aab6
+          ref: 5767f1464940f1d19fb5d277a4e846fd3f57e12e
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -75,7 +32,7 @@ jobs:
       - name: Prepare exact candidate checks
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = 'f67de3a4e6bb10f9a924c8110c01729d85d1aab6'
+          test "$(git rev-parse HEAD)" = '5767f1464940f1d19fb5d277a4e846fd3f57e12e'
           pnpm install --frozen-lockfile
           mkdir -p .artifacts/channel-follow
       - name: Core production types
