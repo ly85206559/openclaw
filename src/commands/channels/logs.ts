@@ -90,7 +90,10 @@ export async function channelsLogsCommand(opts: {
       opts.json ? jsonLine({ type: "notice", message }) : write(theme.warn(message));
     let previousFile: string | undefined;
     try {
-      while (!signal?.aborted) {
+      for (;;) {
+        if (signal?.aborted) {
+          break;
+        }
         const sourceChanged = previousFile !== undefined && tail.file !== previousFile;
         if (previousFile === undefined || sourceChanged) {
           if (opts.json) {
@@ -116,7 +119,10 @@ export async function channelsLogsCommand(opts: {
           return;
         }
         for (const line of tail.lines) {
-          if (!(opts.json ? jsonLine({ type: "log", ...line }) : write(formatChannelLogLine(line)))) {
+          const written = opts.json
+            ? jsonLine({ type: "log", ...line })
+            : write(formatChannelLogLine(line));
+          if (!written) {
             return;
           }
         }
