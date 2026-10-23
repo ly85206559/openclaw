@@ -63,8 +63,13 @@ try {
   assert.equal(status, 1);
   assert.equal(receipt.exitCode, 1);
   assert.equal(receipt.signal, null);
-  assert.match(Buffer.concat(output[1]).toString("utf8"), /unknown option '--follow'/);
-  receipt.expectedRejection = "unknown option '--follow'";
+  const message = 'OpenClaw does not recognize option "--follow".\nTry: openclaw channels logs --help';
+  assert.deepEqual(JSON.parse(Buffer.concat(output[0]).toString("utf8")), {
+    ok: false,
+    error: { type: "cli_error", message },
+  });
+  assert.ok(Buffer.concat(output[1]).toString("utf8").endsWith(message + "\n"));
+  receipt.expectedRejection = message;
   receipt.productVerdict = "feature-absent";
 } catch (error) {
   failures.push(error);
