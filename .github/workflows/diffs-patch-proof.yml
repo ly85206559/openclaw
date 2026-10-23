@@ -1,4 +1,4 @@
-name: Diffs patch boundary proof
+name: Diffs patch missing static checks
 
 on:
   push:
@@ -9,11 +9,10 @@ permissions:
 
 env:
   SOURCE_HEAD: 5592b707401fae530c29549a330fb3e391f06b99
-  ORIGINAL_HEAD: a6c561f954c41209124f7add70a13c59e883eda3
   COREPACK_ENABLE_DOWNLOAD_PROMPT: '0'
 
 jobs:
-  fixed:
+  static-checks:
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
@@ -35,93 +34,28 @@ jobs:
           lockfile-path: source/pnpm-lock.yaml
           node-version: 24.22.1
           cache-mode: off
-      - name: Prepare exact source with canonical tools
-        working-directory: source
-        run: |
-          set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$SOURCE_HEAD"
-          pnpm install --frozen-lockfile
-          pnpm --silent openclaw --version
-          pnpm docs:list > ../controller-docs-list.txt
-      - name: Actual fixed Gateway tool and viewer readback
-        env:
-          PROOF_PHASE: fixed
-        run: node controller/proof/diffs-patch-proof.mjs source artifacts
-      - name: Focused owner tests and scoped types lint format
-        working-directory: source
-        run: |
-          set -euo pipefail
-          bash scripts/ci-collect-checks.sh \
-            'pnpm test:extension diffs extensions/diffs/src/tool.test.ts extensions/diffs/src/render.test.ts --maxWorkers=1' \
-            'node scripts/run-tsgo.mjs -p ../controller/proof/diffs-types.json' \
-            'node scripts/run-oxlint.mjs --tsconfig extensions/tsconfig.json extensions/diffs/src/tool.ts extensions/diffs/src/tool.test.ts' \
-            'pnpm format:check extensions/diffs/src/tool.ts extensions/diffs/src/tool.test.ts' \
-            'git diff --check && test -z "$(git status --porcelain --untracked-files=no)"' \
-            2>&1 | tee ../artifacts/focused-checks.log
-      - name: Preserve sanitized evidence including failures
-        if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: diffs-patch-fixed
-          path: artifacts
-          if-no-files-found: error
-          retention-days: 14
-
-  regression-red:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 25
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          path: controller
-          persist-credentials: false
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: openclaw/openclaw
-          ref: ${{ env.ORIGINAL_HEAD }}
-          path: source
-          persist-credentials: false
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ env.SOURCE_HEAD }}
-          path: candidate
-          persist-credentials: false
-          sparse-checkout: extensions/diffs/src/tool.test.ts
-          sparse-checkout-cone-mode: false
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: 24.22.1
-      - uses: ./source/.github/actions/setup-pnpm-store-cache
-        with:
-          package-manager-file: source/package.json
-          lockfile-path: source/pnpm-lock.yaml
-          node-version: 24.22.1
-          cache-mode: off
-      - name: Exact original production with new regression only
+      - name: Prepare fresh exact source without starting the Gateway
         working-directory: source
         run: |
           set -euo pipefail
           mkdir -p ../artifacts
-          test "$(git rev-parse HEAD)" = "$ORIGINAL_HEAD"
+          test "$(git rev-parse HEAD)" = "$SOURCE_HEAD"
           pnpm install --frozen-lockfile
-          cp ../candidate/extensions/diffs/src/tool.test.ts extensions/diffs/src/tool.test.ts
-          set +e
-          pnpm test:extension diffs extensions/diffs/src/tool.test.ts \
-            --maxWorkers=1 -t 'preserves trailing patch whitespace in the viewer payload' \
-            --reporter=json --reporter=junit \
-            --outputFile.json=../artifacts/regression.json \
-            --outputFile.junit=../artifacts/regression.junit.xml \
-            > ../artifacts/regression.log 2>&1
-          regression_exit=$?
-          set -e
-          test "$regression_exit" -eq 1
-          test "$(git diff --name-only)" = 'extensions/diffs/src/tool.test.ts'
-          node ../controller/proof/audit-regression.mjs ../artifacts/regression.json
-      - name: Preserve original regression failure
+      - name: Run only the missing scoped typecheck and typed lint
+        working-directory: source
+        run: |
+          set -euo pipefail
+          git rev-parse HEAD | tee ../artifacts/source-head.txt
+          bash scripts/ci-collect-checks.sh \
+            'node scripts/run-tsgo.mjs -p ../controller/proof/diffs-types.json' \
+            'node scripts/run-oxlint.mjs --tsconfig extensions/tsconfig.json extensions/diffs/src/tool.ts extensions/diffs/src/tool.test.ts' \
+            'git diff --check && test -z "$(git status --porcelain --untracked-files=no)"' \
+            2>&1 | tee ../artifacts/static-checks.log
+      - name: Preserve original checker output including failures
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: diffs-patch-regression-red
+          name: diffs-patch-static-checks
           path: artifacts
           if-no-files-found: error
           retention-days: 14
