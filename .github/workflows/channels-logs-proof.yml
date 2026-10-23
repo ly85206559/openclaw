@@ -1,4 +1,4 @@
-name: Channel logs follow baseline
+name: Channel logs follow proof
 
 on:
   push:
@@ -11,7 +11,7 @@ env:
   COREPACK_ENABLE_DOWNLOAD_PROMPT: '0'
 
 jobs:
-  baseline:
+  fixed:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -21,8 +21,8 @@ jobs:
           persist-credentials: false
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          repository: openclaw/openclaw
-          ref: 53f8d4f7f577aff93ca625c210185145a90ad81a
+          repository: ly85206559/openclaw
+          ref: 37c36deb60a8279441fc7bfda50d99b30de699e1
           path: source
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -34,20 +34,82 @@ jobs:
           lockfile-path: source/pnpm-lock.yaml
           node-version: 24.22.1
           cache-mode: off
-      - name: Prepare unchanged baseline source
+      - name: Prepare exact candidate source
         working-directory: source
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = '53f8d4f7f577aff93ca625c210185145a90ad81a'
+          test "$(git rev-parse HEAD)" = '37c36deb60a8279441fc7bfda50d99b30de699e1'
           pnpm install --frozen-lockfile
           pnpm docs:list > ../docs-list.txt
-      - name: Observe supported CLI rejection before implementation
-        run: node controller/proof/channels-logs-baseline.mjs source artifacts
+          mkdir -p ../artifacts
+          pnpm build:runtime > ../artifacts/build.log 2>&1
+      - name: Prove supported snapshots and filtered following with real SIGINT
+        run: node controller/proof/channels-logs-fixed.mjs source artifacts 37c36deb60a8279441fc7bfda50d99b30de699e1
       - name: Preserve actual CLI evidence and failures
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: channel-logs-follow-baseline
+          name: channel-logs-follow-fixed
           path: artifacts
+          if-no-files-found: error
+          retention-days: 14
+
+  checks:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ly85206559/openclaw
+          ref: 37c36deb60a8279441fc7bfda50d99b30de699e1
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.22.1
+      - uses: ./.github/actions/setup-pnpm-store-cache
+        with:
+          package-manager-file: package.json
+          lockfile-path: pnpm-lock.yaml
+          node-version: 24.22.1
+          cache-mode: off
+      - name: Prepare exact candidate checks
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = '37c36deb60a8279441fc7bfda50d99b30de699e1'
+          pnpm install --frozen-lockfile
+          mkdir -p .artifacts/channel-follow
+      - name: Core production types
+        id: types
+        run: pnpm tsgo:core > .artifacts/channel-follow/types.log 2>&1
+      - name: Command test types
+        if: success() || failure()
+        run: node scripts/run-tsgo.mjs -p test/tsconfig/tsconfig.core.test.commands.json > .artifacts/channel-follow/test-types.log 2>&1
+      - name: Touched typed lint
+        if: success() || failure()
+        id: lint
+        run: node scripts/run-oxlint.mjs --tsconfig tsconfig.core.json src/cli/channels-cli.ts src/commands/channels/logs.ts src/commands/channels.logs.test.ts src/logging/log-tail.ts > .artifacts/channel-follow/lint.log 2>&1
+      - name: Focused command and shared-reader tests
+        if: success() || failure()
+        id: tests
+        run: pnpm test src/commands/channels.logs.test.ts src/cli/channels-cli.test.ts src/logging/log-tail.test.ts --maxWorkers=1 > .artifacts/channel-follow/tests.log 2>&1
+      - name: Touched formatter and Bun parity
+        if: success() || failure()
+        id: format
+        run: node scripts/run-format.mts --check docs/cli/channels.md src/cli/channels-cli.ts src/commands/channels/logs.ts src/commands/channels.logs.test.ts src/logging/log-tail.ts > .artifacts/channel-follow/format.log 2>&1
+      - name: Verify checks did not alter tracked source
+        if: success() || failure()
+        run: git diff --exit-code > .artifacts/channel-follow/source-clean.log 2>&1
+      - name: Preserve formatter correction without claiming tested head changed
+        if: failure() && steps.format.outcome == 'failure' && steps.tests.outcome == 'success' && steps.types.outcome == 'success' && steps.lint.outcome == 'success'
+        run: |
+          set -euo pipefail
+          node scripts/run-format.mts --write docs/cli/channels.md src/cli/channels-cli.ts src/commands/channels/logs.ts src/commands/channels.logs.test.ts src/logging/log-tail.ts
+          git diff --binary > .artifacts/channel-follow/format.patch
+      - name: Preserve focused checks
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: channel-logs-follow-checks
+          path: .artifacts/channel-follow
           if-no-files-found: error
           retention-days: 14
