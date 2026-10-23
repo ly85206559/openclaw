@@ -338,7 +338,9 @@ describe("channelsLogsCommand", () => {
         },
         { type: "notice", message: "Log tail truncated; earlier entries were omitted." },
       ]);
-      const messages = records.filter((record) => record.type === "log").map((record) => record.message);
+      const messages = records
+        .filter((record) => record.type === "log")
+        .map((record) => record.message);
       expect(messages).not.toContain("omitted");
       expect(messages.at(-1)).toBe("latest");
     } finally {
