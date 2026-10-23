@@ -1,0 +1,94 @@
+{
+  "status": "OBSERVATION_NOT_PRODUCT_REPAIR",
+  "source": "4be713527fbc5f6eb815294cd525f934404516a0",
+  "tree": "1ffa3020f48d9b0441319b3890bcade0276f96d7",
+  "groupsSha256": "aca5296864d1ceef08fb6ace79024cfe55dfaec0875ce1dbd150439da8d2cfcc",
+  "blobs": {
+    "src/state/openclaw-state-lease.ts": "05d177007b6b92105090e50ad56fa89f7f5f89b2",
+    "src/plugins/plugin-lifecycle-lease.test.ts": "e7b9ebe4a1df8d9a9eaf4ed92c9f2618733a6bbb",
+    "src/state/openclaw-state-lease-cleanup.ts": "03bd204ac989074bc795294779f3b93b5e2a0af2",
+    "src/state/openclaw-state-lease-process-exit.ts": "ce5d8c236d0e2d2eee819504cc483372c85d73ca"
+  },
+  "edits": {
+    "src/state/openclaw-state-lease.ts": [
+      {
+        "before": "import { AsyncLocalStorage } from \"node:async_hooks\";",
+        "after": "import { AsyncLocalStorage } from \"node:async_hooks\";\nimport { createLeaseObservation, observationErrorCode } from \"./openclaw-state-lease-observer.proof.js\";"
+      },
+      {
+        "before": "  const abortLost = (cause?: unknown) => {\n    if (!leaseLost.signal.aborted) {",
+        "after": "  const observe = createLeaseObservation(() => ({\n    ownerPhase: phase,\n    closed,\n    aborted: leaseLost.signal.aborted,\n    deadlineDeltaMs: confirmedExpiresAt === undefined ? null : Date.now() - confirmedExpiresAt,\n  }));\n  const abortLost = (cause?: unknown) => {\n    if (!leaseLost.signal.aborted) {\n      observe?.(\"first-abort\", { code: observationErrorCode(cause) });"
+      },
+      {
+        "before": "    revoke() {\n      closed = true;",
+        "after": "    revoke() {\n      observe?.(\"revoke\");\n      closed = true;"
+      },
+      {
+        "before": "    async finish() {\n      phase = \"draining\";",
+        "after": "    async finish() {\n      observe?.(\"cleanup-finish-enter\");\n      phase = \"draining\";"
+      },
+      {
+        "before": "      workerOperations?.close();\n    },\n  });",
+        "after": "      workerOperations?.close();\n      observe?.(\"cleanup-finish-return\");\n    },\n  });"
+      },
+      {
+        "before": "    const scheduleExpiry = () => {\n      if (expiryTimer) {",
+        "after": "    const scheduleExpiry = () => {\n      observe?.(\"expiry-arm\", { replacing: expiryTimer !== undefined });\n      if (expiryTimer) {"
+      },
+      {
+        "before": "        () => abortLost(),\n        Math.max(1, (confirmedExpiresAt ?? Date.now()) - Date.now()),",
+        "after": "        () => {\n          observe?.(\"expiry-callback\");\n          abortLost();\n        },\n        Math.max(1, (confirmedExpiresAt ?? Date.now()) - Date.now()),"
+      },
+      {
+        "before": "    const renewFromTimer = () => {\n      if (!runTimerRenewal) {",
+        "after": "    const renewFromTimer = () => {\n      observe?.(\"renew-enter\", { renewalPresent: runTimerRenewal !== undefined });\n      if (!runTimerRenewal) {"
+      },
+      {
+        "before": "        runTimerRenewal(renewAndSchedule);\n      } catch (error) {",
+        "after": "        runTimerRenewal(renewAndSchedule);\n        observe?.(\"renew-return\");\n      } catch (error) {\n        observe?.(\"renew-error\", { code: observationErrorCode(error) });"
+      },
+      {
+        "before": "    const assertOperationOwned = (transaction?: DatabaseSync) => {\n      assertActive();",
+        "after": "    const assertOperationOwned = (transaction?: DatabaseSync) => {\n      observe?.(\"assert-owned\", { transaction: transaction !== undefined });\n      assertActive();"
+      },
+      {
+        "before": "  return cleanup.run(run, () => {\n    phase = \"draining\";",
+        "after": "  return cleanup.run(run, () => {\n    observe?.(\"cleanup-prepare\");\n    phase = \"draining\";"
+      }
+    ],
+    "src/plugins/plugin-lifecycle-lease.test.ts": [
+      {
+        "before": "    child.once(\"close\", (code, signal) => {\n      if (code === 0) {",
+        "after": "    child.once(\"close\", (code, signal) => {\n      // Proof-only: successful children otherwise retain stderr without emitting it.\n      for (const line of stderr.split(\"\\n\")) {\n        if (line.startsWith(\"LEASE_OBS:\")) process.stderr.write(line + \"\\n\");\n      }\n      if (code === 0) {"
+      },
+      {
+        "before": "        const alphaGoMarker = state.path(\"alpha-go\");",
+        "after": "        const observationModuleUrl = pathToFileURL(\n          path.resolve(\"src/state/openclaw-state-lease-observer.proof.ts\"),\n        ).href;\n        const alphaGoMarker = state.path(\"alpha-go\");"
+      },
+      {
+        "before": "          const [pluginId, stateDir, goMarker, releaseAlphaMarker] = process.argv.slice(2);",
+        "after": "          import { beginObservation, setObservationPhase, flushObservation } from ${JSON.stringify(observationModuleUrl)};\n          const [pluginId, stateDir, goMarker, releaseAlphaMarker] = process.argv.slice(2);"
+      },
+      {
+        "before": "          mock.method(performance, \"now\", () => 0);\n          async function waitForMarker(marker) {",
+        "after": "          mock.method(performance, \"now\", () => 0);\n          beginObservation(pluginId);\n          try {\n          async function waitForMarker(marker) {"
+      },
+      {
+        "before": "            if (pluginId === \"alpha\") {\n              await waitForMarker(releaseAlphaMarker);\n            }\n            const records = await loadInstalledPluginIndexInstallRecords();",
+        "after": "            if (pluginId === \"alpha\") {\n              setObservationPhase(\"release-await\");\n              await waitForMarker(releaseAlphaMarker);\n            }\n            setObservationPhase(\"records-await\");\n            const records = await loadInstalledPluginIndexInstallRecords();\n            setObservationPhase(\"records-return\");"
+      },
+      {
+        "before": "            // Reuse prepared fixture metadata; discovery can block the heartbeat during this race.\n            writePersistedInstalledPluginIndexWithLeaseSync({",
+        "after": "            // Reuse prepared fixture metadata; discovery can block the heartbeat during this race.\n            setObservationPhase(\"write-enter\");\n            writePersistedInstalledPluginIndexWithLeaseSync({"
+      },
+      {
+        "before": "            }, { env, lease });\n            process.stdout.write(\"written\\\\n\");",
+        "after": "            }, { env, lease });\n            setObservationPhase(\"write-return\");\n            process.stdout.write(\"written\\\\n\");"
+      },
+      {
+        "before": "          process.stdout.write(\"released\\\\n\");\n        `,",
+        "after": "          process.stdout.write(\"released\\\\n\");\n          } finally {\n            flushObservation();\n          }\n        `,"
+      }
+    ]
+  }
+}
