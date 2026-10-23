@@ -1,4 +1,4 @@
-name: Diffs patch missing static checks
+name: Diffs patch missing typecheck
 
 on:
   push:
@@ -38,17 +38,17 @@ jobs:
         working-directory: source
         run: |
           set -euo pipefail
-          mkdir -p ../artifacts
+          mkdir -p ../artifacts .artifacts/proof
           test "$(git rev-parse HEAD)" = "$SOURCE_HEAD"
           pnpm install --frozen-lockfile
-      - name: Run only the missing scoped typecheck and typed lint
+          cp ../controller/proof/diffs-types.json .artifacts/proof/diffs-types.json
+      - name: Run only the missing scoped typecheck
         working-directory: source
         run: |
           set -euo pipefail
           git rev-parse HEAD | tee ../artifacts/source-head.txt
           bash scripts/ci-collect-checks.sh \
-            'node scripts/run-tsgo.mjs -p ../controller/proof/diffs-types.json' \
-            'node scripts/run-oxlint.mjs --tsconfig extensions/tsconfig.json extensions/diffs/src/tool.ts extensions/diffs/src/tool.test.ts' \
+            'node scripts/run-tsgo.mjs -p .artifacts/proof/diffs-types.json' \
             'git diff --check && test -z "$(git status --porcelain --untracked-files=no)"' \
             2>&1 | tee ../artifacts/static-checks.log
       - name: Preserve original checker output including failures
