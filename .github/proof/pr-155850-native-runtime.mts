@@ -222,7 +222,9 @@ async function runCase(shiftMs: number) {
     await delay(100);
     assert.ok(performance.now() - firstBargeInAt < 1_800, "Fixture missed cooldown window");
     const bargeInsWithinCooldown = bargeIns.length;
-    await delay(Math.max(0, firstBargeInAt + 2_100 - performance.now()));
+    // The second probe follows the completed output write and may reset cooldown.
+    // Wait from here so both that cooldown and the accepted playback have expired.
+    await delay(2_100);
     const audibleAfterPlaybackDuration = queue.hasUnplayedAudibleAudio();
     await command(barge, "emit");
     await delay(100);
