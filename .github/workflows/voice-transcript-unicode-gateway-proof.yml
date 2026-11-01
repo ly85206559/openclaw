@@ -1,0 +1,68 @@
+name: Voice transcript Unicode Gateway proof
+
+on:
+  push:
+    branches: [codex/voice-transcript-unicode-gateway-proof-20261101]
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  gateway:
+    if: github.repository == 'ly85206559/openclaw' && github.event.repository.fork == true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: controller
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ly85206559/openclaw
+          ref: a5b140c444bc8eecc9fcf50de2d3bfd58eb29492
+          path: source
+          persist-credentials: false
+      - name: Record exact inputs
+        run: |
+          mkdir -p artifacts
+          git -C controller rev-parse HEAD > artifacts/controller-head.txt
+          git -C source rev-parse HEAD > artifacts/source-head.txt
+          test "$(cat artifacts/source-head.txt)" = a5b140c444bc8eecc9fcf50de2d3bfd58eb29492
+          git -C source ls-files --stage -- extensions/voice-call/src/webhook/realtime-transcript-text.ts extensions/voice-call/src/runtime.ts src/talk/agent-consult-runtime.ts extensions/openai/realtime-voice-bridge.ts > artifacts/source-blobs.txt
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: 24.22.1
+      - uses: ./source/.github/actions/setup-pnpm-store-cache
+        with:
+          package-manager-file: source/package.json
+          lockfile-path: source/pnpm-lock.yaml
+          node-version: 24.22.1
+          cache-mode: off
+      - name: Install pinned source
+        working-directory: source
+        run: pnpm install --frozen-lockfile
+      - name: Canonical runtime build
+        working-directory: source
+        run: pnpm build:runtime 2>&1 | tee ../artifacts/runtime-build.log
+      - name: Actual Gateway voice call through controlled external transports
+        run: node controller/proof/voice-transcript-unicode-gateway.mjs source artifacts 2>&1 | tee artifacts/gateway-proof.log
+      - name: Record final source state
+        if: always()
+        run: |
+          mkdir -p artifacts
+          git -C source rev-parse HEAD > artifacts/source-head-after.txt
+          git -C source status --porcelain --untracked-files=no > artifacts/tracked-status-after.txt
+          test "$(cat artifacts/source-head-after.txt)" = a5b140c444bc8eecc9fcf50de2d3bfd58eb29492
+          test ! -s artifacts/tracked-status-after.txt
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: voice-transcript-unicode-gateway
+          path: artifacts
+          if-no-files-found: error
+          retention-days: 14
