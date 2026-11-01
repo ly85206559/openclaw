@@ -111,6 +111,7 @@ jobs:
             Write-Host $output
             if ($status -eq 0 -or $output -notmatch 'uses a supported versioned current Node for an npm shim' -or $output -notmatch 'A Node executable is required to launch this Windows npm wrapper') { throw 'Baseline did not fail at the intended regression.' }
             Write-Host 'REGRESSION_BASELINE=EXPECTED_FAILURE'
+            $global:LASTEXITCODE = 0
           } else {
             & node scripts/run-vitest.mjs src/process/terminal-pty.test.ts --maxWorkers=1
             if ($LASTEXITCODE -ne 0) { throw 'Candidate focused suite failed.' }
