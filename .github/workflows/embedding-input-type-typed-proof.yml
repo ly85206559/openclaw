@@ -1,0 +1,122 @@
+name: Embedding input type typed action proof
+
+on:
+  push:
+    branches: [codex/embedding-input-type-typed-proof-20261101]
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  runtime:
+    if: github.repository == 'ly85206559/openclaw' && github.event.repository.fork == true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: controller
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ly85206559/openclaw
+          ref: 0eae003d1071c9f2f3446f5bc265088b0eb47a7a
+          fetch-depth: 5
+          path: source
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: 24.22.1
+      - uses: ./source/.github/actions/setup-pnpm-store-cache
+        with:
+          package-manager-file: source/package.json
+          lockfile-path: source/pnpm-lock.yaml
+          node-version: 24.22.1
+          cache-mode: off
+      - name: Install pinned source
+        working-directory: source
+        run: |
+          mkdir -p ../artifacts
+          /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/install.wall.txt pnpm install --frozen-lockfile 2>&1 | tee ../artifacts/install.log
+      - name: Canonical runtime build
+        working-directory: source
+        run: |
+          /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/build.wall.txt pnpm build:runtime 2>&1 | tee ../artifacts/build.log
+      - name: Actual embedding CLI and Voyage HTTP boundary
+        run: |
+          /usr/bin/time -f 'wall_seconds=%e' -o artifacts/runtime.wall.txt node controller/proof/embedding-input-type-typed.mjs source artifacts 2>&1 | tee artifacts/runtime.log
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: embedding-input-type-typed-runtime
+          path: artifacts
+          if-no-files-found: error
+          retention-days: 14
+
+  checks:
+    if: github.repository == 'ly85206559/openclaw' && github.event.repository.fork == true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ly85206559/openclaw
+          ref: 0eae003d1071c9f2f3446f5bc265088b0eb47a7a
+          fetch-depth: 5
+          path: source
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: 24.22.1
+      - uses: ./source/.github/actions/setup-pnpm-store-cache
+        with:
+          package-manager-file: source/package.json
+          lockfile-path: source/pnpm-lock.yaml
+          node-version: 24.22.1
+          cache-mode: off
+      - name: Install pinned source
+        working-directory: source
+        run: |
+          mkdir -p ../artifacts
+          /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/install.wall.txt pnpm install --frozen-lockfile 2>&1 | tee ../artifacts/install.log
+      - name: Focused capability CLI tests
+        working-directory: source
+        run: |
+          /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/tests.wall.txt pnpm test src/cli/capability-cli.test.ts --maxWorkers=1 2>&1 | tee ../artifacts/focused-tests.log
+      - name: Scoped core and changed test types
+        working-directory: source
+        run: |
+          /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/core-types.wall.txt pnpm tsgo:core 2>&1 | tee ../artifacts/core-types.log
+          /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/test-types.wall.txt node scripts/run-tsgo-core-test-shards.mjs --changed-paths-json '["src/cli/capability-cli.embedding.test-support.ts","src/cli/capability-cli.test.ts"]' 2>&1 | tee ../artifacts/test-types.log
+      - name: Scoped lint and format
+        working-directory: source
+        run: |
+          /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/lint.wall.txt node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.core.json src/cli/capability-cli/embedding.ts src/cli/capability-cli.embedding.test-support.ts src/cli/capability-cli.test.ts 2>&1 | tee ../artifacts/lint.log
+          /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/format.wall.txt pnpm format:check --no-error-on-unmatched-pattern -- src/cli/capability-cli/embedding.ts src/cli/capability-cli.embedding.test-support.ts docs/cli/infer.md config/test-lines-allocations/embedding-input-type.txt 2>&1 | tee ../artifacts/format.log
+      - name: Assertion safety ratchet
+        working-directory: source
+        run: |
+          /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/assertion-safety.wall.txt pnpm check:assertion-safety --base 39629c6aa82ce444f14c37fc1d4d47e5c7f661d0 --no-merge-base 2>&1 | tee ../artifacts/assertion-safety.log
+      - name: Documentation inventory and test line budget
+        working-directory: source
+        run: |
+          /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/docs-list.wall.txt pnpm docs:list 2>&1 | tee ../artifacts/docs-list.log
+          /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/test-lines.wall.txt pnpm check:test-lines-ratchet --base 39629c6aa82ce444f14c37fc1d4d47e5c7f661d0 2>&1 | tee ../artifacts/test-lines.log
+      - name: Verify exact source and unchanged tracked files
+        working-directory: source
+        run: |
+          test "$(git rev-parse HEAD)" = 0eae003d1071c9f2f3446f5bc265088b0eb47a7a
+          test -z "$(git status --porcelain --untracked-files=no)"
+          git rev-parse HEAD > ../artifacts/source-head.txt
+          git status --porcelain --untracked-files=no > ../artifacts/source-status.txt
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: embedding-input-type-typed-checks
+          path: artifacts
+          if-no-files-found: error
+          retention-days: 14
