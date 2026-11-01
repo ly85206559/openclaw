@@ -1,0 +1,140 @@
+name: PR 151009 Windows npm-shim proof
+
+on:
+  push:
+    branches: [codex/proof-151009-windows-20261101]
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    name: Windows / ${{ matrix.phase }}
+    runs-on: windows-2025
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        phase: [baseline, candidate]
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      BASE_SHA: 1e293027afc0cfdf29b093ebef29193d444f6b1d
+      CANDIDATE_SHA: 6a85d36ab4c2ca98d57ac0ac8810e10682fe3513
+      PROOF_PHASE: ${{ matrix.phase }}
+      OPENCLAW_VITEST_MAX_WORKERS: '1'
+      COREPACK_ENABLE_DOWNLOAD_PROMPT: '0'
+      NO_COLOR: '1'
+      FORCE_COLOR: '0'
+    steps:
+      - name: Check out proof controller
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: controller
+          persist-credentials: false
+      - name: Refuse unexpected repository or phase
+        run: |
+          if ($env:GITHUB_REPOSITORY -cne 'ly85206559/openclaw') { throw 'Expected the authorized fork.' }
+          if ($env:PROOF_PHASE -cnotin @('baseline', 'candidate')) { throw 'Unexpected phase.' }
+          if ($env:BASE_SHA -cnotmatch '^[a-f0-9]{40}$' -or $env:CANDIDATE_SHA -cnotmatch '^[a-f0-9]{40}$') { throw 'Invalid frozen SHA.' }
+      - name: Check out exact source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ly85206559/openclaw
+          ref: ${{ matrix.phase == 'baseline' && '1e293027afc0cfdf29b093ebef29193d444f6b1d' || '6a85d36ab4c2ca98d57ac0ac8810e10682fe3513' }}
+          path: source
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Check out the exact candidate test
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ly85206559/openclaw
+          ref: 6a85d36ab4c2ca98d57ac0ac8810e10682fe3513
+          path: candidate
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Verify source identities and overlay only the candidate regression on baseline
+        run: |
+          $expected = if ($env:PROOF_PHASE -eq 'baseline') { $env:BASE_SHA } else { $env:CANDIDATE_SHA }
+          $sourceHead = git -C source rev-parse HEAD
+          $candidateHead = git -C candidate rev-parse HEAD
+          if ($sourceHead -cne $expected -or $candidateHead -cne $env:CANDIDATE_SHA) { throw 'Unexpected source head.' }
+          $test = 'src/process/terminal-pty.test.ts'
+          $candidateBlob = git -C candidate rev-parse "HEAD:$test"
+          if ($env:PROOF_PHASE -eq 'baseline') {
+            Copy-Item -LiteralPath "candidate/$test" -Destination "source/$test" -Force
+          }
+          git -C candidate diff --quiet -- $test
+          if ($LASTEXITCODE -ne 0) { throw 'Candidate test differs from its checked-out commit.' }
+          $candidateWorkHash = (Get-FileHash -Algorithm SHA256 -LiteralPath "candidate/$test").Hash
+          $actualWorkHash = (Get-FileHash -Algorithm SHA256 -LiteralPath "source/$test").Hash
+          if ($actualWorkHash -cne $candidateWorkHash) { throw 'Candidate test checkout bytes mismatch.' }
+          $changed = @(git -C source diff --name-only)
+          git -C source diff --cached --quiet
+          if ($LASTEXITCODE -ne 0) { throw 'Source index is not clean.' }
+          if ($env:PROOF_PHASE -eq 'baseline' -and ($changed.Count -ne 1 -or $changed[0] -cne $test)) { throw 'Baseline overlay escaped the test file.' }
+          if ($env:PROOF_PHASE -eq 'candidate' -and $changed.Count -ne 0) { throw 'Candidate checkout is not clean.' }
+          Write-Host "phase=$env:PROOF_PHASE source=$sourceHead candidate=$candidateHead candidateTestBlob=$candidateBlob testCheckoutSha256=$actualWorkHash"
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.22.1
+      - name: Set up pinned pnpm without cache
+        uses: ./source/.github/actions/setup-pnpm-store-cache
+        with:
+          package-manager-file: source/package.json
+          lockfile-path: source/pnpm-lock.yaml
+          node-version: 24.22.1
+          cache-mode: off
+      - name: Install exact source dependencies
+        working-directory: source
+        run: |
+          node --version
+          pnpm --version
+          if ((node --version) -cne 'v24.22.1' -or (pnpm --version) -cne '12.15.0') { throw 'Unexpected runtime.' }
+          pnpm install --frozen-lockfile
+          if ($LASTEXITCODE -ne 0) { throw 'Frozen install failed.' }
+          $changed = @(git diff --name-only)
+          git diff --cached --quiet
+          if ($LASTEXITCODE -ne 0) { throw 'Install modified the source index.' }
+          if ($env:PROOF_PHASE -eq 'baseline' -and ($changed.Count -ne 1 -or $changed[0] -cne 'src/process/terminal-pty.test.ts')) { throw 'Install modified baseline source.' }
+          if ($env:PROOF_PHASE -eq 'candidate' -and $changed.Count -ne 0) { throw 'Install modified candidate source.' }
+      - name: Focused regression and sibling controls
+        working-directory: source
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          if ($env:PROOF_PHASE -eq 'baseline') {
+            $output = (& node scripts/run-vitest.mjs src/process/terminal-pty.test.ts -t 'uses a supported versioned current Node for an npm shim' --maxWorkers=1 2>&1 | Out-String)
+            $status = $LASTEXITCODE
+            Write-Host $output
+            if ($status -eq 0 -or $output -notmatch 'uses a supported versioned current Node for an npm shim' -or $output -notmatch 'A Node executable is required to launch this Windows npm wrapper') { throw 'Baseline did not fail at the intended regression.' }
+            Write-Host 'REGRESSION_BASELINE=EXPECTED_FAILURE'
+          } else {
+            & node scripts/run-vitest.mjs src/process/terminal-pty.test.ts --maxWorkers=1
+            if ($LASTEXITCODE -ne 0) { throw 'Candidate focused suite failed.' }
+            Write-Host 'REGRESSION_CANDIDATE=PASSED'
+          }
+      - name: Exercise real versioned Node and native PTY
+        run: |
+          $taskRuntime = Join-Path $env:RUNNER_TEMP ('openclaw-proof-node-' + [guid]::NewGuid())
+          New-Item -ItemType Directory -Path $taskRuntime -ErrorAction Stop | Out-Null
+          $node24 = Join-Path $taskRuntime 'node24.exe'
+          Copy-Item -LiteralPath (Get-Command node.exe).Source -Destination $node24
+          $source = (Resolve-Path 'source').Path
+          $harness = (Resolve-Path 'controller/proof/pr-151009-windows-npm-shim.mjs').Path
+          $loader = [System.Uri]::new((Join-Path $source 'scripts/tsx.mjs')).AbsoluteUri
+          & $node24 --import $loader $harness $source $env:PROOF_PHASE
+          if ($LASTEXITCODE -ne 0) { throw 'Real PTY proof failed.' }
+          $sourceHead = git -C source rev-parse HEAD
+          $expected = if ($env:PROOF_PHASE -eq 'baseline') { $env:BASE_SHA } else { $env:CANDIDATE_SHA }
+          if ($sourceHead -cne $expected) { throw 'Source head drifted.' }
+          $changed = @(git -C source diff --name-only)
+          git -C source diff --cached --quiet
+          if ($LASTEXITCODE -ne 0) { throw 'Proof modified the source index.' }
+          if ($env:PROOF_PHASE -eq 'baseline' -and ($changed.Count -ne 1 -or $changed[0] -cne 'src/process/terminal-pty.test.ts')) { throw 'Baseline source drifted.' }
+          if ($env:PROOF_PHASE -eq 'candidate' -and $changed.Count -ne 0) { throw 'Candidate source drifted.' }
+          $expectedTest = (Get-FileHash -Algorithm SHA256 -LiteralPath 'candidate/src/process/terminal-pty.test.ts').Hash
+          $actualTest = (Get-FileHash -Algorithm SHA256 -LiteralPath 'source/src/process/terminal-pty.test.ts').Hash
+          if ($actualTest -cne $expectedTest) { throw 'Regression test bytes drifted.' }
