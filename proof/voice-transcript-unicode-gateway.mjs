@@ -34,6 +34,7 @@ const receipt = {
   boundary: 'shipped Gateway -> signed carrier HTTP/WS -> official realtime adapter -> real agent runtime -> controlled model HTTP -> realtime tool result',
   limitations: 'Synthetic carrier, transcription and model service; no vendor live audio, phone network or model inference claim.',
   commands: [],
+  providerResponses: [],
 };
 const modelRequests = [];
 const realtimeEvents = [];
@@ -45,6 +46,7 @@ let failure;
 let unjoined = false;
 let validWebhookSent = false;
 let realtimeReady = false;
+let greetingSettled = false;
 let stimulusSent = false;
 let finalToolResult;
 let callId;
@@ -196,6 +198,9 @@ modelServer.requestTimeout = 10000;
 const realtimeServer = http.createServer((_request, response) => { response.writeHead(404); response.end(); });
 const realtimeWss = new WebSocketServer({ server: realtimeServer, maxPayload: 4 * 1024 * 1024 });
 realtimeWss.on('connection', (socket, request) => {
+  let realtimeSession;
+  let greetingResponseId;
+  let manualResponseSequence = 0;
   try {
     const endpoint = new URL(request.url, 'http://fixture');
     assert.equal(endpoint.pathname, '/realtime');
@@ -209,9 +214,35 @@ realtimeWss.on('connection', (socket, request) => {
       const event = JSON.parse(bytes.toString());
       realtimeEvents.push(event);
       if (event.type === 'session.update') {
-        assert(event.session.tools.some((tool) => tool.name === 'openclaw_agent_consult'), 'Real plugin consult tool not registered');
-        socket.send(JSON.stringify({ type: 'session.updated', session: event.session }));
+        if (!realtimeSession) {
+          assert(event.session.tools.some((tool) => tool.name === 'openclaw_agent_consult'), 'Real plugin consult tool not registered');
+          realtimeSession = event.session;
+        } else {
+          realtimeSession = {
+            ...realtimeSession, ...event.session,
+            audio: {
+              ...realtimeSession.audio, ...event.session.audio,
+              input: { ...realtimeSession.audio.input, ...event.session.audio?.input },
+            },
+          };
+        }
+        socket.send(JSON.stringify({ type: 'session.updated', session: realtimeSession }));
         realtimeReady = true;
+        if (greetingResponseId && event.session.audio?.input?.turn_detection?.create_response === true) {
+          greetingSettled = true;
+          receipt.greetingResponseSettled = greetingResponseId;
+        }
+      }
+      if (event.type === 'response.create') {
+        assert.equal(typeof event.event_id, 'string', 'Manual response request lacks its event identity');
+        const responseId = `fixture-manual-response-${++manualResponseSequence}`;
+        if (!stimulusSent) {
+          assert(!greetingResponseId, 'Unexpected second manual response before caller input');
+          greetingResponseId = responseId;
+        }
+        receipt.providerResponses.push({ requestEventId: event.event_id, responseId, kind: stimulusSent ? 'followup' : 'greeting' });
+        socket.send(JSON.stringify({ type: 'response.created', response: { id: responseId, status: 'in_progress' } }));
+        socket.send(JSON.stringify({ type: 'response.done', response: { id: responseId, status: 'completed', output: [] } }));
       }
       if (event.type === 'input_audio_buffer.append' && !stimulusSent) {
         stimulusSent = true;
@@ -283,7 +314,7 @@ try {
   });
   await waitUntil(() => carrier.readyState === WebSocket.OPEN, 'authenticated carrier WebSocket');
   carrier.send(JSON.stringify({ event: 'start', start: { streamSid: 'MZ-fixture', callSid: providerCallId, mediaFormat: { encoding: 'audio/x-mulaw', sampleRate: 8000, channels: 1 } } }));
-  await waitUntil(() => realtimeReady, 'official realtime adapter session update');
+  await waitUntil(() => realtimeReady && greetingSettled, 'official realtime adapter greeting completion and VAD restoration');
   carrier.send(JSON.stringify({ event: 'media', streamSid: 'MZ-fixture', media: { payload: Buffer.alloc(160, 0xff).toString('base64'), timestamp: '0' } }));
   await waitUntil(() => finalToolResult !== undefined, 'real agent completion returned to realtime transport');
   assert.equal(modelRequests.length, 1, 'Expected one normal agent model request, with no retries');
