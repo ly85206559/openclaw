@@ -1,0 +1,106 @@
+name: Users Gateway options fixed proof
+
+on:
+  push:
+    branches: [codex/users-gateway-options-fixed-proof-20261101]
+
+permissions:
+  contents: read
+
+jobs:
+  runtime:
+    if: github.repository == 'ly85206559/openclaw' && github.event.repository.fork == true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: controller
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ly85206559/openclaw
+          ref: eff4c0869e2e9487fa02120eb6b9e981a6f1e7b2
+          path: source
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: 24.22.1
+      - uses: ./source/.github/actions/setup-pnpm-store-cache
+        with:
+          package-manager-file: source/package.json
+          lockfile-path: source/pnpm-lock.yaml
+          node-version: 24.22.1
+          cache-mode: off
+      - name: Install pinned source
+        working-directory: source
+        run: pnpm install --frozen-lockfile
+      - name: Canonical runtime build
+        working-directory: source
+        run: pnpm build:runtime
+      - name: Actual Gateway and users CLI
+        run: node controller/proof/users-gateway-options-fixed.mjs source artifacts
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: users-gateway-options-fixed-runtime
+          path: artifacts
+          if-no-files-found: error
+          retention-days: 14
+  checks:
+    if: github.repository == 'ly85206559/openclaw' && github.event.repository.fork == true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ly85206559/openclaw
+          ref: eff4c0869e2e9487fa02120eb6b9e981a6f1e7b2
+          path: source
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: 24.22.1
+      - uses: ./source/.github/actions/setup-pnpm-store-cache
+        with:
+          package-manager-file: source/package.json
+          lockfile-path: source/pnpm-lock.yaml
+          node-version: 24.22.1
+          cache-mode: off
+      - name: Install pinned source
+        working-directory: source
+        run: pnpm install --frozen-lockfile
+      - name: Focused owner and shared transport tests
+        working-directory: source
+        run: |
+          mkdir -p ../artifacts
+          pnpm test src/cli/users-cli.test.ts src/cli/gateway-rpc.runtime.test.ts --maxWorkers=1 2>&1 | tee ../artifacts/focused-tests.log
+      - name: Documentation inventory
+        working-directory: source
+        run: pnpm docs:list 2>&1 | tee ../artifacts/docs-list.log
+      - name: Record canonical changed-file plan
+        working-directory: source
+        run: |
+          node scripts/check-changed.mjs --dry-run -- src/cli/users-cli.ts src/cli/users-cli.test.ts docs/cli/users.md 2>&1 | tee ../artifacts/changed-plan.log
+      - name: Scoped types lint and format
+        working-directory: source
+        run: |
+          pnpm tsgo:core 2>&1 | tee ../artifacts/core-types.log
+          node scripts/run-tsgo-core-test-shards.mjs --changed-paths-json '["src/cli/users-cli.test.ts"]' 2>&1 | tee ../artifacts/test-types.log
+          node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.core.json src/cli/users-cli.ts src/cli/users-cli.test.ts 2>&1 | tee ../artifacts/lint.log
+          pnpm format:check --no-error-on-unmatched-pattern -- src/cli/users-cli.ts src/cli/users-cli.test.ts docs/cli/users.md 2>&1 | tee ../artifacts/format.log
+      - name: Verify exact source and unchanged tracked files
+        working-directory: source
+        run: |
+          test "$(git rev-parse HEAD)" = eff4c0869e2e9487fa02120eb6b9e981a6f1e7b2
+          test -z "$(git status --porcelain --untracked-files=no)"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: users-gateway-options-fixed-checks
+          path: artifacts
+          if-no-files-found: error
+          retention-days: 14
