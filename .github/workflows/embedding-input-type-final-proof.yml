@@ -1,0 +1,110 @@
+name: Embedding input type final head proof
+
+on:
+  push:
+    branches: [codex/embedding-input-type-final-proof-20261101]
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  final-checks:
+    if: github.repository == 'ly85206559/openclaw' && github.event.repository.fork == true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ly85206559/openclaw
+          ref: 2fbcbf4ebdef72341ba130309bed5d2e46e61924
+          fetch-depth: 3
+          path: source
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: 24.22.1
+      - uses: ./source/.github/actions/setup-pnpm-store-cache
+        with:
+          package-manager-file: source/package.json
+          lockfile-path: source/pnpm-lock.yaml
+          node-version: 24.22.1
+          cache-mode: off
+      - name: Verify exact head and mechanical scope
+        working-directory: source
+        run: |
+          mkdir -p ../artifacts
+          git diff --no-ext-diff --no-textconv --binary a3534d43aa38dfaf24c8d60baa9f549cb4d686d1 HEAD > ../artifacts/final-vs-runtime-head.patch
+          git diff --numstat a3534d43aa38dfaf24c8d60baa9f549cb4d686d1 HEAD > ../artifacts/final-vs-runtime-head.numstat.txt
+          git show a3534d43aa38dfaf24c8d60baa9f549cb4d686d1:src/cli/capability-cli.embedding.test-support.ts > ../artifacts/helper.runtime-head.ts
+          cp src/cli/capability-cli.embedding.test-support.ts ../artifacts/helper.final-head.ts
+          git show a3534d43aa38dfaf24c8d60baa9f549cb4d686d1:config/test-lines-allocations/embedding-input-type.txt > ../artifacts/allocation.runtime-head.txt
+          cp config/test-lines-allocations/embedding-input-type.txt ../artifacts/allocation.final-head.txt
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { execFileSync } from 'node:child_process';
+          import { createHash } from 'node:crypto';
+          import fs from 'node:fs/promises';
+          const head = '2fbcbf4ebdef72341ba130309bed5d2e46e61924';
+          const prior = 'a3534d43aa38dfaf24c8d60baa9f549cb4d686d1';
+          const base = '39629c6aa82ce444f14c37fc1d4d47e5c7f661d0';
+          const helper = 'src/cli/capability-cli.embedding.test-support.ts';
+          const canonicalHelperSha256 = 'c80edea55d6e51989ccfd92c64086abc6a34fcd85cb26d952de039e13fcc6f93';
+          const allocation = 'config/test-lines-allocations/embedding-input-type.txt';
+          const git = (...args) => execFileSync('git', args, { timeout: 10000 });
+          assert.equal(git('rev-parse', 'HEAD').toString().trim(), head);
+          assert.equal(git('status', '--porcelain').toString(), '');
+          assert.deepEqual(git('diff', '--name-only', prior, 'HEAD').toString().trim().split('\n').sort(), [allocation, helper].sort());
+          const count = (bytes) => bytes.reduce((total, value) => total + Number(value === 10), 0);
+          const baselineNewlines = count(git('show', `${base}:${helper}`));
+          const current = await fs.readFile(helper);
+          assert.equal(createHash('sha256').update(current).digest('hex'), canonicalHelperSha256);
+          const currentNewlines = count(current);
+          const allocationText = await fs.readFile(allocation, 'utf8');
+          const allocationValue = Number(allocationText.split('\n').map((line) => line.split('#')[0].trim()).find(Boolean));
+          assert.equal(allocationValue, currentNewlines - baselineNewlines);
+          const receipt = {
+            head, prior, base, baselineNewlines, currentNewlines, allocationValue,
+            onlyHelperAndAllocationChanged: true,
+            canonicalFormatterRun: 41293239367, canonicalHelperSha256,
+            helperMatchesCanonicalFormatArtifact: true,
+            productionDocsAndSdkUnchanged: true,
+            runtimeProofReusedFromUnchangedProduction: true,
+          };
+          await fs.writeFile('../artifacts/mechanical-scope.json', JSON.stringify(receipt, null, 2) + '\n');
+          console.log(JSON.stringify(receipt));
+          NODE
+      - name: Install pinned source
+        working-directory: source
+        run: |
+          /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/install.wall.txt pnpm install --frozen-lockfile 2>&1 | tee ../artifacts/install.log
+      - name: Full capability CLI owner test file
+        working-directory: source
+        run: |
+          /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/tests.wall.txt pnpm test src/cli/capability-cli.test.ts --maxWorkers=1 2>&1 | tee ../artifacts/focused-tests.log
+      - name: Canonical format
+        working-directory: source
+        run: |
+          /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/format.wall.txt pnpm format:check --no-error-on-unmatched-pattern -- src/cli/capability-cli/embedding.ts src/cli/capability-cli.embedding.test-support.ts docs/cli/infer.md config/test-lines-allocations/embedding-input-type.txt 2>&1 | tee ../artifacts/format.log
+      - name: Test line budget and documentation inventory
+        working-directory: source
+        run: |
+          /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/test-lines.wall.txt pnpm check:test-lines-ratchet --base 39629c6aa82ce444f14c37fc1d4d47e5c7f661d0 2>&1 | tee ../artifacts/test-lines.log
+          /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/docs-list.wall.txt pnpm docs:list 2>&1 | tee ../artifacts/docs-list.log
+      - name: Verify final source identity and cleanliness
+        working-directory: source
+        run: |
+          git rev-parse HEAD > ../artifacts/source-head.txt
+          git status --porcelain > ../artifacts/source-status.txt
+          test "$(git rev-parse HEAD)" = 2fbcbf4ebdef72341ba130309bed5d2e46e61924
+          test -z "$(git status --porcelain)"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: embedding-input-type-final-head-proof
+          path: artifacts
+          if-no-files-found: error
+          retention-days: 14
