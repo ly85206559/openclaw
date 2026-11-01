@@ -118,6 +118,7 @@ jobs:
             Write-Host 'REGRESSION_CANDIDATE=PASSED'
           }
       - name: Exercise real versioned Node and native PTY
+        timeout-minutes: 3
         run: |
           $taskRuntime = Join-Path $env:RUNNER_TEMP ('openclaw-proof-node-' + [guid]::NewGuid())
           New-Item -ItemType Directory -Path $taskRuntime -ErrorAction Stop | Out-Null
