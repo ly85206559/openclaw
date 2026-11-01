@@ -1,0 +1,95 @@
+name: Control UI base comparison conflict proof (review draft)
+
+on:
+  push:
+    branches: [codex/proof-176094-bun-20261101]
+    paths:
+      - .github/workflows/proof-control-ui-176094.yml
+      - .github/proof/pr-176094.sh
+      - .github/proof/pr-176094-cli.mjs
+
+permissions:
+  contents: read
+
+jobs:
+  proof:
+    if: github.repository == 'ly85206559/openclaw'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    env:
+      CI: "true"
+      SOURCE_SHA: 7c56f9aad4d08e704477d3658b1b2ba6609c2a22
+      OLD_SHA: a808a2d2dae4ab4dac1f3ff5bc77f2399fa8ded2
+      BASE_SHA: 1e293027afc0cfdf29b093ebef29193d444f6b1d
+      FIRST_PARENT: 3c22172e91d8db5d748fd7e08eaca4ef2353d581
+      SOURCE_TREE: f82bdc6b44ed6bec72a13be62d7e9cf67025a90c
+      PROOF_BLOB: 491c5ad11c68bc8726d4f1f0e24b6610feca25f1
+      CLI_PROOF_BLOB: 8d4e94f74ffb806db3c483579488d0cf0de53f91
+      OPENCLAW_VITEST_MAX_WORKERS: "1"
+      OPENCLAW_TEST_PROJECTS_PARALLEL: "1"
+    defaults:
+      run:
+        shell: bash
+        working-directory: source
+    steps:
+      - name: Checkout exact candidate at a normal path for test and dependency setup
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          repository: ly85206559/openclaw
+          ref: ${{ env.SOURCE_SHA }}
+          path: source
+          fetch-depth: 3
+          persist-credentials: false
+      - name: Checkout exact carrier proof
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          repository: ly85206559/openclaw
+          ref: ${{ github.sha }}
+          path: carrier
+          sparse-checkout: |
+            /.github/proof/pr-176094.sh
+            /.github/proof/pr-176094-cli.mjs
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - name: Verify carrier identity
+        run: |
+          set -euo pipefail
+          test "$(git -C ../carrier rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git -C ../carrier rev-parse HEAD:.github/proof/pr-176094.sh)" = "$PROOF_BLOB"
+          test "$(git hash-object ../carrier/.github/proof/pr-176094.sh)" = "$PROOF_BLOB"
+          test "$(git -C ../carrier rev-parse HEAD:.github/proof/pr-176094-cli.mjs)" = "$CLI_PROOF_BLOB"
+          test "$(git hash-object ../carrier/.github/proof/pr-176094-cli.mjs)" = "$CLI_PROOF_BLOB"
+          git -C ../carrier diff --exit-code
+          git -C ../carrier diff --cached --exit-code
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 26.8.2
+      - name: Set up the repository-pinned test Bun
+        uses: ./source/.github/actions/setup-test-bun
+      - name: Set up the repository-declared pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
+        with:
+          package_json_file: source/package.json
+      - name: Install locked dependencies without user secrets
+        run: |
+          set -euo pipefail
+          expected_pnpm="$(node -p 'JSON.parse(require("node:fs").readFileSync("package.json", "utf8")).packageManager.match(/^pnpm@([^+]+)/)[1]')"
+          test "$(pnpm --version)" = "$expected_pnpm"
+          pnpm install --frozen-lockfile
+      - name: Prove actual command, regression, and complete focused suite
+        run: bash ../carrier/.github/proof/pr-176094.sh
+      - name: Preserve synthetic proof logs and test reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: control-ui-conflict-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/pr176094-*.log
+            ${{ runner.temp }}/pr176094-cli-receipt.json
+            ${{ runner.temp }}/main-test.json
+            ${{ runner.temp }}/old-bun.json
+            ${{ runner.temp }}/candidate-node.json
+            ${{ runner.temp }}/candidate-bun.json
+          if-no-files-found: warn
+          retention-days: 14
