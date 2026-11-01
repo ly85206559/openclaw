@@ -181,6 +181,7 @@ async function main() {
     await writeFile(
       path.join(fixtureDir, "cli.cjs"),
       [
+        "#!/usr/bin/env node",
         'const fs = require("node:fs");',
         'const path = require("node:path");',
         'const hasNode = (process.env.PATH || "").split(path.delimiter).filter(Boolean).some((dir) => fs.existsSync(path.join(dir, "node.exe")));',
