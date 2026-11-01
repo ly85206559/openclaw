@@ -1,0 +1,69 @@
+name: Users Gateway options final metadata proof
+
+on:
+  push:
+    branches: [codex/users-gateway-options-final-proof-20261101]
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    if: github.repository == 'ly85206559/openclaw' && github.event.repository.fork == true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ly85206559/openclaw
+          ref: f93aa537b8a99bea4409378e69de3f8e05e3870f
+          fetch-depth: 3
+          path: source
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: 24.22.1
+      - uses: ./source/.github/actions/setup-pnpm-store-cache
+        with:
+          package-manager-file: source/package.json
+          lockfile-path: source/pnpm-lock.yaml
+          node-version: 24.22.1
+          cache-mode: off
+      - name: Install pinned source
+        working-directory: source
+        run: |
+          mkdir -p ../artifacts
+          pnpm install --frozen-lockfile 2>&1 | tee ../artifacts/install.log
+      - name: Standalone touched test file wall time
+        working-directory: source
+        run: |
+          /usr/bin/time -f '%e' -o ../artifacts/users-cli.wall-seconds.txt pnpm test src/cli/users-cli.test.ts --maxWorkers=1 2>&1 | tee ../artifacts/users-cli.test.log
+      - name: Final test line allocation
+        working-directory: source
+        run: pnpm check:test-lines-ratchet --base 39629c6aa82ce444f14c37fc1d4d47e5c7f661d0 2>&1 | tee ../artifacts/test-lines-ratchet.log
+      - name: Canonical allocation format check
+        working-directory: source
+        run: pnpm format:check --no-error-on-unmatched-pattern -- config/test-lines-allocations/users-gateway-options.txt 2>&1 | tee ../artifacts/allocation-format.log
+      - name: Verify final source and reused product blobs
+        if: always()
+        working-directory: source
+        run: |
+          mkdir -p ../artifacts
+          actual_head=$(git rev-parse HEAD)
+          printf 'HEAD=%s\n' "$actual_head" | tee ../artifacts/source-verification.log
+          test "$actual_head" = f93aa537b8a99bea4409378e69de3f8e05e3870f
+          git diff --exit-code eff4c0869e2e9487fa02120eb6b9e981a6f1e7b2 HEAD -- src/cli/users-cli.ts src/cli/users-cli.test.ts docs/cli/users.md 2>&1 | tee -a ../artifacts/source-verification.log
+          tracked_status=$(git status --porcelain --untracked-files=no)
+          printf 'Tracked status: %s\n' "$tracked_status" | tee -a ../artifacts/source-verification.log
+          test -z "$tracked_status"
+          printf '%s\n' 'Exact final head; prior-runtime product blobs unchanged; tracked source clean.' | tee -a ../artifacts/source-verification.log
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: users-gateway-options-final-metadata-checks
+          path: artifacts
+          if-no-files-found: error
+          retention-days: 14
