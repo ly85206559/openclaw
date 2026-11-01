@@ -1,0 +1,89 @@
+name: PR 151009 Windows Gateway terminal proof
+
+on:
+  push:
+    branches: [codex/proof-151009-gateway-20261101]
+
+permissions:
+  contents: read
+
+jobs:
+  windows-gateway:
+    name: Windows Gateway / ${{ matrix.phase }}
+    runs-on: windows-2025
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        phase: [baseline, candidate, path-fallback]
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      BASE_SHA: 1e293027afc0cfdf29b093ebef29193d444f6b1d
+      CANDIDATE_SHA: 6a85d36ab4c2ca98d57ac0ac8810e10682fe3513
+      PROOF_PHASE: ${{ matrix.phase }}
+      COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
+    steps:
+      - name: Check out proof controller
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: controller
+          persist-credentials: false
+      - name: Refuse unexpected repository
+        run: |
+          if ($env:GITHUB_REPOSITORY -cne 'ly85206559/openclaw') { throw 'Unexpected repository.' }
+          if ($env:PROOF_PHASE -cnotin @('baseline', 'candidate', 'path-fallback')) { throw 'Unexpected phase.' }
+      - name: Check out exact OpenClaw source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ly85206559/openclaw
+          ref: ${{ matrix.phase == 'candidate' && '6a85d36ab4c2ca98d57ac0ac8810e10682fe3513' || '1e293027afc0cfdf29b093ebef29193d444f6b1d' }}
+          path: source
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.22.1
+      - name: Set up pinned pnpm without cache
+        uses: ./source/.github/actions/setup-pnpm-store-cache
+        with:
+          package-manager-file: source/package.json
+          lockfile-path: source/pnpm-lock.yaml
+          node-version: 24.22.1
+          cache-mode: off
+      - name: Install and build the shipped runtime entry
+        working-directory: source
+        run: |
+          $expected = if ($env:PROOF_PHASE -eq 'candidate') { $env:CANDIDATE_SHA } else { $env:BASE_SHA }
+          if ((git rev-parse HEAD) -cne $expected) { throw 'Unexpected source head.' }
+          if ((node --version) -cne 'v24.22.1' -or (pnpm --version) -cne '12.15.0') { throw 'Unexpected runtime.' }
+          pnpm install --frozen-lockfile
+          if ($LASTEXITCODE -ne 0) { throw 'Frozen install failed.' }
+          pnpm build:runtime
+          if ($LASTEXITCODE -ne 0) { throw 'Runtime build failed.' }
+          git diff --quiet
+          if ($LASTEXITCODE -ne 0) { throw 'Build modified tracked source.' }
+          git diff --cached --quiet
+          if ($LASTEXITCODE -ne 0) { throw 'Build modified source index.' }
+          if (-not (Test-Path -LiteralPath 'dist/entry.js')) { throw 'Built runtime entry is missing.' }
+          Write-Host "BUILT_SOURCE=$expected"
+      - name: Exercise the real Gateway terminal RPC
+        timeout-minutes: 8
+        run: |
+          $nodeDir = Split-Path (Get-Command node.exe).Source
+          $npmCli = Join-Path $nodeDir 'node_modules/npm/bin/npm-cli.js'
+          if (-not (Test-Path -LiteralPath $npmCli)) { throw 'Bundled npm CLI is missing.' }
+          $source = (Resolve-Path 'source').Path
+          $proof = (Resolve-Path 'controller/proof/pr-151009-gateway-windows.mjs').Path
+          node $proof $source $npmCli $env:PROOF_PHASE
+          if ($LASTEXITCODE -ne 0) { throw 'Gateway proof failed.' }
+          $expected = if ($env:PROOF_PHASE -eq 'candidate') { $env:CANDIDATE_SHA } else { $env:BASE_SHA }
+          if ((git -C source rev-parse HEAD) -cne $expected) { throw 'Source head drifted.' }
+          git -C source diff --quiet
+          if ($LASTEXITCODE -ne 0) { throw 'Proof modified tracked source.' }
+          git -C source diff --cached --quiet
+          if ($LASTEXITCODE -ne 0) { throw 'Proof modified source index.' }
+          Write-Host "FINAL_SOURCE=$expected"
