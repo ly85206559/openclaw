@@ -1,0 +1,84 @@
+name: Voice transcript Unicode baseline
+
+on:
+  push:
+    branches: [codex/voice-transcript-unicode-proof-20261101]
+
+permissions:
+  contents: read
+
+jobs:
+  baseline:
+    if: github.repository == 'ly85206559/openclaw' && github.event.repository.fork == true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: controller
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: openclaw/openclaw
+          ref: 39629c6aa82ce444f14c37fc1d4d47e5c7f661d0
+          path: source
+          persist-credentials: false
+      - name: Record pinned inputs and apply only the regression
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          git -C controller rev-parse HEAD > artifacts/controller-head.txt
+          git -C source rev-parse HEAD > artifacts/source-head.txt
+          test "$(cat artifacts/source-head.txt)" = 39629c6aa82ce444f14c37fc1d4d47e5c7f661d0
+          git -C source rev-parse HEAD:extensions/voice-call/src/webhook/realtime-transcript-text.ts > artifacts/production-blob-before.txt
+          git -C source show HEAD:extensions/voice-call/src/webhook/realtime-transcript-text.ts > artifacts/production-source.ts
+          cp controller/proof/voice-transcript-unicode-regression.patch artifacts/regression.patch
+          git -C source apply --check ../controller/proof/voice-transcript-unicode-regression.patch
+          git -C source apply ../controller/proof/voice-transcript-unicode-regression.patch
+          git -C source diff -- extensions/voice-call/src/webhook/realtime-handler.test.ts > artifacts/applied-test.patch
+          cat > artifacts/expected-diagnostic.txt <<'EOF'
+          No automatic reproduction verdict is assigned by this workflow.
+          Expected: exactly one selected test fails an assertion comparing the host consult question with "Meet in İstanbul tomorrow"; the baseline loses the space before "tomorrow". JSON must show zero unhandled runtime errors, and JUnit/raw output must agree. Setup errors, collection failures, timeouts, or an arbitrary nonzero exit are not reproduction proof.
+          Boundary: loopback carrier admission and actual provider callback -> RealtimeCallHandler -> host consult input. This is not vendor/STT live audio, model execution, or database persistence proof. Unselected tests are not counted as passing.
+          EOF
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: 24.22.1
+      - uses: ./source/.github/actions/setup-pnpm-store-cache
+        with:
+          package-manager-file: source/package.json
+          lockfile-path: source/pnpm-lock.yaml
+          node-version: 24.22.1
+          cache-mode: off
+      - name: Install pinned source
+        working-directory: source
+        run: pnpm install --frozen-lockfile
+      - name: Run only the Unicode consult regression
+        working-directory: source
+        shell: bash
+        run: |
+          set +e
+          pnpm test extensions/voice-call/src/webhook/realtime-handler.test.ts --maxWorkers=1 -t "settles Unicode overlap fragments before consulting" --reporter=verbose --reporter=json --reporter=junit --outputFile.json=../artifacts/results.json --outputFile.junit=../artifacts/results.xml > ../artifacts/test.log 2>&1
+          test_status=$?
+          printf '%s\n' "$test_status" > ../artifacts/test-exit-code.txt
+          cat ../artifacts/test.log
+          exit "$test_status"
+      - name: Record final source state
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          if git -C source rev-parse --is-inside-work-tree > /dev/null 2>&1; then
+            git -C source rev-parse HEAD > artifacts/source-head-after.txt
+            git -C source hash-object extensions/voice-call/src/webhook/realtime-transcript-text.ts > artifacts/production-blob-after.txt
+            git -C source status --short > artifacts/source-status-after.txt
+            git -C source diff > artifacts/source-diff-after.patch
+            cmp artifacts/production-blob-before.txt artifacts/production-blob-after.txt
+          fi
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: voice-transcript-unicode-baseline
+          path: artifacts
+          if-no-files-found: error
+          retention-days: 14
