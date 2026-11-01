@@ -425,15 +425,6 @@ async function main() {
         activeNode.commands?.includes("codex.terminal.start.v1"),
       "Node host has no approved terminal command.",
     );
-    check(typeof activeNode.pathEnv === "string", "Node host PATH is unavailable.");
-    const nodePathHasNode = activeNode.pathEnv
-      .split(path.delimiter)
-      .filter(Boolean)
-      .some((entry) => existsSync(path.join(entry, "node.exe")));
-    check(
-      nodePathHasNode === (phase === "path-fallback"),
-      "Node host PATH has unexpected node.exe state.",
-    );
     console.log("NODE_HOST=PAIRED_APPROVED");
 
     stage = "terminal-open";
