@@ -37,7 +37,7 @@ jobs:
         run: |
           set -euo pipefail
           apt-get update -qq
-          apt-get install -y ca-certificates git ripgrep curl xz-utils libatomic1 python3 python3-venv time
+          apt-get install -y ca-certificates git ripgrep curl xz-utils unzip libatomic1 python3 python3-venv time
       - name: Check out the pinned product source
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
@@ -54,6 +54,7 @@ jobs:
           persist-credentials: false
           fetch-depth: 1
       - name: Assert source, merge, diff, and original harness identity
+        id: source_identity
         run: |
           set -euo pipefail
           git config --global --add safe.directory "$PWD"
@@ -95,21 +96,47 @@ jobs:
       - name: Install frozen dependencies without secrets
         run: pnpm install --frozen-lockfile
       - name: Reject untracked source after dependency installation
+        id: clean_source
         run: |
           set -euo pipefail
           git diff --exit-code
           git diff --cached --exit-code
           test -z "$(git ls-files --others --exclude-standard)"
           test -z "$(git ls-files --others -- src/ scripts/)"
-      - name: Check formatting and lint on the four changed files
+      - name: Check formatting on the four changed files
+        id: format_check
+        continue-on-error: true
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
           changed_paths=(src/meeting-bot/realtime-local-audio-transport.test.ts src/meeting-bot/realtime-local-audio-transport.ts src/meeting-bot/realtime-output-owner.test.ts src/meeting-bot/realtime-output-owner.ts)
           pnpm exec oxfmt --check "${changed_paths[@]}"
-          node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.core.json "${changed_paths[@]}"
           git diff --check "$BASE_SHA"...HEAD
+      - name: Prepare the source-pinned Bun fork for lint parity
+        id: pinned_bun
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          command -v unzip
+          command -v shasum
+          stage="$RUNNER_TEMP/openclaw-pinned-bun"
+          test ! -e "$stage"
+          bash scripts/stage-openclaw-bun.sh "$stage" linux x64
+          test -x "$stage/bin/bun"
+          printf 'OPENCLAW_BUN_PATH=%s\n' "$stage/bin/bun" >> "$GITHUB_ENV"
+      - name: Run four-file lint including Bun parity
+        id: lint_check
+        if: ${{ steps.pinned_bun.outcome == 'success' }}
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          changed_paths=(src/meeting-bot/realtime-local-audio-transport.test.ts src/meeting-bot/realtime-local-audio-transport.ts src/meeting-bot/realtime-output-owner.test.ts src/meeting-bot/realtime-output-owner.ts)
+          node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.core.json "${changed_paths[@]}"
       - name: Reproduce both clock regressions with the candidate tests on the frozen base
+        id: focused_red
+        continue-on-error: true
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
@@ -207,6 +234,8 @@ jobs:
           done
           cleanup_baseline
       - name: Run both focused native audio suites without retries
+        id: focused_green
+        continue-on-error: true
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
@@ -239,6 +268,8 @@ jobs:
           NODE
           done
       - name: Prove baseline clock defects and candidate fixes through real native child processes
+        id: runtime_proof
+        continue-on-error: true
         run: |
           set -euo pipefail
           harness="$PWD/.artifacts/proof-input/.github/proof/pr-155850-native-runtime.mts"
@@ -316,6 +347,8 @@ jobs:
           done
           test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
       - name: Inspect canonical changed-surface targeting at the exact candidate
+        id: changed_target
+        continue-on-error: true
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
@@ -325,6 +358,7 @@ jobs:
           printf 'Targeting only: broad typecheck and CI gates remain assigned to upstream exact-head PR CI; they are not executed by this focused proof.\n'
           git diff --check "$BASE_SHA"...HEAD
       - name: Verify final source and proof identity
+        id: final_identity
         if: always()
         run: |
           set -euo pipefail
@@ -340,3 +374,24 @@ jobs:
           test "$(git hash-object .artifacts/proof-input/.github/proof/pr-155850-native-runtime.mts)" = "$HARNESS_BLOB"
           git -C .artifacts/proof-input diff --exit-code
           printf 'SOURCE_SHA=%s BASE_SHA=%s HARNESS_BLOB=%s tracked_source_clean=true\n' "$SOURCE_SHA" "$BASE_SHA" "$HARNESS_BLOB"
+      - name: Enforce all format, lint, identity and proof outcomes
+        if: always()
+        env:
+          SOURCE_IDENTITY: ${{ steps.source_identity.outcome }}
+          CLEAN_SOURCE: ${{ steps.clean_source.outcome }}
+          FORMAT_CHECK: ${{ steps.format_check.outcome }}
+          PINNED_BUN: ${{ steps.pinned_bun.outcome }}
+          LINT_CHECK: ${{ steps.lint_check.outcome }}
+          FOCUSED_RED: ${{ steps.focused_red.outcome }}
+          FOCUSED_GREEN: ${{ steps.focused_green.outcome }}
+          RUNTIME_PROOF: ${{ steps.runtime_proof.outcome }}
+          CHANGED_TARGET: ${{ steps.changed_target.outcome }}
+          FINAL_IDENTITY: ${{ steps.final_identity.outcome }}
+        run: |
+          set -euo pipefail
+          result=0
+          for name in SOURCE_IDENTITY CLEAN_SOURCE FORMAT_CHECK PINNED_BUN LINT_CHECK FOCUSED_RED FOCUSED_GREEN RUNTIME_PROOF CHANGED_TARGET FINAL_IDENTITY; do
+            printf '%s=%s\n' "$name" "${!name}"
+            if [ "${!name}" != success ]; then result=1; fi
+          done
+          exit "$result"
