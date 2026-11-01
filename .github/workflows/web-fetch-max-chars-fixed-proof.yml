@@ -1,0 +1,141 @@
+name: Web fetch max chars fixed proof
+
+on:
+  push:
+    branches: [codex/web-fetch-max-chars-fixed-proof-20261101]
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  runtime:
+    if: github.repository == 'ly85206559/openclaw' && github.event.repository.fork == true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: controller
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ly85206559/openclaw
+          ref: f55f8bc84e9c7470f4573af5ba38aaef07da0438
+          fetch-depth: 3
+          path: source
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: 24.22.1
+      - uses: ./source/.github/actions/setup-pnpm-store-cache
+        with:
+          package-manager-file: source/package.json
+          lockfile-path: source/pnpm-lock.yaml
+          node-version: 24.22.1
+          cache-mode: off
+      - name: Install exact product source
+        working-directory: source
+        run: |
+          mkdir -p ../artifacts
+          /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/install.wall.txt pnpm install --frozen-lockfile 2>&1 | tee ../artifacts/install.log
+      - name: Canonical runtime build
+        working-directory: source
+        run: |
+          /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/build.wall.txt pnpm build:runtime 2>&1 | tee ../artifacts/build.log
+      - name: Actual CLI default fetch and bundled provider HTTP
+        run: |
+          /usr/bin/time -f 'wall_seconds=%e' -o artifacts/runtime.wall.txt node controller/proof/web-fetch-max-chars-fixed.mjs source artifacts 2>&1 | tee artifacts/runtime.log
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: web-fetch-max-chars-fixed-runtime
+          path: artifacts
+          if-no-files-found: error
+          retention-days: 14
+
+  checks:
+    if: github.repository == 'ly85206559/openclaw' && github.event.repository.fork == true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ly85206559/openclaw
+          ref: f55f8bc84e9c7470f4573af5ba38aaef07da0438
+          fetch-depth: 3
+          path: source
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: 24.22.1
+      - uses: ./source/.github/actions/setup-pnpm-store-cache
+        with:
+          package-manager-file: source/package.json
+          lockfile-path: source/pnpm-lock.yaml
+          node-version: 24.22.1
+          cache-mode: off
+      - name: Install exact product source
+        working-directory: source
+        run: |
+          mkdir -p ../artifacts
+          /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/install.wall.txt pnpm install --frozen-lockfile 2>&1 | tee ../artifacts/install.log
+      - name: Complete capability CLI owner tests
+        working-directory: source
+        run: |
+          /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/tests.wall.txt pnpm test src/cli/capability-cli.test.ts --maxWorkers=1 2>&1 | tee ../artifacts/focused-tests.log
+      - name: Core and affected command test types
+        working-directory: source
+        run: |
+          /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/core-types.wall.txt pnpm tsgo:core 2>&1 | tee ../artifacts/core-types.log
+          /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/test-types.wall.txt node scripts/run-tsgo-core-test-shards.mjs --changed-paths-json '["src/cli/capability-cli.test.ts"]' 2>&1 | tee ../artifacts/test-types.log
+      - name: Typed lint
+        working-directory: source
+        run: |
+          /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/lint.wall.txt node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.core.json src/cli/capability-cli/web.ts src/cli/capability-cli.test.ts 2>&1 | tee ../artifacts/lint.log
+      - name: Canonical format
+        id: format
+        working-directory: source
+        run: |
+          /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/format.wall.txt pnpm format:check -- src/cli/capability-cli/web.ts src/cli/capability-cli.test.ts docs/cli/infer.md 2>&1 | tee ../artifacts/format.log
+      - name: Assertion, suppression, line cap, and test allocation ratchets
+        working-directory: source
+        run: |
+          /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/assertion-safety.wall.txt pnpm check:assertion-safety --base 39629c6aa82ce444f14c37fc1d4d47e5c7f661d0 --no-merge-base 2>&1 | tee ../artifacts/assertion-safety.log
+          /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/max-lines.wall.txt pnpm check:max-lines-ratchet --base 39629c6aa82ce444f14c37fc1d4d47e5c7f661d0 2>&1 | tee ../artifacts/max-lines.log
+          /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/line-cap.wall.txt pnpm check:line-cap-ratchet --base 39629c6aa82ce444f14c37fc1d4d47e5c7f661d0 2>&1 | tee ../artifacts/line-cap.log
+          /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/test-lines.wall.txt pnpm check:test-lines-ratchet --base 39629c6aa82ce444f14c37fc1d4d47e5c7f661d0 2>&1 | tee ../artifacts/test-lines.log
+      - name: Documentation inventory
+        working-directory: source
+        run: |
+          /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/docs-list.wall.txt pnpm docs:list 2>&1 | tee ../artifacts/docs-list.log
+      - name: Record exact checked source
+        if: always()
+        working-directory: source
+        run: |
+          mkdir -p ../artifacts
+          git rev-parse HEAD > ../artifacts/source-head.txt
+          git status --porcelain --untracked-files=no > ../artifacts/source-status.txt
+          git diff --numstat 39629c6aa82ce444f14c37fc1d4d47e5c7f661d0 HEAD > ../artifacts/product.numstat.txt
+          test "$(git rev-parse HEAD)" = f55f8bc84e9c7470f4573af5ba38aaef07da0438
+          test ! -s ../artifacts/source-status.txt
+      - name: Canonical formatter output diagnostic
+        if: failure() && steps.format.outcome == 'failure'
+        working-directory: source
+        run: |
+          pnpm format -- src/cli/capability-cli/web.ts src/cli/capability-cli.test.ts docs/cli/infer.md 2>&1 | tee ../artifacts/formatter-diagnostic.log
+          cp src/cli/capability-cli/web.ts ../artifacts/canonical-web.ts
+          cp src/cli/capability-cli.test.ts ../artifacts/canonical-capability.test.ts
+          cp docs/cli/infer.md ../artifacts/canonical-infer.md
+          git diff > ../artifacts/canonical-format.patch
+          git status --porcelain > ../artifacts/source-status-after-diagnostic.txt
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: web-fetch-max-chars-fixed-checks
+          path: artifacts
+          if-no-files-found: error
+          retention-days: 14
