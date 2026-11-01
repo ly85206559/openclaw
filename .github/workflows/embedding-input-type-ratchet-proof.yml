@@ -1,0 +1,93 @@
+name: Embedding typed final ratchet proof
+
+on:
+  push:
+    branches: [codex/embedding-input-type-ratchet-proof-20261101]
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  final-ratchets:
+    if: github.repository == 'ly85206559/openclaw' && github.event.repository.fork == true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ly85206559/openclaw
+          ref: 8158204fb48e59c8abb4c606f1a22237bfbe7838
+          fetch-depth: 6
+          path: source
+          persist-credentials: false
+      - name: Verify allowance-only final change
+        working-directory: source
+        run: |
+          mkdir -p ../artifacts
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { execFileSync } from 'node:child_process';
+          import fs from 'node:fs/promises';
+          const head = '8158204fb48e59c8abb4c606f1a22237bfbe7838';
+          const runtimeHead = '0eae003d1071c9f2f3446f5bc265088b0eb47a7a';
+          const baseline = 'config/assertion-safety-baseline.txt';
+          const retired = 'src/cli/capability-cli/embedding.ts\t2\n';
+          const git = (...args) => execFileSync('git', args, { encoding: 'utf8', timeout: 10000 });
+          assert.equal(git('rev-parse', 'HEAD').trim(), head);
+          assert.equal(git('status', '--porcelain'), '');
+          assert.deepEqual(git('diff', '--name-only', runtimeHead, head).trim().split('\n'), [baseline]);
+          const before = git('show', runtimeHead + ':' + baseline);
+          const after = await fs.readFile(baseline, 'utf8');
+          assert.equal(before.split(retired).length, 2);
+          assert.equal(after, before.replace(retired, ''));
+          const receipt = {
+            head, runtimeHead, retiredAllowance: 2, newAllowance: 0,
+            onlyStaleAllowanceRemoved: true,
+            productionTestsDocsAndSdkUnchanged: true,
+            runtimeTestsTypesLintAndFormatReusedFromRun: 41296238514,
+            priorRunOverallFailure: 'stale assertion allowance; not product green',
+          };
+          await fs.writeFile('../artifacts/final-scope.json', JSON.stringify(receipt, null, 2) + '\n');
+          console.log(JSON.stringify(receipt));
+          NODE
+          git diff 0eae003d1071c9f2f3446f5bc265088b0eb47a7a HEAD > ../artifacts/final-vs-runtime-head.patch
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: 24.22.1
+      - uses: ./source/.github/actions/setup-pnpm-store-cache
+        with:
+          package-manager-file: source/package.json
+          lockfile-path: source/pnpm-lock.yaml
+          node-version: 24.22.1
+          cache-mode: off
+      - name: Install pinned source
+        working-directory: source
+        run: |
+          /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/install.wall.txt pnpm install --frozen-lockfile 2>&1 | tee ../artifacts/install.log
+      - name: Assertion safety ratchet
+        working-directory: source
+        run: |
+          /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/assertion-safety.wall.txt pnpm check:assertion-safety --base 39629c6aa82ce444f14c37fc1d4d47e5c7f661d0 --no-merge-base 2>&1 | tee ../artifacts/assertion-safety.log
+      - name: Test allocation and documentation inventory
+        working-directory: source
+        run: |
+          /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/test-lines.wall.txt pnpm check:test-lines-ratchet --base 39629c6aa82ce444f14c37fc1d4d47e5c7f661d0 2>&1 | tee ../artifacts/test-lines.log
+          /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/docs-list.wall.txt pnpm docs:list 2>&1 | tee ../artifacts/docs-list.log
+      - name: Verify source identity and cleanliness
+        working-directory: source
+        run: |
+          git rev-parse HEAD > ../artifacts/source-head.txt
+          git status --porcelain > ../artifacts/source-status.txt
+          test "$(git rev-parse HEAD)" = 8158204fb48e59c8abb4c606f1a22237bfbe7838
+          test -z "$(git status --porcelain)"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: embedding-input-type-typed-final-ratchet
+          path: artifacts
+          if-no-files-found: error
+          retention-days: 14
