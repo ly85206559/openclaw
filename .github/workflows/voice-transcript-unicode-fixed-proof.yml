@@ -1,0 +1,175 @@
+name: Voice transcript Unicode fixed proof
+
+on:
+  push:
+    branches: [codex/voice-transcript-unicode-fixed-proof-20261101]
+
+permissions:
+  contents: read
+
+env:
+  VOICE_PRODUCT_HEAD: a5b140c444bc8eecc9fcf50de2d3bfd58eb29492
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  tests:
+    if: github.repository == 'ly85206559/openclaw' && github.event.repository.fork == true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: controller
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ly85206559/openclaw
+          ref: ${{ env.VOICE_PRODUCT_HEAD }}
+          fetch-depth: 2
+          path: source
+          persist-credentials: false
+      - name: Record exact source and baseline
+        run: |
+          mkdir -p artifacts
+          git -C controller rev-parse HEAD > artifacts/controller-head.txt
+          git -C source rev-parse HEAD > artifacts/source-head.txt
+          git -C source rev-parse HEAD^ > artifacts/source-parent.txt
+          test "$(cat artifacts/source-head.txt)" = "$VOICE_PRODUCT_HEAD"
+          test "$(cat artifacts/source-parent.txt)" = 39629c6aa82ce444f14c37fc1d4d47e5c7f661d0
+          git -C source ls-files --stage -- extensions/voice-call/src/webhook/realtime-transcript-text.ts extensions/voice-call/src/webhook/realtime-handler.test.ts config/test-lines-allocations/voice-transcript-unicode.txt > artifacts/source-blobs.txt
+          git -C source diff HEAD^ HEAD -- extensions/voice-call/src/webhook/realtime-handler.test.ts > artifacts/test-regression.patch
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: 24.22.1
+      - uses: ./source/.github/actions/setup-pnpm-store-cache
+        with:
+          package-manager-file: source/package.json
+          lockfile-path: source/pnpm-lock.yaml
+          node-version: 24.22.1
+          cache-mode: off
+      - name: Install pinned source
+        id: install
+        working-directory: source
+        run: pnpm install --frozen-lockfile
+      - name: Full host-consult transcript owner tests
+        working-directory: source
+        run: |
+          voice_started_at=$(date +%s)
+          set +e
+          pnpm test extensions/voice-call/src/webhook/realtime-handler.test.ts --maxWorkers=1 --reporter=verbose --reporter=json --reporter=junit --outputFile.json=../artifacts/handler-results.json --outputFile.junit=../artifacts/handler-results.xml > ../artifacts/handler-tests.log 2>&1
+          voice_test_status=$?
+          printf '%s\n' "$voice_test_status" > ../artifacts/handler-exit-code.txt
+          printf '%s\n' "$(( $(date +%s) - voice_started_at ))" > ../artifacts/handler-wall-seconds.txt
+          cat ../artifacts/handler-tests.log
+          exit "$voice_test_status"
+      - name: Adjacent transcript settlement and teardown tests
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        working-directory: source
+        run: |
+          voice_started_at=$(date +%s)
+          set +e
+          pnpm test extensions/voice-call/src/webhook/realtime-handler.lifecycle.test.ts --maxWorkers=1 --reporter=verbose --reporter=json --reporter=junit --outputFile.json=../artifacts/lifecycle-results.json --outputFile.junit=../artifacts/lifecycle-results.xml > ../artifacts/lifecycle-tests.log 2>&1
+          voice_test_status=$?
+          printf '%s\n' "$voice_test_status" > ../artifacts/lifecycle-exit-code.txt
+          printf '%s\n' "$(( $(date +%s) - voice_started_at ))" > ../artifacts/lifecycle-wall-seconds.txt
+          cat ../artifacts/lifecycle-tests.log
+          exit "$voice_test_status"
+      - name: Verify exact source stayed clean
+        if: always()
+        run: |
+          mkdir -p artifacts
+          git -C source rev-parse HEAD > artifacts/source-head-after.txt
+          git -C source status --porcelain --untracked-files=no > artifacts/tracked-status-after.txt
+          git -C source diff > artifacts/source-diff-after.patch
+          test "$(cat artifacts/source-head-after.txt)" = "$VOICE_PRODUCT_HEAD"
+          test ! -s artifacts/tracked-status-after.txt
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: voice-transcript-unicode-fixed-tests
+          path: artifacts
+          if-no-files-found: error
+          retention-days: 14
+  checks:
+    if: github.repository == 'ly85206559/openclaw' && github.event.repository.fork == true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: controller
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ly85206559/openclaw
+          ref: ${{ env.VOICE_PRODUCT_HEAD }}
+          fetch-depth: 2
+          path: source
+          persist-credentials: false
+      - name: Record exact source and comparison base
+        run: |
+          mkdir -p artifacts
+          git -C controller rev-parse HEAD > artifacts/controller-head.txt
+          git -C source rev-parse HEAD > artifacts/source-head.txt
+          git -C source rev-parse HEAD^ > artifacts/source-parent.txt
+          test "$(cat artifacts/source-head.txt)" = "$VOICE_PRODUCT_HEAD"
+          test "$(cat artifacts/source-parent.txt)" = 39629c6aa82ce444f14c37fc1d4d47e5c7f661d0
+          git -C source diff --numstat HEAD^ HEAD > artifacts/source-numstat.txt
+          git -C source show HEAD:config/test-lines-allocations/voice-transcript-unicode.txt > artifacts/test-lines-allocation.txt
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: 24.22.1
+      - uses: ./source/.github/actions/setup-pnpm-store-cache
+        with:
+          package-manager-file: source/package.json
+          lockfile-path: source/pnpm-lock.yaml
+          node-version: 24.22.1
+          cache-mode: off
+      - name: Install pinned source
+        id: install
+        working-directory: source
+        run: pnpm install --frozen-lockfile
+      - name: Record canonical changed-file plan
+        working-directory: source
+        run: |
+          node scripts/check-changed.mjs --dry-run -- extensions/voice-call/src/webhook/realtime-transcript-text.ts extensions/voice-call/src/webhook/realtime-handler.test.ts config/test-lines-allocations/voice-transcript-unicode.txt 2>&1 | tee ../artifacts/changed-plan.log
+      - name: Canonical extension production and test type graphs
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        working-directory: source
+        run: |
+          node scripts/run-tsgo-core-test-shards.mjs --ci-graphs-json '["extensions","extensions-test"]' 2>&1 | tee ../artifacts/types.log
+      - name: Scoped typed lint
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        working-directory: source
+        run: |
+          node scripts/run-oxlint.mjs --tsconfig extensions/tsconfig.json extensions/voice-call/src/webhook/realtime-transcript-text.ts extensions/voice-call/src/webhook/realtime-handler.test.ts 2>&1 | tee ../artifacts/lint.log
+      - name: Canonical format and Bun parity
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        working-directory: source
+        run: |
+          pnpm format:check --no-error-on-unmatched-pattern -- extensions/voice-call/src/webhook/realtime-transcript-text.ts extensions/voice-call/src/webhook/realtime-handler.test.ts config/test-lines-allocations/voice-transcript-unicode.txt 2>&1 | tee ../artifacts/format.log
+      - name: Allocation ratchet against the exact baseline
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        working-directory: source
+        run: |
+          git diff --exit-code 39629c6aa82ce444f14c37fc1d4d47e5c7f661d0 HEAD -- config/test-lines-baseline.txt
+          pnpm check:test-lines-ratchet --base 39629c6aa82ce444f14c37fc1d4d47e5c7f661d0 2>&1 | tee ../artifacts/test-lines-ratchet.log
+      - name: Verify exact source stayed clean
+        if: always()
+        run: |
+          mkdir -p artifacts
+          git -C source rev-parse HEAD > artifacts/source-head-after.txt
+          git -C source status --porcelain --untracked-files=no > artifacts/tracked-status-after.txt
+          git -C source diff > artifacts/source-diff-after.patch
+          test "$(cat artifacts/source-head-after.txt)" = "$VOICE_PRODUCT_HEAD"
+          test ! -s artifacts/tracked-status-after.txt
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: voice-transcript-unicode-fixed-checks
+          path: artifacts
+          if-no-files-found: error
+          retention-days: 14
