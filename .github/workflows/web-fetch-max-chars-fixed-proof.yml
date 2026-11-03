@@ -2,7 +2,7 @@ name: Web fetch max chars fixed proof
 
 on:
   push:
-    branches: [codex/pr190279-conflict-proof-20261103]
+    branches: [codex/pr190279-conflict-proof-v2-20261103]
 
 permissions:
   contents: read
@@ -24,7 +24,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: ly85206559/openclaw
-          ref: 6655b6e4654675f5e09fa6b2d11e6897bb077eee
+          ref: d48c58ba25febdd69c84a458c80544b48a75a515
           fetch-depth: 3
           path: source
           persist-credentials: false
@@ -65,7 +65,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: ly85206559/openclaw
-          ref: 6655b6e4654675f5e09fa6b2d11e6897bb077eee
+          ref: d48c58ba25febdd69c84a458c80544b48a75a515
           fetch-depth: 3
           path: source
           persist-credentials: false
@@ -120,7 +120,7 @@ jobs:
           git rev-parse HEAD > ../artifacts/source-head.txt
           git status --porcelain --untracked-files=no > ../artifacts/source-status.txt
           git diff --numstat 9312f263af4a3095d11f059e8637acf427701a96 HEAD > ../artifacts/product.numstat.txt
-          test "$(git rev-parse HEAD)" = 6655b6e4654675f5e09fa6b2d11e6897bb077eee
+          test "$(git rev-parse HEAD)" = d48c58ba25febdd69c84a458c80544b48a75a515
           test ! -s ../artifacts/source-status.txt
       - name: Canonical formatter output diagnostic
         if: failure() && steps.format.outcome == 'failure'
