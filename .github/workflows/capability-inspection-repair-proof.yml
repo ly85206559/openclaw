@@ -1,0 +1,106 @@
+name: Embedding inspection metadata repair proof
+
+on:
+  push:
+    branches: [codex/proof-pr190209-inspect-20261103]
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  inspect:
+    if: github.repository == 'ly85206559/openclaw' && github.event.repository.fork == true && github.ref == 'refs/heads/codex/proof-pr190209-inspect-20261103'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        include:
+          - name: prior-embedding
+            family: embedding
+            stage: prior
+            head: 8158204fb48e59c8abb4c606f1a22237bfbe7838
+            prior: 8158204fb48e59c8abb4c606f1a22237bfbe7838
+          - name: fixed-embedding
+            family: embedding
+            stage: fixed
+            head: 64128b9904eb5b250e5f2f7deb4dd0b289a080c1
+            prior: 8158204fb48e59c8abb4c606f1a22237bfbe7838
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: controller
+          persist-credentials: false
+      - name: Verify controller revision
+        env:
+          CONTROLLER_HEAD: ${{ github.sha }}
+        run: |
+          test "$(git -C controller rev-parse HEAD)" = "$CONTROLLER_HEAD"
+          test -z "$(git -C controller status --porcelain --untracked-files=no)"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ly85206559/openclaw
+          ref: ${{ matrix.head }}
+          fetch-depth: 2
+          path: source
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: 24.22.1
+      - uses: ./source/.github/actions/setup-pnpm-store-cache
+        with:
+          package-manager-file: source/package.json
+          lockfile-path: source/pnpm-lock.yaml
+          node-version: 24.22.1
+          cache-mode: off
+      - name: Install exact source
+        working-directory: source
+        run: |
+          mkdir -p ../artifacts
+          /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/install.wall.txt pnpm install --frozen-lockfile 2>&1 | tee ../artifacts/install.log
+      - name: Canonical runtime build
+        working-directory: source
+        run: |
+          /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/build.wall.txt pnpm build:runtime 2>&1 | tee ../artifacts/build.log
+      - name: Actual discovery CLI boundary and unchanged sibling
+        env:
+          PROOF_HEAD: ${{ matrix.head }}
+          PROOF_PRIOR: ${{ matrix.prior }}
+          PROOF_FAMILY: ${{ matrix.family }}
+          PROOF_STAGE: ${{ matrix.stage }}
+        run: |
+          /usr/bin/time -f 'wall_seconds=%e' -o artifacts/runtime.wall.txt node controller/proof/capability-inspection-repair-proof.mjs source artifacts "$PROOF_HEAD" "$PROOF_FAMILY" "$PROOF_STAGE" "$PROOF_PRIOR" 2>&1 | tee artifacts/runtime.log
+      - name: Repaired metadata core types
+        if: matrix.stage == 'fixed'
+        working-directory: source
+        run: |
+          /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/core-types.wall.txt pnpm tsgo:core 2>&1 | tee ../artifacts/core-types.log
+      - name: Repaired metadata typed lint and format
+        if: matrix.stage == 'fixed'
+        working-directory: source
+        run: |
+          /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/lint.wall.txt node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.core.json src/cli/capability-cli/metadata.ts 2>&1 | tee ../artifacts/lint.log
+          /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/format.wall.txt pnpm format:check -- src/cli/capability-cli/metadata.ts 2>&1 | tee ../artifacts/format.log
+      - name: Record exact source and tracked cleanliness
+        if: always()
+        working-directory: source
+        env:
+          PROOF_HEAD: ${{ matrix.head }}
+        run: |
+          mkdir -p ../artifacts
+          git rev-parse HEAD > ../artifacts/source-head.txt
+          git status --porcelain --untracked-files=no > ../artifacts/source-status.txt
+          test "$(git rev-parse HEAD)" = "$PROOF_HEAD"
+          test ! -s ../artifacts/source-status.txt
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: capability-inspection-${{ matrix.name }}
+          path: artifacts
+          if-no-files-found: error
+          retention-days: 14
