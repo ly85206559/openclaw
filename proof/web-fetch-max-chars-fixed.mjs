@@ -9,7 +9,7 @@ import { pathToFileURL } from 'node:url';
 
 const source = path.resolve(process.argv[2]);
 const artifacts = path.resolve(process.argv[3]);
-const head = 'f55f8bc84e9c7470f4573af5ba38aaef07da0438';
+const head = '6655b6e4654675f5e09fa6b2d11e6897bb077eee';
 const git = (...args) => execFileSync('git', args, { cwd: source, encoding: 'utf8', timeout: 10000 });
 assert.equal(git('rev-parse', 'HEAD').trim(), head);
 const { runManagedCommand, hasUnjoinedWork } = await import(pathToFileURL(path.join(source, 'scripts/lib/managed-child-process.mts')).href);

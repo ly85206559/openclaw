@@ -2,7 +2,7 @@ name: Web fetch max chars fixed proof
 
 on:
   push:
-    branches: [codex/web-fetch-max-chars-fixed-proof-20261101]
+    branches: [codex/pr190279-conflict-proof-20261103]
 
 permissions:
   contents: read
@@ -24,7 +24,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: ly85206559/openclaw
-          ref: f55f8bc84e9c7470f4573af5ba38aaef07da0438
+          ref: 6655b6e4654675f5e09fa6b2d11e6897bb077eee
           fetch-depth: 3
           path: source
           persist-credentials: false
@@ -65,7 +65,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: ly85206559/openclaw
-          ref: f55f8bc84e9c7470f4573af5ba38aaef07da0438
+          ref: 6655b6e4654675f5e09fa6b2d11e6897bb077eee
           fetch-depth: 3
           path: source
           persist-credentials: false
@@ -95,19 +95,19 @@ jobs:
       - name: Typed lint
         working-directory: source
         run: |
-          /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/lint.wall.txt node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.core.json src/cli/capability-cli/web.ts src/cli/capability-cli.test.ts 2>&1 | tee ../artifacts/lint.log
+          /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/lint.wall.txt node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.core.json src/cli/capability-cli/web.ts src/cli/capability-cli/metadata.ts src/cli/capability-cli.test.ts 2>&1 | tee ../artifacts/lint.log
       - name: Canonical format
         id: format
         working-directory: source
         run: |
-          /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/format.wall.txt pnpm format:check -- src/cli/capability-cli/web.ts src/cli/capability-cli.test.ts docs/cli/infer.md 2>&1 | tee ../artifacts/format.log
+          /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/format.wall.txt pnpm format:check -- src/cli/capability-cli/web.ts src/cli/capability-cli/metadata.ts src/cli/capability-cli.test.ts docs/cli/infer.md 2>&1 | tee ../artifacts/format.log
       - name: Assertion, suppression, line cap, and test allocation ratchets
         working-directory: source
         run: |
-          /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/assertion-safety.wall.txt pnpm check:assertion-safety --base 39629c6aa82ce444f14c37fc1d4d47e5c7f661d0 --no-merge-base 2>&1 | tee ../artifacts/assertion-safety.log
-          /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/max-lines.wall.txt pnpm check:max-lines-ratchet --base 39629c6aa82ce444f14c37fc1d4d47e5c7f661d0 2>&1 | tee ../artifacts/max-lines.log
-          /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/line-cap.wall.txt pnpm check:line-cap-ratchet --base 39629c6aa82ce444f14c37fc1d4d47e5c7f661d0 2>&1 | tee ../artifacts/line-cap.log
-          /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/test-lines.wall.txt pnpm check:test-lines-ratchet --base 39629c6aa82ce444f14c37fc1d4d47e5c7f661d0 2>&1 | tee ../artifacts/test-lines.log
+          /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/assertion-safety.wall.txt pnpm check:assertion-safety --base 9312f263af4a3095d11f059e8637acf427701a96 --no-merge-base 2>&1 | tee ../artifacts/assertion-safety.log
+          /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/max-lines.wall.txt pnpm check:max-lines-ratchet --base 9312f263af4a3095d11f059e8637acf427701a96 2>&1 | tee ../artifacts/max-lines.log
+          /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/line-cap.wall.txt pnpm check:line-cap-ratchet --base 9312f263af4a3095d11f059e8637acf427701a96 2>&1 | tee ../artifacts/line-cap.log
+          /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/test-lines.wall.txt pnpm check:test-lines-ratchet --base 9312f263af4a3095d11f059e8637acf427701a96 2>&1 | tee ../artifacts/test-lines.log
       - name: Documentation inventory
         working-directory: source
         run: |
@@ -119,14 +119,14 @@ jobs:
           mkdir -p ../artifacts
           git rev-parse HEAD > ../artifacts/source-head.txt
           git status --porcelain --untracked-files=no > ../artifacts/source-status.txt
-          git diff --numstat 39629c6aa82ce444f14c37fc1d4d47e5c7f661d0 HEAD > ../artifacts/product.numstat.txt
-          test "$(git rev-parse HEAD)" = f55f8bc84e9c7470f4573af5ba38aaef07da0438
+          git diff --numstat 9312f263af4a3095d11f059e8637acf427701a96 HEAD > ../artifacts/product.numstat.txt
+          test "$(git rev-parse HEAD)" = 6655b6e4654675f5e09fa6b2d11e6897bb077eee
           test ! -s ../artifacts/source-status.txt
       - name: Canonical formatter output diagnostic
         if: failure() && steps.format.outcome == 'failure'
         working-directory: source
         run: |
-          pnpm format -- src/cli/capability-cli/web.ts src/cli/capability-cli.test.ts docs/cli/infer.md 2>&1 | tee ../artifacts/formatter-diagnostic.log
+          pnpm format -- src/cli/capability-cli/web.ts src/cli/capability-cli/metadata.ts src/cli/capability-cli.test.ts docs/cli/infer.md 2>&1 | tee ../artifacts/formatter-diagnostic.log
           cp src/cli/capability-cli/web.ts ../artifacts/canonical-web.ts
           cp src/cli/capability-cli.test.ts ../artifacts/canonical-capability.test.ts
           cp docs/cli/infer.md ../artifacts/canonical-infer.md
