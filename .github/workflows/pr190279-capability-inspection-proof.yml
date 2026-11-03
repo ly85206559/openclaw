@@ -2,7 +2,7 @@ name: Web fetch capability inspection proof
 
 on:
   push:
-    branches: [codex/pr190279-conflict-proof-v2-20261103]
+    branches: [codex/pr190279-conflict-proof-v3-20261103]
 
 permissions:
   contents: read
@@ -24,13 +24,13 @@ jobs:
           - name: prior-web
             family: web
             stage: prior
-            head: 9b6c9871564912a6bbaff67cb3bca7949fc14fad
-            prior: 9b6c9871564912a6bbaff67cb3bca7949fc14fad
+            head: 8c044ca5b2de1ccd8bab46a302bb6dc436c3881a
+            prior: 8c044ca5b2de1ccd8bab46a302bb6dc436c3881a
           - name: fixed-web
             family: web
             stage: fixed
-            head: d48c58ba25febdd69c84a458c80544b48a75a515
-            prior: 9b6c9871564912a6bbaff67cb3bca7949fc14fad
+            head: 98f24d80d2f3805377cc6166e5ed5b5041e209fb
+            prior: 8c044ca5b2de1ccd8bab46a302bb6dc436c3881a
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
