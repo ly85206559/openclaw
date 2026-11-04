@@ -5,13 +5,13 @@ on:
 permissions:
   contents: read
 env:
-  TALK_HEAD: 485e9bcae06989e120fc35572e8f7a8240e62e18
+  TALK_HEAD: 17773b5c04401d9f3fd7cdf6a12e97e3baac40c1
   TALK_BASE: 1ca0669dbe3982369463b921397027f3727f51fd
 jobs:
   owner:
     if: github.repository == 'ly85206559/openclaw' && github.event.repository.fork == true
     runs-on: ubuntu-24.04
-    timeout-minutes: 35
+    timeout-minutes: 55
     defaults:
       run:
         shell: bash
@@ -70,11 +70,39 @@ jobs:
           const result = JSON.parse(fs.readFileSync('../artifacts/green.json', 'utf8'));
           if (result.numPassedTests !== 19 || result.numFailedTests || result.numPendingTests || result.numRuntimeErrorTestSuites) throw new Error('Incomplete fixed-head owner proof');
           NODE
-      - name: Touched UI type, lint, format and test allocation checks
+      - name: Real browser transcript red and green with ASCII control
+        run: |
+          pnpm --dir ui exec playwright install --with-deps chromium
+          owner=ui/src/pages/chat/talk/conversation.ts
+          trap 'git restore --source=HEAD -- ui/src/pages/chat/talk/conversation.ts' EXIT
+          git show "$TALK_BASE:$owner" > "$owner"
+          set +e
+          node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner ui/src/e2e/browser-talk-start-stop.e2e.test.ts --testNamePattern 'renders relay transcripts' --maxWorkers=1 --reporter=verbose --reporter=json --outputFile.json=../artifacts/browser-red.json > ../artifacts/browser-red.log 2>&1
+          red_status=$?
+          set -e
+          printf '%s\n' "$red_status" > ../artifacts/browser-red-exit.txt
+          test "$red_status" -ne 0
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import { stripVTControlCharacters } from 'node:util';
+          const result = JSON.parse(fs.readFileSync('../artifacts/browser-red.json', 'utf8'));
+          const failures = result.testResults.flatMap(file => file.assertionResults).filter(test => test.status === 'failed');
+          const log = stripVTControlCharacters(fs.readFileSync('../artifacts/browser-red.log', 'utf8'));
+          if (result.numPassedTests !== 1 || result.numFailedTests !== 1 || result.numRuntimeErrorTestSuites || failures.length !== 1 || failures[0].title !== 'renders relay transcripts with İstanbul overlap' || !log.includes('Meet in İstanbultomorrow')) throw new Error('Browser did not reproduce the intended defect with its ASCII control');
+          NODE
+          git restore --source=HEAD -- "$owner"
+          node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner ui/src/e2e/browser-talk-start-stop.e2e.test.ts --testNamePattern 'renders relay transcripts' --maxWorkers=1 --reporter=verbose --reporter=json --outputFile.json=../artifacts/browser-green.json > ../artifacts/browser-green.log 2>&1
+          cat ../artifacts/browser-green.log
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const result = JSON.parse(fs.readFileSync('../artifacts/browser-green.json', 'utf8'));
+          if (result.numPassedTests !== 2 || result.numFailedTests || result.numRuntimeErrorTestSuites) throw new Error('Incomplete browser green proof');
+          NODE
+      - name: Touched UI type, lint, format and test budget checks
         run: |
           node scripts/run-tsgo.mjs -p ui/tsconfig.json --incremental 2>&1 | tee ../artifacts/types.log
-          node scripts/run-oxlint.mjs --tsconfig ui/tsconfig.json ui/src/pages/chat/talk/conversation.ts ui/src/pages/chat/talk/conversation.test.ts 2>&1 | tee ../artifacts/lint.log
-          pnpm format:check --no-error-on-unmatched-pattern -- ui/src/pages/chat/talk/conversation.ts ui/src/pages/chat/talk/conversation.test.ts config/test-lines-allocations/talk-unicode-overlap.txt 2>&1 | tee ../artifacts/format.log
+          node scripts/run-oxlint.mjs --tsconfig ui/tsconfig.json ui/src/pages/chat/talk/conversation.ts ui/src/pages/chat/talk/conversation.test.ts ui/src/e2e/browser-talk-start-stop.e2e.test.ts 2>&1 | tee ../artifacts/lint.log
+          pnpm format:check --no-error-on-unmatched-pattern -- ui/src/pages/chat/talk/conversation.ts ui/src/pages/chat/talk/conversation.test.ts ui/src/e2e/browser-talk-start-stop.e2e.test.ts 2>&1 | tee ../artifacts/format.log
           pnpm check:test-lines-ratchet --base "$TALK_BASE" 2>&1 | tee ../artifacts/allocation.log
           git diff --check
       - name: Source identity and cleanup receipt
