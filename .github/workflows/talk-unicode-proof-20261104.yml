@@ -1,0 +1,87 @@
+name: Talk Unicode overlap owner proof
+on:
+  push:
+    branches: [codex/proof-talk-unicode-20261104]
+permissions:
+  contents: read
+env:
+  TALK_HEAD: 2037b9c8428e323ebd75de6fa8cd46dde8e8701f
+  TALK_BASE: 1ca0669dbe3982369463b921397027f3727f51fd
+jobs:
+  owner:
+    if: github.repository == 'ly85206559/openclaw' && github.event.repository.fork == true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    defaults:
+      run:
+        shell: bash
+        working-directory: source
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ly85206559/openclaw
+          ref: ${{ env.TALK_HEAD }}
+          fetch-depth: 2
+          path: source
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: 24.22.1
+      - uses: ./source/.github/actions/setup-pnpm-store-cache
+        with:
+          package-manager-file: source/package.json
+          lockfile-path: source/pnpm-lock.yaml
+          node-version: 24.22.1
+          cache-mode: off
+      - name: Pin source and install its locked dependencies
+        run: |
+          mkdir -p ../artifacts
+          test "$(git rev-parse HEAD)" = "$TALK_HEAD"
+          test "$(git rev-parse HEAD^)" = "$TALK_BASE"
+          git rev-parse HEAD HEAD^ > ../artifacts/source-heads.txt
+          pnpm install --frozen-lockfile
+      - name: Current-main owner with regression tests, then fixed owner
+        run: |
+          owner=ui/src/pages/chat/talk/conversation.ts
+          trap 'git restore --source=HEAD -- ui/src/pages/chat/talk/conversation.ts' EXIT
+          git show "$TALK_BASE:$owner" > "$owner"
+          set +e
+          pnpm --dir ui test src/pages/chat/talk/conversation.test.ts --maxWorkers=1 --reporter=verbose --reporter=json --outputFile.json=../../artifacts/red.json > ../artifacts/red.log 2>&1
+          red_status=$?
+          set -e
+          printf '%s\n' "$red_status" > ../artifacts/red-exit.txt
+          test "$red_status" -ne 0
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const result = JSON.parse(fs.readFileSync('../artifacts/red.json', 'utf8'));
+          if (result.numFailedTests !== 1 || !result.numPassedTests || result.numRuntimeErrorTestSuites) throw new Error('Unexpected baseline failure');
+          const failures = result.testResults.flatMap(file => file.assertionResults).filter(test => test.status === 'failed');
+          if (failures.length !== 1 || !failures[0].failureMessages.join('\n').includes('İstanbultomorrow')) throw new Error('Wrong baseline defect');
+          NODE
+          git restore --source=HEAD -- "$owner"
+          start=$(date +%s)
+          pnpm --dir ui test src/pages/chat/talk/conversation.test.ts --maxWorkers=1 --reporter=verbose --reporter=json --outputFile.json=../../artifacts/green.json > ../artifacts/green.log 2>&1
+          printf '%s\n' "$(( $(date +%s) - start ))" > ../artifacts/green-wall-seconds.txt
+          cat ../artifacts/green.log
+      - name: Touched UI type, lint, format and test allocation checks
+        run: |
+          node scripts/run-tsgo.mjs -p ui/tsconfig.json --incremental 2>&1 | tee ../artifacts/types.log
+          node scripts/run-oxlint.mjs --tsconfig ui/tsconfig.json ui/src/pages/chat/talk/conversation.ts ui/src/pages/chat/talk/conversation.test.ts 2>&1 | tee ../artifacts/lint.log
+          pnpm format:check --no-error-on-unmatched-pattern -- ui/src/pages/chat/talk/conversation.ts ui/src/pages/chat/talk/conversation.test.ts config/test-lines-allocations/talk-unicode-overlap.txt 2>&1 | tee ../artifacts/format.log
+          pnpm check:test-lines-ratchet --base "$TALK_BASE" 2>&1 | tee ../artifacts/allocation.log
+          git diff --check
+      - name: Source identity and cleanup receipt
+        if: always()
+        run: |
+          mkdir -p ../artifacts
+          git rev-parse HEAD > ../artifacts/source-after.txt
+          git status --porcelain --untracked-files=no > ../artifacts/tracked-status-after.txt
+          test "$(git rev-parse HEAD)" = "$TALK_HEAD"
+          test ! -s ../artifacts/tracked-status-after.txt
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: talk-unicode-overlap-owner-proof
+          path: artifacts
+          if-no-files-found: error
+          retention-days: 14
