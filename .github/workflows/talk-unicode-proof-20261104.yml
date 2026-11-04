@@ -5,7 +5,7 @@ on:
 permissions:
   contents: read
 env:
-  TALK_HEAD: 2037b9c8428e323ebd75de6fa8cd46dde8e8701f
+  TALK_HEAD: 485e9bcae06989e120fc35572e8f7a8240e62e18
   TALK_BASE: 1ca0669dbe3982369463b921397027f3727f51fd
 jobs:
   owner:
