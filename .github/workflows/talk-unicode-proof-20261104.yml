@@ -53,16 +53,23 @@ jobs:
           test "$red_status" -ne 0
           node --input-type=module <<'NODE'
           import fs from 'node:fs';
+          import { stripVTControlCharacters } from 'node:util';
           const result = JSON.parse(fs.readFileSync('../artifacts/red.json', 'utf8'));
           if (result.numFailedTests !== 1 || !result.numPassedTests || result.numRuntimeErrorTestSuites) throw new Error('Unexpected baseline failure');
           const failures = result.testResults.flatMap(file => file.assertionResults).filter(test => test.status === 'failed');
-          if (failures.length !== 1 || !failures[0].failureMessages.join('\n').includes('İstanbultomorrow')) throw new Error('Wrong baseline defect');
+          const log = stripVTControlCharacters(fs.readFileSync('../artifacts/red.log', 'utf8'));
+          if (failures.length !== 1 || failures[0].title !== 'joins user fragments Meet in İstanbul and İstanbul tomorrow' || !log.includes('Meet in İstanbultomorrow')) throw new Error('Wrong baseline defect');
           NODE
           git restore --source=HEAD -- "$owner"
           start=$(date +%s)
           pnpm --dir ui test src/pages/chat/talk/conversation.test.ts --maxWorkers=1 --reporter=verbose --reporter=json --outputFile.json=../../artifacts/green.json > ../artifacts/green.log 2>&1
           printf '%s\n' "$(( $(date +%s) - start ))" > ../artifacts/green-wall-seconds.txt
           cat ../artifacts/green.log
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const result = JSON.parse(fs.readFileSync('../artifacts/green.json', 'utf8'));
+          if (result.numPassedTests !== 19 || result.numFailedTests || result.numPendingTests || result.numRuntimeErrorTestSuites) throw new Error('Incomplete fixed-head owner proof');
+          NODE
       - name: Touched UI type, lint, format and test allocation checks
         run: |
           node scripts/run-tsgo.mjs -p ui/tsconfig.json --incremental 2>&1 | tee ../artifacts/types.log
