@@ -9,7 +9,7 @@ import { pathToFileURL } from 'node:url';
 
 const source = path.resolve(process.argv[2]);
 const artifacts = path.resolve(process.argv[3]);
-const head = '0eae003d1071c9f2f3446f5bc265088b0eb47a7a';
+const head = 'fb00394ef86884e7fd8603eddcbad7aea0320b7a';
 const git = (...args) => execFileSync('git', args, { cwd: source, encoding: 'utf8', timeout: 10000 });
 assert.equal(git('rev-parse', 'HEAD').trim(), head);
 await fs.mkdir(artifacts, { recursive: true });
@@ -164,6 +164,11 @@ try {
   assert(help.stdout.includes('--input-type <type>'));
   assert(help.stdout.includes('document') && help.stdout.includes('query'));
   help.observed.verified = true;
+  const inspected = await cli('inspect', ['infer', 'inspect', '--name', 'embedding.create', '--json'], 0);
+  const metadata = JSON.parse(inspected.stdout);
+  assert.equal(metadata.id, 'embedding.create');
+  assert(metadata.flags.includes('--input-type'));
+  inspected.observed.verified = true;
   const args = ['infer', 'embedding', 'create', '--agent', 'proof', '--provider', 'voyage', '--model', 'voyage/voyage-4-large', '--text', texts[0], '--text', texts[1], '--json'];
   for (const testCase of [
     { name: 'default-document', kind: 'document', extra: [] },
