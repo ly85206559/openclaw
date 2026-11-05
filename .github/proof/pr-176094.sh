@@ -2,7 +2,8 @@
 # Review draft: execute only inside the secretless, disposable Actions runner.
 set -euo pipefail
 test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
-test "$(git show -s --format=%P HEAD)" = "$FIRST_PARENT $BASE_SHA"
+test "$(git show -s --format=%P HEAD)" = "$FIRST_PARENT"
+test "$(git show -s --format=%P "$FIRST_PARENT")" = "$MERGE_PARENT $BASE_SHA"
 test "$(git rev-parse HEAD^{tree})" = "$SOURCE_TREE"
 test "$(git merge-base "$BASE_SHA" HEAD)" = "$BASE_SHA"
 printf '%s\n' scripts/check-control-ui-performance-base.mts test/scripts/control-ui-performance.test.ts > "$RUNNER_TEMP/expected-paths"
