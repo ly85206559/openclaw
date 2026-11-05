@@ -5,7 +5,7 @@ on:
 permissions:
   contents: read
 env:
-  SOURCE_SHA: bc4db50a1afefbcf6d98a3067f5fd94b87fb0793
+  SOURCE_SHA: c33e143c2a58c233b6bc90dd7356814c4e997e0c
   SOURCE_BASE: de04fbe0caa9332999bdcc28d5d4e049672afb16
 jobs:
   proof:
