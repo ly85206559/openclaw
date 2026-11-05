@@ -2,7 +2,7 @@ name: Control UI base comparison conflict proof (review draft)
 
 on:
   push:
-    branches: [codex/proof-176094-bun-20261101]
+    branches: [codex/proof-176094-merge-20261105]
     paths:
       - .github/workflows/proof-control-ui-176094.yml
       - .github/proof/pr-176094.sh
@@ -18,12 +18,11 @@ jobs:
     timeout-minutes: 75
     env:
       CI: "true"
-      SOURCE_SHA: 7c56f9aad4d08e704477d3658b1b2ba6609c2a22
-      OLD_SHA: a808a2d2dae4ab4dac1f3ff5bc77f2399fa8ded2
-      BASE_SHA: 1e293027afc0cfdf29b093ebef29193d444f6b1d
-      FIRST_PARENT: 3c22172e91d8db5d748fd7e08eaca4ef2353d581
-      SOURCE_TREE: f82bdc6b44ed6bec72a13be62d7e9cf67025a90c
-      PROOF_BLOB: 491c5ad11c68bc8726d4f1f0e24b6610feca25f1
+      SOURCE_SHA: 98eb0c0763ef952f6524a067abc7504df188b7e6
+      BASE_SHA: 46943d587ace8d66012467d9b4c5dfc833469945
+      FIRST_PARENT: 7c56f9aad4d08e704477d3658b1b2ba6609c2a22
+      SOURCE_TREE: 6deef77b79a62b43e690d21606bd045b494ea6dc
+      PROOF_BLOB: ea6ec411ec18e4149073c26234a98340e0358d64
       CLI_PROOF_BLOB: 8d4e94f74ffb806db3c483579488d0cf0de53f91
       OPENCLAW_VITEST_MAX_WORKERS: "1"
       OPENCLAW_TEST_PROJECTS_PARALLEL: "1"

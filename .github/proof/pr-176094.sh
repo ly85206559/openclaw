@@ -2,8 +2,7 @@
 # Review draft: execute only inside the secretless, disposable Actions runner.
 set -euo pipefail
 test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
-test "$(git show -s --format=%P HEAD)" = "$OLD_SHA"
-test "$(git show -s --format=%P "$OLD_SHA")" = "$FIRST_PARENT $BASE_SHA"
+test "$(git show -s --format=%P HEAD)" = "$FIRST_PARENT $BASE_SHA"
 test "$(git rev-parse HEAD^{tree})" = "$SOURCE_TREE"
 test "$(git merge-base "$BASE_SHA" HEAD)" = "$BASE_SHA"
 printf '%s\n' scripts/check-control-ui-performance-base.mts test/scripts/control-ui-performance.test.ts > "$RUNNER_TEMP/expected-paths"
@@ -24,41 +23,6 @@ pnpm exec oxlint scripts/check-control-ui-performance-base.mts test/scripts/cont
 
 test_file=test/scripts/control-ui-performance.test.ts
 printf 'Pinned test Bun: %s (%s)\n' "$(bun --version)" "$(bun --revision)"
-
-# Replay the exact upstream CI failure on the already-published old head.
-# This must fail in the named Settings case for the observed Bun path error;
-# unrelated failures, skips, runtime errors, or a passing replay are not red.
-git checkout --detach "$OLD_SHA"
-test "$(git rev-parse HEAD)" = "$OLD_SHA"
-assert_clean
-set +e
-OPENCLAW_VITEST_RUNTIME=bun node scripts/run-vitest.mjs "$test_file" --maxWorkers=1 --retry=0 --reporter=default --reporter=json --outputFile="$RUNNER_TEMP/old-bun.json"
-old_status=$?
-set -e
-test "$old_status" -ne 0
-node --input-type=module - "$RUNNER_TEMP/old-bun.json" <<'NODE'
-import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-const report = JSON.parse(readFileSync(process.argv[2], 'utf8'));
-assert.equal(report.success, false);
-assert.equal(report.numTotalTests, 42);
-assert.equal(report.numFailedTests, 1);
-assert.equal(report.numPassedTests, 41);
-assert.equal(report.numPendingTests ?? 0, 0);
-assert.equal(report.numTodoTests ?? 0, 0);
-assert.equal(report.numRuntimeErrorTestSuites ?? 0, 0);
-const tests = report.testResults.flatMap(file => file.assertionResults);
-const failed = tests.filter(test => test.status === 'failed');
-assert.equal(failed.length, 1);
-assert.match(failed[0].fullName, /reuses identical inputs but rebuilds source-specific Settings changes/);
-assert.match(failed[0].failureMessages.join('\n'), /Module not found[^\n]*repo /);
-assert.ok(tests.every(test => ['passed', 'failed'].includes(test.status)));
-console.log('OLD_SHA Bun: exactly the original Settings path failure reproduced; 41 controls passed.');
-NODE
-assert_clean
-git checkout --detach "$SOURCE_SHA"
-test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
-assert_clean
 
 git show "$SOURCE_SHA:$test_file" > "$RUNNER_TEMP/candidate-test.ts"
 test "$(git hash-object "$RUNNER_TEMP/candidate-test.ts")" = "$(git rev-parse "$SOURCE_SHA:$test_file")"
@@ -104,7 +68,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 const report = JSON.parse(readFileSync(process.argv[2], 'utf8'));
 assert.equal(report.success, true);
-assert.equal(report.numTotalTests, 42);
+assert.equal(report.numTotalTests, 46);
 assert.equal(report.numPassedTests, report.numTotalTests);
 assert.equal(report.numFailedTests, 0);
 assert.equal(report.numPendingTests ?? 0, 0);
