@@ -2,7 +2,7 @@ name: Embedding input type typed action proof
 
 on:
   push:
-    branches: [codex/pr190209-main-proof-20261104]
+    branches: [codex/pr190209-main-proof-20261105]
 
 permissions:
   contents: read
@@ -24,7 +24,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: ly85206559/openclaw
-          ref: fb00394ef86884e7fd8603eddcbad7aea0320b7a
+          ref: e3337ea88c89d666ad1f5e7733f3b9afd8f123d3
           fetch-depth: 5
           path: source
           persist-credentials: false
@@ -65,7 +65,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: ly85206559/openclaw
-          ref: fb00394ef86884e7fd8603eddcbad7aea0320b7a
+          ref: e3337ea88c89d666ad1f5e7733f3b9afd8f123d3
           fetch-depth: 5
           path: source
           persist-credentials: false
@@ -100,16 +100,16 @@ jobs:
       - name: Assertion safety ratchet
         working-directory: source
         run: |
-          /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/assertion-safety.wall.txt pnpm check:assertion-safety --base 0ab1f9d4cb5731f57c345224689acdee41fea036 --no-merge-base 2>&1 | tee ../artifacts/assertion-safety.log
+          /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/assertion-safety.wall.txt pnpm check:assertion-safety --base 46943d587ace8d66012467d9b4c5dfc833469945 --no-merge-base 2>&1 | tee ../artifacts/assertion-safety.log
       - name: Documentation inventory and test line budget
         working-directory: source
         run: |
           /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/docs-list.wall.txt pnpm docs:list 2>&1 | tee ../artifacts/docs-list.log
-          /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/test-lines.wall.txt pnpm check:test-lines-ratchet --base 0ab1f9d4cb5731f57c345224689acdee41fea036 --no-merge-base 2>&1 | tee ../artifacts/test-lines.log
+          /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/test-lines.wall.txt pnpm check:test-lines-ratchet --base 46943d587ace8d66012467d9b4c5dfc833469945 --no-merge-base 2>&1 | tee ../artifacts/test-lines.log
       - name: Verify exact source and unchanged tracked files
         working-directory: source
         run: |
-          test "$(git rev-parse HEAD)" = fb00394ef86884e7fd8603eddcbad7aea0320b7a
+          test "$(git rev-parse HEAD)" = e3337ea88c89d666ad1f5e7733f3b9afd8f123d3
           test -z "$(git status --porcelain --untracked-files=no)"
           git rev-parse HEAD > ../artifacts/source-head.txt
           git status --porcelain --untracked-files=no > ../artifacts/source-status.txt

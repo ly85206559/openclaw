@@ -9,7 +9,7 @@ import { pathToFileURL } from 'node:url';
 
 const source = path.resolve(process.argv[2]);
 const artifacts = path.resolve(process.argv[3]);
-const head = 'fb00394ef86884e7fd8603eddcbad7aea0320b7a';
+const head = 'e3337ea88c89d666ad1f5e7733f3b9afd8f123d3';
 const git = (...args) => execFileSync('git', args, { cwd: source, encoding: 'utf8', timeout: 10000 });
 assert.equal(git('rev-parse', 'HEAD').trim(), head);
 await fs.mkdir(artifacts, { recursive: true });
