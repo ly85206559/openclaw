@@ -83,7 +83,7 @@ jobs:
           mkdir -p .artifacts
           node --input-type=module <<'NODE'
           import fs from 'node:fs';
-          fs.writeFileSync('.artifacts/plugin-compiler-types.json', JSON.stringify({extends:'../tsconfig.json',compilerOptions:{rootDir:'..',incremental:true,tsBuildInfoFile:'./plugin-compiler-types.tsbuildinfo',noEmit:true},files:[],include:['../src/cli/plugins-build-bundle.ts','../src/cli/plugins-control-ui-build.test.ts']},null,2));
+          fs.writeFileSync('.artifacts/plugin-compiler-types.json', JSON.stringify({extends:'../tsconfig.json',compilerOptions:{rootDir:'..',incremental:true,tsBuildInfoFile:'./plugin-compiler-types.tsbuildinfo',noEmit:true},files:[],include:['../src/cli/plugins-build-bundle.ts','../src/cli/plugins-control-ui-build.test.ts','../src/types/**/*.d.ts']},null,2));
           NODE
           node scripts/run-tsgo.mjs -p .artifacts/plugin-compiler-types.json 2>&1 | tee ../artifacts/types.log
           node scripts/run-oxlint.mjs --tsconfig tsconfig.json src/cli/plugins-build-bundle.ts src/cli/plugins-control-ui-build.test.ts 2>&1 | tee ../artifacts/lint.log
