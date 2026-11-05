@@ -9,6 +9,7 @@ import { pathToFileURL } from "node:url";
 
 const source = path.resolve(process.argv[2]);
 const output = path.resolve(process.argv[3]);
+const fixed = process.argv[4] === "fixed";
 fs.mkdirSync(output, { recursive: true });
 const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "plugin-bundle-cli-proof-"));
 const project = path.join(fixture, "plugin");
@@ -56,15 +57,20 @@ assert.equal(invalid.status, 1, invalid.stderr);
 assert.match(invalid.stderr, /must end in \.tgz or \.tar\.gz/);
 const refused = cli(["plugins", "pack", "--root", project, "--out", path.join(fixture, "out.tgz")], "missing-compiler");
 assert.equal(refused.status, 1, refused.stderr);
-assert.match(refused.stderr, /The CLI command failed\./);
-assert.doesNotMatch(refused.stderr, /Install esbuild in this plugin/);
+if (fixed) {
+  assert.match(refused.stderr, /Install esbuild in this plugin's devDependencies/);
+  assert.doesNotMatch(refused.stderr, /The CLI command failed\./);
+} else {
+  assert.match(refused.stderr, /The CLI command failed\./);
+  assert.doesNotMatch(refused.stderr, /Install esbuild in this plugin/);
+}
 assert.deepEqual(snapshot(project), before);
 assert.equal(fs.existsSync(path.join(fixture, "out.tgz")), false);
 
 const owner = pathToFileURL(path.join(source, "src/cli/plugins-feature-artifact.ts")).href;
 const probe = `import { runPluginsPackCommand } from ${JSON.stringify(owner)};
 try { await runPluginsPackCommand(${JSON.stringify({ root: project, out: path.join(fixture, "owner.tgz") })}); process.exitCode=2; }
-catch(error) { console.log(JSON.stringify({name:error.name,message:error.message,humanOutput:error.humanOutput??null})); }`;
+catch(error) { console.log(JSON.stringify({name:error.name,message:error.message,humanOutput:error.humanOutput??null,causeCode:error.cause?.code})); }`;
 const result = spawnSync(process.execPath, ["--import", pathToFileURL(path.join(source, "scripts/tsx.mjs")).href, "--input-type=module", "--eval", probe], {
   cwd: source, env, encoding: "utf8", timeout: 180_000,
 });
@@ -73,6 +79,26 @@ assert.ifError(result.error);
 assert.equal(result.status, 0, result.stderr);
 const failure = JSON.parse(result.stdout.trim());
 assert.match(failure.message, /Install esbuild in this plugin's devDependencies/);
-assert.equal(failure.humanOutput, null);
-fs.writeFileSync(path.join(output, "summary.json"), JSON.stringify({ fixture, node: process.version, failure, projectUnchanged: true, commands }, null, 2));
-console.log("BASELINE REPRODUCED: known missing-compiler reason hidden; suffix control visible; no project/output mutation.");
+assert.equal(failure.humanOutput, fixed ? failure.message : null);
+assert.equal(failure.causeCode, "MODULE_NOT_FOUND");
+if (fixed) {
+  const dependencyLink = path.join(project, "node_modules");
+  fs.symlinkSync(path.join(source, "node_modules"), dependencyLink, "dir");
+  try {
+    const archive = path.join(fixture, "valid.tgz");
+    const packed = cli(["plugins", "pack", "--root", project, "--out", archive, "--json"], "valid-compiler-control");
+    assert.equal(packed.status, 0, packed.stderr);
+    const bytes = fs.readFileSync(archive);
+    assert.ok(bytes.length > 0);
+    const existing = cli(["plugins", "pack", "--root", project, "--out", archive], "existing-output-control");
+    assert.equal(existing.status, 1, existing.stderr);
+    assert.match(existing.stderr, /The CLI command failed\./);
+    assert.deepEqual(fs.readFileSync(archive), bytes);
+  } finally {
+    assert.equal(fs.lstatSync(dependencyLink).isSymbolicLink(), true);
+    fs.unlinkSync(dependencyLink);
+  }
+  assert.deepEqual(snapshot(project), before);
+}
+fs.writeFileSync(path.join(output, "summary.json"), JSON.stringify({ fixture, fixed, node: process.version, failure, projectUnchanged: true, commands }, null, 2));
+console.log(fixed ? "FIXED: recovery visible; cause, successful pack, suffix and exclusive-output controls preserved." : "BASELINE REPRODUCED: known missing-compiler reason hidden; suffix control visible; no project/output mutation.");

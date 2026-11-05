@@ -5,7 +5,8 @@ on:
 permissions:
   contents: read
 env:
-  SOURCE_SHA: 491e537e524d8bf3b907c8a153526055002087f1
+  SOURCE_SHA: bc4db50a1afefbcf6d98a3067f5fd94b87fb0793
+  SOURCE_BASE: de04fbe0caa9332999bdcc28d5d4e049672afb16
 jobs:
   proof:
     if: github.repository == 'ly85206559/openclaw' && github.event.repository.fork == true
@@ -19,8 +20,9 @@ jobs:
           sparse-checkout: .github/pr-proof
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          repository: openclaw/openclaw
+          repository: ly85206559/openclaw
           ref: ${{ env.SOURCE_SHA }}
+          fetch-depth: 3
           path: source
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
@@ -32,7 +34,7 @@ jobs:
           lockfile-path: source/pnpm-lock.yaml
           node-version: 24.22.1
           cache-mode: off
-      - name: Pin and build the unchanged real CLI
+      - name: Pin source and install locked dependencies
         working-directory: source
         shell: bash
         run: |
@@ -40,10 +42,54 @@ jobs:
           test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
           git rev-parse HEAD > ../artifacts/source-sha.txt
           pnpm install --frozen-lockfile > ../artifacts/install.log 2>&1
-          pnpm build:runtime > ../artifacts/build.log 2>&1
-      - name: Reproduce the specific owner failure through the CLI
+      - name: Owning browser-builder regression red and green
+        working-directory: source
         shell: bash
-        run: node proof/.github/pr-proof/plugin-bundle-cli-20261105.mjs source artifacts
+        run: |
+          owner=src/cli/plugins-build-bundle.ts
+          trap 'git restore --source=HEAD -- src/cli/plugins-build-bundle.ts' EXIT
+          git show "$SOURCE_BASE:$owner" > "$owner"
+          set +e
+          node scripts/run-vitest.mjs src/cli/plugins-control-ui-build.test.ts --maxWorkers=1 --testNamePattern 'requires author-installed compilers' --reporter=verbose --reporter=json --outputFile.json=../artifacts/unit-red.json > ../artifacts/unit-red.log 2>&1
+          red_status=$?
+          set -e
+          printf '%s\n' "$red_status" > ../artifacts/unit-red-exit.txt
+          test "$red_status" -ne 0
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const result = JSON.parse(fs.readFileSync('../artifacts/unit-red.json', 'utf8'));
+          const failures = result.testResults.flatMap(file => file.assertionResults).filter(test => test.status === 'failed');
+          if (result.numFailedTests !== 1 || result.numPassedTests || failures.length !== 1 || !failures[0].title.includes('requires author-installed compilers') || !fs.readFileSync('../artifacts/unit-red.log','utf8').includes('humanOutput')) throw new Error('Wrong regression baseline');
+          NODE
+          git restore --source=HEAD -- "$owner"
+          node scripts/run-vitest.mjs src/cli/plugins-control-ui-build.test.ts --maxWorkers=1 --reporter=verbose --reporter=json --outputFile.json=../artifacts/unit-green.json > ../artifacts/unit-green.log 2>&1
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const result = JSON.parse(fs.readFileSync('../artifacts/unit-green.json', 'utf8'));
+          if (!result.numPassedTests || result.numFailedTests || result.numPendingTests) throw new Error('Incomplete fixed owner tests');
+          NODE
+      - name: Build the frozen fixed CLI
+        working-directory: source
+        shell: bash
+        run: |
+          pnpm build:runtime > ../artifacts/build.log 2>&1
+      - name: Verify the fixed real CLI and negative controls
+        shell: bash
+        run: node proof/.github/pr-proof/plugin-bundle-cli-20261105.mjs source artifacts fixed
+      - name: Targeted types lint format and budget
+        working-directory: source
+        shell: bash
+        run: |
+          mkdir -p .artifacts
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          fs.writeFileSync('.artifacts/plugin-compiler-types.json', JSON.stringify({extends:'../tsconfig.json',compilerOptions:{incremental:true,tsBuildInfoFile:'./plugin-compiler-types.tsbuildinfo',noEmit:true},files:[],include:['../src/cli/plugins-build-bundle.ts','../src/cli/plugins-control-ui-build.test.ts']},null,2));
+          NODE
+          node scripts/run-tsgo.mjs -p .artifacts/plugin-compiler-types.json 2>&1 | tee ../artifacts/types.log
+          node scripts/run-oxlint.mjs --tsconfig tsconfig.json src/cli/plugins-build-bundle.ts src/cli/plugins-control-ui-build.test.ts 2>&1 | tee ../artifacts/lint.log
+          pnpm format:check --no-error-on-unmatched-pattern -- src/cli/plugins-build-bundle.ts src/cli/plugins-control-ui-build.test.ts 2>&1 | tee ../artifacts/format.log
+          pnpm check:test-lines-ratchet --base "$SOURCE_BASE" 2>&1 | tee ../artifacts/budget.log
+          git diff --check
       - name: Verify source remains unchanged
         if: always()
         working-directory: source
@@ -56,7 +102,7 @@ jobs:
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: always()
         with:
-          name: plugin-bundle-cli-baseline
+          name: plugin-bundle-cli-fixed
           path: artifacts
           retention-days: 14
           if-no-files-found: error
