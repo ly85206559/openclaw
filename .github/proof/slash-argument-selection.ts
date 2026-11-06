@@ -22,23 +22,21 @@ suite.define(() => {
       await expect.poll(() => composer.inputValue()).toBe("/think ");
       const picker = page.locator(".slash-menu[role='listbox']");
       await picker.waitFor({ state: "visible" });
+      const active = picker.locator("[role='option'][aria-selected='true'] .slash-menu-name");
+      await composer.press("ArrowUp");
+      await expect.poll(async () => (await active.textContent())?.trim()).toEqual("ultra");
+      // Check the same scenario remains selected without a selection change.
+      await page.waitForTimeout(300);
+      await expect.poll(async () => (await active.textContent())?.trim()).toEqual("ultra");
       await composer.evaluate((textarea: HTMLTextAreaElement) => {
         textarea.dataset.proofSelectCount = "0";
         textarea.addEventListener("select", () => {
           textarea.dataset.proofSelectCount = String(Number(textarea.dataset.proofSelectCount) + 1);
         });
-        textarea.addEventListener(
-          "keydown",
-          () => {
-            textarea.setSelectionRange(0, 0);
-            textarea.setSelectionRange(textarea.value.length, textarea.value.length);
-          },
-          { capture: true, once: true },
-        );
+        textarea.setSelectionRange(0, 0);
+        textarea.setSelectionRange(textarea.value.length, textarea.value.length);
       });
-      await composer.press("ArrowUp");
       await expect.poll(() => composer.evaluate((el) => Number(el.dataset.proofSelectCount))).toBeGreaterThan(0);
-      const active = picker.locator("[role='option'][aria-selected='true'] .slash-menu-name");
       await expect.poll(async () => (await active.textContent())?.trim()).toBe("ultra");
     });
   });

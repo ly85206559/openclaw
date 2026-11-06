@@ -1,7 +1,7 @@
 name: Slash argument native selection baseline
 on:
   push:
-    branches: [codex/proof-slash-argument-v2-20261106]
+    branches: [codex/proof-slash-argument-v3-20261106]
 permissions:
   contents: read
 jobs:
@@ -86,7 +86,7 @@ jobs:
           assert.ok(line > 0 && lines.filter((value) => value.includes(assertion)).length === 1);
           assert.match(message, new RegExp(`chat-thinking-arguments\\.e2e\\.test\\.ts:${line}:\\d+`));
           assert.match(message, /ultra/);
-          assert.match(message, /off/);
+          assert.match(message, /default/);
           assert.equal(passed.length, 1);
           assert.match(passed[0].fullName, /opens the active model.*desktop/);
           console.log('Expected argument-selection failure and unchanged desktop flow control verified.');
