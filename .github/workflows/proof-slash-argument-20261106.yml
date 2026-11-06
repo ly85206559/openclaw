@@ -1,7 +1,7 @@
 name: Slash argument selection green proof
 on:
   push:
-    branches: [codex/proof-slash-argument-green-v2-20261106]
+    branches: [codex/proof-slash-argument-green-v3-20261106]
 permissions:
   contents: read
 jobs:
@@ -20,7 +20,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: ly85206559/openclaw
-          ref: 91afcfa980db295f5b98437298675776075e3c6d
+          ref: 9a204c99c2608a299aea4d447527f4181bcbff1f
           fetch-depth: 2
           path: source
           persist-credentials: false
@@ -37,7 +37,7 @@ jobs:
         working-directory: source
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = 91afcfa980db295f5b98437298675776075e3c6d
+          test "$(git rev-parse HEAD)" = 9a204c99c2608a299aea4d447527f4181bcbff1f
           test "$(git rev-parse HEAD^)" = f7a46e85d26ad28de5eba194a386731ed28a518f
           mkdir -p ../artifacts
           git diff --check HEAD^ HEAD
