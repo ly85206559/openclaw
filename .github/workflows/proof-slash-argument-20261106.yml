@@ -1,0 +1,82 @@
+name: Slash argument native selection baseline
+on:
+  push:
+    branches: [codex/proof-slash-argument-20261106]
+permissions:
+  contents: read
+jobs:
+  browser:
+    if: github.repository == 'ly85206559/openclaw' && github.event.repository.fork == true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: controller
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: openclaw/openclaw
+          ref: c63b3a2e58c45e82ea4d4955c1ac3bbb6a275d2e
+          path: source
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: 24.22.1
+      - uses: ./source/.github/actions/setup-pnpm-store-cache
+        with:
+          package-manager-file: source/package.json
+          lockfile-path: source/pnpm-lock.yaml
+          node-version: 24.22.1
+          cache-mode: off
+      - name: Install pinned source and Chromium
+        working-directory: source
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = c63b3a2e58c45e82ea4d4955c1ac3bbb6a275d2e
+          pnpm install --frozen-lockfile
+          pnpm --dir ui exec playwright install --with-deps chromium
+      - name: Reproduce native selection and run existing desktop control
+        working-directory: source
+        run: |
+          set -euo pipefail
+          mkdir -p ../artifacts
+          target=ui/src/e2e/chat-thinking-arguments.e2e.test.ts
+          trap 'git restore --source=HEAD -- "$target"' EXIT
+          cat ../controller/.github/proof/slash-argument-selection.ts >> "$target"
+          set +e
+          node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner "$target" --testNamePattern 'retains argument highlight after native selection|opens the active model.*desktop' --maxWorkers=1 --reporter=verbose --reporter=json --outputFile.json=../artifacts/slash-baseline.json > ../artifacts/slash-baseline.log 2>&1
+          status=$?
+          set -e
+          cat ../artifacts/slash-baseline.log
+          printf '%s\n' "$status" > ../artifacts/test-exit.txt
+          test "$status" -ne 0
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import fs from 'node:fs';
+          const report = JSON.parse(fs.readFileSync('../artifacts/slash-baseline.json', 'utf8'));
+          const tests = report.testResults.flatMap((file) => file.assertionResults);
+          const failed = tests.filter((test) => test.status === 'failed');
+          const passed = tests.filter((test) => test.status === 'passed');
+          assert.equal(report.numRuntimeErrorTestSuites ?? 0, 0);
+          assert.equal(failed.length, 1);
+          assert.match(failed[0].fullName, /retains argument highlight after native selection/);
+          assert.match(failed[0].failureMessages.join('\n'), /ultra/);
+          assert.match(failed[0].failureMessages.join('\n'), /off/);
+          assert.equal(passed.length, 1);
+          assert.match(passed[0].fullName, /opens the active model.*desktop/);
+          console.log('Expected argument-selection failure and unchanged desktop flow control verified.');
+          NODE
+          git restore --source=HEAD -- "$target"
+          test -z "$(git status --porcelain --untracked-files=no)"
+          git rev-parse HEAD > ../artifacts/source-head.txt
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: slash-argument-baseline
+          path: artifacts
+          if-no-files-found: warn
+          retention-days: 14
