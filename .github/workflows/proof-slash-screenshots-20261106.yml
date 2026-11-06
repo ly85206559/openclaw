@@ -1,0 +1,134 @@
+name: Slash argument before and after screenshots
+on:
+  push:
+    branches: [codex/proof-slash-argument-screenshots-20261106]
+permissions:
+  contents: read
+jobs:
+  capture:
+    if: github.repository == 'ly85206559/openclaw' && github.event.repository.fork == true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: before
+            repository: openclaw/openclaw
+            ref: f7a46e85d26ad28de5eba194a386731ed28a518f
+            selected: default
+          - label: after
+            repository: ly85206559/openclaw
+            ref: 9a204c99c2608a299aea4d447527f4181bcbff1f
+            selected: ultra
+    env:
+      PROOF_VARIANT: ${{ matrix.label }}
+      PROOF_SELECTED: ${{ matrix.selected }}
+      SOURCE_REF: ${{ matrix.ref }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: controller
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ${{ matrix.repository }}
+          ref: ${{ matrix.ref }}
+          path: source
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: 24.22.1
+      - uses: ./source/.github/actions/setup-pnpm-store-cache
+        with:
+          package-manager-file: source/package.json
+          lockfile-path: source/pnpm-lock.yaml
+          node-version: 24.22.1
+          cache-mode: off
+      - name: Install pinned source and Chromium
+        working-directory: source
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_REF"
+          mkdir -p ../artifacts
+          pnpm install --frozen-lockfile
+          pnpm --dir ui exec playwright install --with-deps chromium
+      - name: Capture selected argument and verify outcome
+        working-directory: source
+        run: |
+          set -euo pipefail
+          target=ui/src/e2e/chat-thinking-arguments.e2e.test.ts
+          trap 'git restore --source=HEAD -- "$target"' EXIT
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import fs from 'node:fs';
+          const path = 'ui/src/e2e/chat-thinking-arguments.e2e.test.ts';
+          let source = fs.readFileSync(path, 'utf8');
+          const snippet = fs.readFileSync('../controller/.github/proof/slash-argument-selection.ts', 'utf8').trim();
+          const prefix = 'suite.define(() => {';
+          const suffix = '\n});';
+          assert.ok(snippet.startsWith(prefix) && snippet.endsWith(suffix));
+          const body = snippet.slice(prefix.length, -suffix.length).trim();
+          if (process.env.PROOF_VARIANT === 'before') {
+            assert.equal(source.split(prefix).length, 2);
+            assert.ok(source.endsWith(`${suffix}\n`));
+            source = source.slice(0, -`${suffix}\n`.length) + '\n  ' + body + `${suffix}\n`;
+          } else {
+            assert.ok(source.includes(body));
+          }
+          const marker = '      await composer.press("Tab");\n      await expect.poll(() => composer.inputValue()).toEqual("/think ultra");';
+          assert.equal(source.split(marker).length, 2);
+          const capture = `      await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+          await expect.poll(async () => (await active.textContent())?.trim()).toBe(process.env.PROOF_SELECTED);
+          const menuBounds = await page.locator(".slash-menu[role='listbox']").boundingBox();
+          const inputBounds = await composer.boundingBox();
+          if (!menuBounds || !inputBounds) throw new Error("Missing screenshot bounds");
+          const x = Math.max(0, Math.floor(Math.min(menuBounds.x, inputBounds.x) - 4));
+          const y = Math.max(0, Math.floor(Math.min(menuBounds.y, inputBounds.y) - 4));
+          const right = Math.ceil(Math.max(menuBounds.x + menuBounds.width, inputBounds.x + inputBounds.width) + 4);
+          const bottom = Math.ceil(Math.max(menuBounds.y + menuBounds.height, inputBounds.y + inputBounds.height) + 4);
+          await page.screenshot({ path: \`../artifacts/\${process.env.PROOF_VARIANT}.png\`, clip: { x, y, width: right - x, height: bottom - y }, animations: "disabled" });
+`;
+          fs.writeFileSync(path, source.replace(marker, capture + marker));
+          NODE
+          set +e
+          node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner "$target" --testNamePattern 'keeps the selected thinking level after selecting text' --maxWorkers=1 --reporter=verbose --reporter=json --outputFile.json=../artifacts/result.json > ../artifacts/run.log 2>&1
+          status=$?
+          set -e
+          test -s "../artifacts/$PROOF_VARIANT.png"
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import fs from 'node:fs';
+          import { stripVTControlCharacters } from 'node:util';
+          const report = JSON.parse(fs.readFileSync('../artifacts/result.json', 'utf8'));
+          const tests = report.testResults.flatMap((file) => file.assertionResults).filter((test) => test.fullName.includes('keeps the selected thinking level after selecting text'));
+          assert.equal(tests.length, 1);
+          if (process.env.PROOF_VARIANT === 'before') {
+            assert.equal(tests[0].status, 'failed');
+            const message = stripVTControlCharacters(tests[0].failureMessages.join('\n'));
+            const source = fs.readFileSync('ui/src/e2e/chat-thinking-arguments.e2e.test.ts', 'utf8');
+            const needle = 'await expect.poll(() => composer.inputValue()).toEqual("/think ultra");';
+            const lines = source.split('\n');
+            const line = lines.findIndex((value) => value.includes(needle)) + 1;
+            assert.ok(line > 0 && lines.filter((value) => value.includes(needle)).length === 1);
+            assert.match(message, new RegExp(`chat-thinking-arguments\\.e2e\\.test\\.ts:${line}:\\d+`));
+            assert.match(message, /default/);
+            assert.match(message, /ultra/);
+          } else {
+            assert.equal(tests[0].status, 'passed');
+          }
+          NODE
+          if [ "$PROOF_VARIANT" = before ]; then test "$status" -ne 0; else test "$status" -eq 0; fi
+          printf '%s\n' "$SOURCE_REF" > ../artifacts/source-head.txt
+          git restore --source=HEAD -- "$target"
+          test -z "$(git status --porcelain --untracked-files=no)"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: slash-screenshot-${{ matrix.label }}
+          path: artifacts
+          if-no-files-found: warn
+          retention-days: 14
