@@ -1,7 +1,7 @@
 name: Slash argument before and after screenshots
 on:
   push:
-    branches: [codex/proof-slash-argument-screenshots-20261106]
+    branches: [codex/proof-slash-argument-screenshots-v2-20261106]
 permissions:
   contents: read
 jobs:
@@ -91,7 +91,7 @@ jobs:
           const right = Math.ceil(Math.max(menuBounds.x + menuBounds.width, inputBounds.x + inputBounds.width) + 4);
           const bottom = Math.ceil(Math.max(menuBounds.y + menuBounds.height, inputBounds.y + inputBounds.height) + 4);
           await page.screenshot({ path: \`../artifacts/\${process.env.PROOF_VARIANT}.png\`, clip: { x, y, width: right - x, height: bottom - y }, animations: "disabled" });
-`;
+          `;
           fs.writeFileSync(path, source.replace(marker, capture + marker));
           NODE
           set +e
