@@ -1,5 +1,5 @@
 suite.define(() => {
-  it("keeps the selected thinking level after clicking the composer", async () => {
+  it("keeps the selected thinking level after selecting text", async () => {
     await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
         models: [
@@ -23,12 +23,19 @@ suite.define(() => {
       );
       await composer.press("ArrowUp");
       await expect.poll(async () => (await active.textContent())?.trim()).toBe("ultra");
-      const bounds = await composer.boundingBox();
-      if (!bounds) {
-        throw new Error("Missing composer bounds");
-      }
-      await composer.click({ position: { x: bounds.width - 8, y: bounds.height / 2 } });
-      expect(await composer.evaluate((el: HTMLTextAreaElement) => el.selectionStart)).toBe(7);
+      await composer.evaluate((el: HTMLTextAreaElement) => {
+        el.dataset.proofSelectCount = "0";
+        el.addEventListener("select", () => {
+          el.dataset.proofSelectCount = String(Number(el.dataset.proofSelectCount) + 1);
+        });
+      });
+      await composer.press("Shift+ArrowLeft");
+      expect(
+        await composer.evaluate((el: HTMLTextAreaElement) => [el.selectionStart, el.selectionEnd]),
+      ).toEqual([6, 7]);
+      await expect
+        .poll(() => composer.evaluate((el) => Number(el.dataset.proofSelectCount)))
+        .toBeGreaterThan(0);
       await composer.press("Tab");
       await expect.poll(() => composer.inputValue()).toEqual("/think ultra");
       await composer.press("Enter");
