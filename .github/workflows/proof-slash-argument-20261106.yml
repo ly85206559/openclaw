@@ -1,7 +1,7 @@
 name: Slash argument native selection baseline
 on:
   push:
-    branches: [codex/proof-slash-argument-v3-20261106]
+    branches: [codex/proof-slash-argument-v4-20261106]
 permissions:
   contents: read
 jobs:
@@ -20,7 +20,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: openclaw/openclaw
-          ref: c63b3a2e58c45e82ea4d4955c1ac3bbb6a275d2e
+          ref: f7a46e85d26ad28de5eba194a386731ed28a518f
           path: source
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
@@ -36,8 +36,12 @@ jobs:
         working-directory: source
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = c63b3a2e58c45e82ea4d4955c1ac3bbb6a275d2e
+          test "$(git rev-parse HEAD)" = f7a46e85d26ad28de5eba194a386731ed28a518f
           pnpm install --frozen-lockfile
+          mkdir -p ../artifacts
+          node -p "require('./ui/node_modules/solid-js/package.json').version" > ../artifacts/solid-version.txt
+          test "$(cat ../artifacts/solid-version.txt)" = 2.0.0-rc.18
+          cp ui/node_modules/solid-js/CHEATSHEET.md ../artifacts/solid-cheatsheet.md
           pnpm --dir ui exec playwright install --with-deps chromium
       - name: Reproduce native selection and run existing desktop control
         working-directory: source
