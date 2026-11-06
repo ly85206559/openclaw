@@ -1,7 +1,7 @@
 name: Slash argument native selection baseline
 on:
   push:
-    branches: [codex/proof-slash-argument-v4-20261106]
+    branches: [codex/proof-slash-argument-v5-20261106]
 permissions:
   contents: read
 jobs:
@@ -65,7 +65,7 @@ jobs:
           fs.writeFileSync(path, source.slice(0, -`${suffix}\n`.length) + body + `${suffix}\n`);
           NODE
           set +e
-          node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner "$target" --testNamePattern 'retains argument highlight after native selection|opens the active model.*desktop' --maxWorkers=1 --reporter=verbose --reporter=json --outputFile.json=../artifacts/slash-baseline.json > ../artifacts/slash-baseline.log 2>&1
+          node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner "$target" --testNamePattern 'keeps the selected thinking level after clicking the composer|opens the active model.*desktop' --maxWorkers=1 --reporter=verbose --reporter=json --outputFile.json=../artifacts/slash-baseline.json > ../artifacts/slash-baseline.log 2>&1
           status=$?
           set -e
           cat ../artifacts/slash-baseline.log
@@ -81,10 +81,10 @@ jobs:
           const passed = tests.filter((test) => test.status === 'passed');
           assert.equal(report.numRuntimeErrorTestSuites ?? 0, 0);
           assert.equal(failed.length, 1);
-          assert.match(failed[0].fullName, /retains argument highlight after native selection/);
+          assert.match(failed[0].fullName, /keeps the selected thinking level after clicking the composer/);
           const message = stripVTControlCharacters(failed[0].failureMessages.join('\n'));
           const source = fs.readFileSync('ui/src/e2e/chat-thinking-arguments.e2e.test.ts', 'utf8');
-          const assertion = 'await expect.poll(async () => (await active.textContent())?.trim()).toBe("ultra");';
+          const assertion = 'await expect.poll(() => composer.inputValue()).toEqual("/think ultra");';
           const lines = source.split('\n');
           const line = lines.findIndex((value) => value.includes(assertion)) + 1;
           assert.ok(line > 0 && lines.filter((value) => value.includes(assertion)).length === 1);
