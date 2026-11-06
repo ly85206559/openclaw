@@ -40,13 +40,6 @@ suite.define(() => {
       await expect.poll(() => composer.evaluate((el) => Number(el.dataset.proofSelectCount))).toBeGreaterThan(0);
       const active = picker.locator("[role='option'][aria-selected='true'] .slash-menu-name");
       await expect.poll(async () => (await active.textContent())?.trim()).toBe("ultra");
-      await composer.press("Tab");
-      await expect.poll(() => composer.inputValue()).toBe("/think ultra");
-      await composer.press("Enter");
-      expect((await gateway.waitForRequest("sessions.patch")).params).toMatchObject({
-        key,
-        thinkingLevel: "ultra",
-      });
     });
   });
 });

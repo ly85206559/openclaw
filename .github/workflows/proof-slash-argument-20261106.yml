@@ -57,6 +57,7 @@ jobs:
           node --input-type=module <<'NODE'
           import assert from 'node:assert/strict';
           import fs from 'node:fs';
+          import { stripVTControlCharacters } from 'node:util';
           const report = JSON.parse(fs.readFileSync('../artifacts/slash-baseline.json', 'utf8'));
           const tests = report.testResults.flatMap((file) => file.assertionResults);
           const failed = tests.filter((test) => test.status === 'failed');
@@ -64,8 +65,15 @@ jobs:
           assert.equal(report.numRuntimeErrorTestSuites ?? 0, 0);
           assert.equal(failed.length, 1);
           assert.match(failed[0].fullName, /retains argument highlight after native selection/);
-          assert.match(failed[0].failureMessages.join('\n'), /ultra/);
-          assert.match(failed[0].failureMessages.join('\n'), /off/);
+          const message = stripVTControlCharacters(failed[0].failureMessages.join('\n'));
+          const source = fs.readFileSync('ui/src/e2e/chat-thinking-arguments.e2e.test.ts', 'utf8');
+          const assertion = 'await expect.poll(async () => (await active.textContent())?.trim()).toBe("ultra");';
+          const lines = source.split('\n');
+          const line = lines.findIndex((value) => value.includes(assertion)) + 1;
+          assert.ok(line > 0 && lines.filter((value) => value.includes(assertion)).length === 1);
+          assert.match(message, new RegExp(`chat-thinking-arguments\\.e2e\\.test\\.ts:${line}:\\d+`));
+          assert.match(message, /ultra/);
+          assert.match(message, /off/);
           assert.equal(passed.length, 1);
           assert.match(passed[0].fullName, /opens the active model.*desktop/);
           console.log('Expected argument-selection failure and unchanged desktop flow control verified.');
