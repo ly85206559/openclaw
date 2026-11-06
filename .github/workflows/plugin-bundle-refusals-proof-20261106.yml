@@ -5,8 +5,9 @@ on:
 permissions:
   contents: read
 env:
-  SOURCE_SHA: 5c03ac15f3487eed714d912efb52dfbf65c8cfa1
-  PROOF_MODE: baseline
+  SOURCE_SHA: fbbe583076c0b6cc85665dcc6c531e37f376e8d2
+  SOURCE_BASE: 6c1bad522ef03fe8ca32d08adf7c60bfa2bc74ba
+  PROOF_MODE: fixed
 jobs:
   proof:
     if: github.repository == 'ly85206559/openclaw' && github.event.repository.fork == true
@@ -21,7 +22,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: ly85206559/openclaw
-          ref: 5c03ac15f3487eed714d912efb52dfbf65c8cfa1
+          ref: fbbe583076c0b6cc85665dcc6c531e37f376e8d2
           fetch-depth: 3
           path: source
           persist-credentials: false
@@ -43,11 +44,51 @@ jobs:
           test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
           pnpm install --frozen-lockfile > ../artifacts/install.log 2>&1
           pnpm docs:list > ../artifacts/docs-list.log 2>&1
+      - name: Regression-only main red and complete fixed owner proof
+        working-directory: source
+        shell: bash
+        run: |
+          owner=src/cli/plugins-build-bundle.ts
+          trap 'git restore --source=HEAD -- "$owner"' EXIT
+          git restore --source="$SOURCE_BASE" -- "$owner"
+          set +e
+          node scripts/run-vitest.mjs src/cli/plugins-control-ui-build.test.ts --maxWorkers=1 --testNamePattern 'rejects a retained external|rejects unresolved' --reporter=verbose --reporter=json --outputFile.json=../artifacts/unit-red.json > ../artifacts/unit-red.log 2>&1
+          red_status=$?
+          set -e
+          echo "$red_status" > ../artifacts/unit-red-exit.txt
+          test "$red_status" -ne 0
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const report = JSON.parse(fs.readFileSync('../artifacts/unit-red.json', 'utf8'));
+          const failures = report.testResults.flatMap(file => file.assertionResults).filter(test => test.status === 'failed');
+          if (report.numFailedTests !== 5 || report.numPassedTests || failures.length !== 5 || failures.some(test => !test.failureMessages.join('\n').includes('humanOutput'))) throw new Error('Wrong regression red');
+          NODE
+          git restore --source=HEAD -- "$owner"
+          node scripts/run-vitest.mjs src/cli/plugins-control-ui-build.test.ts src/cli/plugins-feature-artifact.test.ts src/cli/failure-output.test.ts --maxWorkers=1 --reporter=verbose --reporter=json --outputFile.json=../artifacts/unit-green.json > ../artifacts/unit-green.log 2>&1
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const report = JSON.parse(fs.readFileSync('../artifacts/unit-green.json', 'utf8'));
+          if (!report.numPassedTests || report.numFailedTests || report.numPendingTests) throw new Error('Incomplete fixed proof');
+          NODE
       - name: Build the frozen CLI
         working-directory: source
         run: pnpm build:runtime > ../artifacts/build.log 2>&1
       - name: Exercise actual CLI and negative controls
         run: node proof/.github/pr-proof/plugin-bundle-refusals-20261106.mjs source artifacts "$PROOF_MODE"
+      - name: Targeted types lint format and test budget
+        working-directory: source
+        shell: bash
+        run: |
+          mkdir -p .artifacts
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          fs.writeFileSync('.artifacts/bundle-refusals-types.json', JSON.stringify({extends:'../tsconfig.json',compilerOptions:{rootDir:'..',incremental:true,tsBuildInfoFile:'./bundle-refusals-types.tsbuildinfo',noEmit:true},files:[],include:['../src/cli/plugins-build-bundle.ts','../src/cli/plugins-control-ui-build.test.ts','../src/types/**/*.d.ts']},null,2));
+          NODE
+          node scripts/run-tsgo.mjs -p .artifacts/bundle-refusals-types.json 2>&1 | tee ../artifacts/types.log
+          node scripts/run-oxlint.mjs --tsconfig tsconfig.json src/cli/plugins-build-bundle.ts src/cli/plugins-control-ui-build.test.ts 2>&1 | tee ../artifacts/lint.log
+          pnpm format:check --no-error-on-unmatched-pattern -- src/cli/plugins-build-bundle.ts src/cli/plugins-control-ui-build.test.ts docs/cli/plugins/authoring.md 2>&1 | tee ../artifacts/format.log
+          pnpm check:test-lines-ratchet --base "$SOURCE_BASE" 2>&1 | tee ../artifacts/budget.log
+          git diff --check
       - name: Verify source remains unchanged
         if: always()
         working-directory: source
