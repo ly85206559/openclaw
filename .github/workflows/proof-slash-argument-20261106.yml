@@ -1,27 +1,23 @@
-name: Slash argument selection green proof
+name: Slash argument CI repair proof
 on:
   push:
-    branches: [codex/proof-slash-argument-green-v3-20261106]
+    branches: [codex/proof-slash-argument-ci-repair-20261106]
 permissions:
   contents: read
 jobs:
-  browser:
+  verify:
     if: github.repository == 'ly85206559/openclaw' && github.event.repository.fork == true
     runs-on: ubuntu-24.04
-    timeout-minutes: 35
+    timeout-minutes: 40
     defaults:
       run:
         shell: bash
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          path: controller
-          persist-credentials: false
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
           repository: ly85206559/openclaw
-          ref: 9a204c99c2608a299aea4d447527f4181bcbff1f
-          fetch-depth: 2
+          ref: bd0037d66e320752397b43afd9a419e8c784c789
+          fetch-depth: 3
           path: source
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
@@ -33,68 +29,93 @@ jobs:
           lockfile-path: source/pnpm-lock.yaml
           node-version: 24.22.1
           cache-mode: off
-      - name: Install pinned source and Chromium
+      - name: Install exact candidate and Chromium
         working-directory: source
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = 9a204c99c2608a299aea4d447527f4181bcbff1f
-          test "$(git rev-parse HEAD^)" = f7a46e85d26ad28de5eba194a386731ed28a518f
+          test "$(git rev-parse HEAD)" = bd0037d66e320752397b43afd9a419e8c784c789
+          test "$(git rev-parse HEAD^)" = 9a204c99c2608a299aea4d447527f4181bcbff1f
+          test "$(git rev-parse HEAD^^)" = f7a46e85d26ad28de5eba194a386731ed28a518f
           mkdir -p ../artifacts
-          git diff --check HEAD^ HEAD
+          git diff --check HEAD^^ HEAD
           pnpm install --frozen-lockfile
           pnpm --dir ui exec playwright install --with-deps chromium
-      - name: Verify the baseline regression scenario
+      - name: Reproduce keyboard regression with base owner
         working-directory: source
         run: |
+          set -euo pipefail
+          owner=ui/src/pages/chat/components/chat-composer-slash-menu-state.ts
+          trap 'git restore --source=HEAD -- "$owner"' EXIT
+          git show "HEAD^^:$owner" > "$owner"
+          set +e
+          node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner ui/src/e2e/chat-thinking-arguments.e2e.test.ts --testNamePattern 'opens the active model.*desktop' --maxWorkers=1 --reporter=verbose --reporter=json --outputFile.json=../artifacts/red.json > ../artifacts/red.log 2>&1
+          status=$?
+          set -e
+          test "$status" -ne 0
           node --input-type=module <<'NODE'
           import assert from 'node:assert/strict';
           import fs from 'node:fs';
-          const source = fs.readFileSync('ui/src/e2e/chat-thinking-arguments.e2e.test.ts', 'utf8');
-          const snippet = fs.readFileSync('../controller/.github/proof/slash-argument-selection.ts', 'utf8').trim();
-          const prefix = 'suite.define(() => {';
-          const suffix = '\n});';
-          assert.ok(snippet.startsWith(prefix) && snippet.endsWith(suffix));
-          assert.ok(source.includes(snippet.slice(prefix.length, -suffix.length).trim()));
+          import { stripVTControlCharacters } from 'node:util';
+          const report = JSON.parse(fs.readFileSync('../artifacts/red.json', 'utf8'));
+          const tests = report.testResults.flatMap((file) => file.assertionResults).filter((test) => test.status === 'failed');
+          assert.equal(report.numRuntimeErrorTestSuites ?? 0, 0);
+          assert.equal(tests.length, 1);
+          assert.match(tests[0].fullName, /opens the active model.*desktop/);
+          const message = stripVTControlCharacters(tests[0].failureMessages.join('\n'));
+          const lines = fs.readFileSync('ui/src/e2e/chat-thinking-arguments.e2e.test.ts', 'utf8').split('\n');
+          const needle = 'await expect.poll(() => composer.inputValue()).toBe("/think ultra");';
+          const line = lines.findIndex((value) => value.includes(needle)) + 1;
+          assert.ok(line > 0 && lines.filter((value) => value.includes(needle)).length === 1);
+          assert.match(message, new RegExp(`chat-thinking-arguments\\.e2e\\.test\\.ts:${line}:\\d+`));
+          assert.match(message, /default/);
+          assert.match(message, /ultra/);
           NODE
-      - name: Slash menu behavior and negative controls
+          git restore --source=HEAD -- "$owner"
+          test -z "$(git status --porcelain --untracked-files=no)"
+      - name: Unit behavior and negative controls
         working-directory: source
         run: |
           set -euo pipefail
-          pnpm --dir ui test src/pages/chat/components/chat-composer-menu.test.tsx 2>&1 | tee ../artifacts/slash-unit.log
-      - name: Real pointer selection and existing desktop control
+          pnpm --dir ui test src/pages/chat/components/chat-composer-menu.test.tsx 2>&1 | tee ../artifacts/unit.log
+      - name: Keyboard regression and unchanged mobile control
         working-directory: source
         run: |
           set -euo pipefail
-          node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner ui/src/e2e/chat-thinking-arguments.e2e.test.ts --testNamePattern 'keeps the selected thinking level after selecting text|opens the active model.*desktop' --maxWorkers=1 --reporter=verbose --reporter=json --outputFile.json=../artifacts/slash-green.json 2>&1 | tee ../artifacts/slash-green.log
+          node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner ui/src/e2e/chat-thinking-arguments.e2e.test.ts --testNamePattern 'opens the active model.*(desktop|mobile)' --maxWorkers=1 --reporter=verbose --reporter=json --outputFile.json=../artifacts/green.json 2>&1 | tee ../artifacts/green.log
           node --input-type=module <<'NODE'
           import assert from 'node:assert/strict';
           import fs from 'node:fs';
-          const report = JSON.parse(fs.readFileSync('../artifacts/slash-green.json', 'utf8'));
+          const report = JSON.parse(fs.readFileSync('../artifacts/green.json', 'utf8'));
           const tests = report.testResults.flatMap((file) => file.assertionResults);
           const passed = tests.filter((test) => test.status === 'passed');
           assert.equal(report.numRuntimeErrorTestSuites ?? 0, 0);
           assert.equal(tests.filter((test) => test.status === 'failed').length, 0);
           assert.equal(passed.length, 2);
-          assert.ok(passed.some((test) => /keeps the selected thinking level after selecting text/.test(test.fullName)));
           assert.ok(passed.some((test) => /opens the active model.*desktop/.test(test.fullName)));
+          assert.ok(passed.some((test) => /opens the active model.*mobile/.test(test.fullName)));
           NODE
-      - name: Touched-surface format and lint
+      - name: Touched-surface checks and test-line ratchet
         working-directory: source
         run: |
           set -euo pipefail
           node scripts/run-format.mts --check ui/src/e2e/chat-thinking-arguments.e2e.test.ts ui/src/pages/chat/components/chat-composer-menu.test.tsx ui/src/pages/chat/components/chat-composer-slash-menu-state.ts 2>&1 | tee ../artifacts/format.log
           node scripts/run-oxlint.mjs --tsconfig ui/tsconfig.json ui/src/e2e/chat-thinking-arguments.e2e.test.ts ui/src/pages/chat/components/chat-composer-menu.test.tsx ui/src/pages/chat/components/chat-composer-slash-menu-state.ts 2>&1 | tee ../artifacts/lint.log
-      - name: UI typecheck
+          node scripts/run-tsgo.mjs -p ui/tsconfig.json --noEmit 2>&1 | tee ../artifacts/typecheck.log
+          node --import ./scripts/tsx.mjs scripts/check-test-lines-ratchet.mts --base f7a46e85d26ad28de5eba194a386731ed28a518f --no-merge-base 2>&1 | tee ../artifacts/test-lines.log
+      - name: Paired UI performance against current upstream main
         working-directory: source
         run: |
           set -euo pipefail
-          node scripts/run-tsgo.mjs -p ui/tsconfig.json --noEmit 2>&1 | tee ../artifacts/typecheck.log
+          git fetch --no-tags --depth=1 https://github.com/openclaw/openclaw.git main
+          base=$(git rev-parse FETCH_HEAD)
+          printf '%s\n' "$base" > ../artifacts/performance-base.txt
+          node --import ./scripts/tsx.mjs scripts/check-control-ui-performance-base.mts "$base" 2>&1 | tee ../artifacts/performance.log
           test -z "$(git status --porcelain --untracked-files=no)"
           git rev-parse HEAD > ../artifacts/source-head.txt
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: always()
         with:
-          name: slash-argument-green
+          name: slash-ci-repair-proof
           path: artifacts
           if-no-files-found: warn
           retention-days: 14
