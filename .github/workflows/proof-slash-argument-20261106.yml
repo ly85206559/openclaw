@@ -1,7 +1,7 @@
 name: Slash argument native selection baseline
 on:
   push:
-    branches: [codex/proof-slash-argument-20261106]
+    branches: [codex/proof-slash-argument-v2-20261106]
 permissions:
   contents: read
 jobs:
@@ -46,7 +46,20 @@ jobs:
           mkdir -p ../artifacts
           target=ui/src/e2e/chat-thinking-arguments.e2e.test.ts
           trap 'git restore --source=HEAD -- "$target"' EXIT
-          cat ../controller/.github/proof/slash-argument-selection.ts >> "$target"
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import fs from 'node:fs';
+          const path = 'ui/src/e2e/chat-thinking-arguments.e2e.test.ts';
+          const source = fs.readFileSync(path, 'utf8');
+          const snippet = fs.readFileSync('../controller/.github/proof/slash-argument-selection.ts', 'utf8').trim();
+          const prefix = 'suite.define(() => {';
+          const suffix = '\n});';
+          assert.equal(source.split(prefix).length, 2);
+          assert.ok(source.endsWith(`${suffix}\n`));
+          assert.ok(snippet.startsWith(prefix) && snippet.endsWith(suffix));
+          const body = snippet.slice(prefix.length, -suffix.length);
+          fs.writeFileSync(path, source.slice(0, -`${suffix}\n`.length) + body + `${suffix}\n`);
+          NODE
           set +e
           node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner "$target" --testNamePattern 'retains argument highlight after native selection|opens the active model.*desktop' --maxWorkers=1 --reporter=verbose --reporter=json --outputFile.json=../artifacts/slash-baseline.json > ../artifacts/slash-baseline.log 2>&1
           status=$?
