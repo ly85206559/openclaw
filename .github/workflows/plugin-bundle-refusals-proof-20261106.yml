@@ -1,7 +1,6 @@
 name: Emoji IME native baseline
 on:
-  push:
-    branches: [codex/proof-emoji-ime-20261109]
+  workflow_dispatch:
 permissions:
   contents: read
 env:
