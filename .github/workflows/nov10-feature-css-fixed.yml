@@ -1,0 +1,116 @@
+name: Nov 10 feature scaffold CSS fixed proof
+
+on:
+  push:
+    branches: [codex/discovery-proof-20261110]
+    paths:
+      - .github/workflows/nov10-feature-css-fixed.yml
+      - proof/nov10-feature-css-fixed.mjs
+      - proof/nov10-feature-css-committed-base-red.mjs
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  fixed:
+    if: github.repository == 'ly85206559/openclaw' && github.event.repository.fork == true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: controller
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ly85206559/openclaw
+          ref: 188689fb9b1db0633e49c4204bfc39ef8bbfbd70
+          path: source
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: 24.22.1
+      - uses: ./source/.github/actions/setup-pnpm-store-cache
+        with:
+          package-manager-file: source/package.json
+          lockfile-path: source/pnpm-lock.yaml
+          node-version: 24.22.1
+          cache-mode: off
+      - name: Frozen source dependencies
+        working-directory: source
+        run: |
+          mkdir -p ../artifacts
+          /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/install.wall.txt pnpm install --frozen-lockfile 2>&1 | tee ../artifacts/install.log
+      - name: Prepare the canonical CLI
+        working-directory: source
+        run: |
+          /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/cli-prepare.wall.txt pnpm --silent openclaw --version 2>&1 | tee ../artifacts/cli-prepare.log
+      - name: Actual generated build, scoped checks, and committed provider-feature validation
+        working-directory: source
+        run: |
+          /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/fixed.wall.txt node --import ./scripts/tsx.mjs ../controller/proof/nov10-feature-css-fixed.mjs . ../artifacts 2>&1 | tee ../artifacts/fixed.log
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: nov10-feature-css-fixed
+          path: artifacts
+          if-no-files-found: error
+          retention-days: 14
+
+  committed-base-red:
+    if: github.repository == 'ly85206559/openclaw' && github.event.repository.fork == true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: controller
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ly85206559/openclaw
+          ref: 188689fb9b1db0633e49c4204bfc39ef8bbfbd70
+          path: candidate
+          sparse-checkout: scripts/validate-plugin-init-provider-scaffold.ts
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ly85206559/openclaw
+          ref: 40c3b508ba130cb9244f077015321b4fa4e91965
+          path: source-base
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: 24.22.1
+      - uses: ./source-base/.github/actions/setup-pnpm-store-cache
+        with:
+          package-manager-file: source-base/package.json
+          lockfile-path: source-base/pnpm-lock.yaml
+          node-version: 24.22.1
+          cache-mode: off
+      - name: Independent frozen base dependencies
+        working-directory: source-base
+        run: |
+          mkdir -p ../artifacts
+          /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/base-install.wall.txt pnpm install --frozen-lockfile 2>&1 | tee ../artifacts/base-install.log
+      - name: Prepare the canonical base CLI
+        working-directory: source-base
+        run: |
+          /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/base-cli-prepare.wall.txt pnpm --silent openclaw --version 2>&1 | tee ../artifacts/base-cli-prepare.log
+      - name: Committed regression script with only its file overlaid onto base
+        working-directory: source-base
+        run: |
+          /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/committed-base-red.wall.txt node --import ./scripts/tsx.mjs ../controller/proof/nov10-feature-css-committed-base-red.mjs . ../candidate ../artifacts 2>&1 | tee ../artifacts/committed-base-red.log
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: nov10-feature-css-committed-base-red
+          path: artifacts
+          if-no-files-found: error
+          retention-days: 14
