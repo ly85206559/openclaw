@@ -1,0 +1,73 @@
+name: Nov 10 Markdown current-head final checks
+
+on:
+  push:
+    branches: [codex/discovery-proof-20261110]
+    paths:
+      - .github/workflows/nov10-markdown-final-checks.yml
+      - proof/nov10-markdown-final-checks.mjs
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  final-checks:
+    if: github.repository == 'ly85206559/openclaw' && github.event.repository.fork == true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: controller
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ly85206559/openclaw
+          ref: f6d80bab2cdd4b60263ab1c51aac0722a8b07f5b
+          fetch-depth: 1
+          path: source
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: 24.22.1
+      - uses: ./source/.github/actions/setup-pnpm-store-cache
+        with:
+          package-manager-file: source/package.json
+          lockfile-path: source/pnpm-lock.yaml
+          node-version: 24.22.1
+          cache-mode: off
+      - name: Prepare immutable prior and baseline comparisons
+        working-directory: source
+        run: |
+          mkdir -p ../artifacts
+          git fetch --no-tags --depth=1 origin 17a59bfc0922e68a628948ead8e6d06b8f0a65f3
+          git fetch --no-tags --depth=1 origin 40c3b508ba130cb9244f077015321b4fa4e91965
+      - name: Install pinned source
+        working-directory: source
+        run: |
+          /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/install.wall.txt pnpm install --frozen-lockfile 2>&1 | tee ../artifacts/install.log
+      - name: Verify exact delta and run only current-head affected checks
+        working-directory: source
+        run: |
+          /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/final-checks.wall.txt node --import ./scripts/tsx.mjs ../controller/proof/nov10-markdown-final-checks.mjs . ../artifacts 2>&1 | tee ../artifacts/final-checks.log
+      - name: Record exact source and actual final cleanliness
+        if: always()
+        working-directory: source
+        run: |
+          mkdir -p ../artifacts
+          git rev-parse HEAD > ../artifacts/source-head.txt
+          git status --porcelain --untracked-files=no > ../artifacts/source-status.txt
+          test "$(git rev-parse HEAD)" = f6d80bab2cdd4b60263ab1c51aac0722a8b07f5b
+          test ! -s ../artifacts/source-status.txt
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: nov10-markdown-final-checks
+          path: artifacts
+          if-no-files-found: error
+          retention-days: 14
