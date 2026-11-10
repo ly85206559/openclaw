@@ -86,7 +86,7 @@ export function flattenMarkdownToPlainText(text: string): string {
 function matchInlineCodeEnds(text: string): Map<number, number> {
   const ends = new Map<number, number>();
   const nextEnds = new Map<number, number>();
-  for (const run of Array.from(text.matchAll(/`+/g)).reverse()) {
+  for (const run of Array.from(text.matchAll(/`+/g)).toReversed()) {
     const width = run[0].length;
     const end = nextEnds.get(width);
     if (end !== undefined) {
