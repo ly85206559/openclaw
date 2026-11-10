@@ -3,6 +3,9 @@ import { flattenMarkdownToPlainText } from "./markdown-plain-text.js";
 
 describe("flattenMarkdownToPlainText", () => {
   it.each([
+    ["double-backtick code", "Keep ``a*b*`` and ``[x](y)``.", "Keep a*b* and [x](y)."],
+    ["literal runs of other widths", "Keep ``a`*b*`` and `c``*d*`.", "Keep a`*b* and c``*d*."],
+    ["unclosed code", "Keep `a*b* and [docs](u).", "Keep `ab and docs."],
     ["fences", "a\n````\n```\nx\n```\n````x\nx\n`````\n~~~\nx\n~~~~\n```\nx\n```\nb", "a b"],
     ["code", "**`_i_`** [`**/*`](u`v`) `[x](y)`\0`\x00` ````z````", "_i_ **/* [x](y)\x00\x00 `"],
     [

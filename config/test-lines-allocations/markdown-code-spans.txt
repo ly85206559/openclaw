@@ -1,0 +1,3 @@
+# Preserve literal multi-backtick spans and unmatched delimiter behavior.
+# Extend the existing normalizer table by exactly 3 LF lines.
+3

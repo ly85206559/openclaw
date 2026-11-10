@@ -48,11 +48,26 @@ export function flattenMarkdownToPlainText(text: string): string {
     .replace(/```[\s\S]*?```/g, " ")
     .replace(/```/g, " ");
   // Code spans become `\0<index>\0` so block and emphasis stripping cannot rewrite them; other NULs are doubled.
-  const withoutCode = stripInlineLinks(withoutFences).replace(
-    /\0|`([^`]*)`/g,
-    (_match, literal: string | undefined) =>
-      literal === undefined ? "\0\0" : `\0${code.push(literal) - 1}\0`,
-  );
+  const withoutLinks = stripInlineLinks(withoutFences);
+  const codeEnds = matchInlineCodeEnds(withoutLinks);
+  let withoutCode = "";
+  let cursor = 0;
+  for (const match of withoutLinks.matchAll(/`+|\0/g)) {
+    if (match.index < cursor) {
+      continue;
+    }
+    const end = codeEnds.get(match.index);
+    if (end === undefined && match[0] !== "\0") {
+      continue;
+    }
+    withoutCode += withoutLinks.slice(cursor, match.index);
+    withoutCode +=
+      end === undefined
+        ? "\0\0"
+        : `\0${code.push(withoutLinks.slice(match.index + match[0].length, end - match[0].length)) - 1}\0`;
+    cursor = end ?? match.index + 1;
+  }
+  withoutCode += withoutLinks.slice(cursor);
   // Quote markers may nest with horizontal whitespace, but must not consume another line.
   let flattened = withoutCode.replace(
     /^[\t ]{0,3}(?:(?:>[\t ]*)+|(?:#{1,6}|[-+*]|\d+[.)])\s+)/gm,
@@ -65,6 +80,21 @@ export function flattenMarkdownToPlainText(text: string): string {
     .replace(/\0(\d*)\0/g, (_match, index: string) => (index ? (code[Number(index)] ?? "") : "\0"))
     .replace(/\s+/g, " ")
     .trim();
+}
+
+/** Equal-width maximal runs close code; precompute successors to avoid rescanning unmatched runs. */
+function matchInlineCodeEnds(text: string): Map<number, number> {
+  const ends = new Map<number, number>();
+  const nextEnds = new Map<number, number>();
+  for (const run of Array.from(text.matchAll(/`+/g)).reverse()) {
+    const width = run[0].length;
+    const end = nextEnds.get(width);
+    if (end !== undefined) {
+      ends.set(run.index, end);
+    }
+    nextEnds.set(width, run.index + width);
+  }
+  return ends;
 }
 
 function stripEmphasis(text: string, marker: "*" | "_" | "~"): string {
@@ -219,13 +249,14 @@ function matchLinks(text: string): {
   const labelEnds = new Map<number, number>();
   const destinationEnds = new Map<number, number>();
   const parenClosers = matchParens(text);
+  const codeEnds = matchInlineCodeEnds(text);
   const brackets: number[] = [];
   for (let index = 0; index < text.length; index += 1) {
     const char = text.charAt(index);
     if (char === "\\") {
       index += 1;
     } else if (char === "`") {
-      index = Math.max(index, text.indexOf("`", index + 1));
+      index = (codeEnds.get(index) ?? index + 1) - 1;
     } else if (char === "[") {
       brackets.push(index);
     } else if (char === "]") {
