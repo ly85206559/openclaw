@@ -1,0 +1,21 @@
+name: Discovery execution probe
+
+on:
+  push:
+    branches: [codex/discovery-proof-20261110]
+
+permissions: {}
+
+jobs:
+  probe:
+    if: github.repository == 'ly85206559/openclaw' && github.event.repository.fork == true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - name: Confirm standard secretless runner execution
+        shell: bash
+        run: |
+          test "$GITHUB_REPOSITORY" = ly85206559/openclaw
+          test "$RUNNER_OS" = Linux
+          git --version
+          python3 --version
