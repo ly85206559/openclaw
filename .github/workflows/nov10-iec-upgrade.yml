@@ -1,0 +1,80 @@
+name: November 10 IEC stable upgrade proof
+
+on:
+  push:
+    branches: [codex/discovery-proof-20261110]
+    paths:
+      - .github/workflows/nov10-iec-upgrade.yml
+      - proof/nov10-iec-upgrade.template.mjs
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  PRODUCT_HEAD: 097e41e68deaf51e11c3a57b4df811d8d3b7acd1
+
+jobs:
+  stable-upgrade:
+    if: github.repository == 'ly85206559/openclaw' && github.event.repository.fork == true
+    runs-on: ubuntu-24.04
+    # Allows the canonical package owner's build/pack bounds and two independent installs.
+    # This job limit does not alter any product or package-owner timeout.
+    timeout-minutes: 210
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: controller
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ly85206559/openclaw
+          ref: 097e41e68deaf51e11c3a57b4df811d8d3b7acd1
+          fetch-depth: 1
+          path: source
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: 24.22.1
+      - uses: ./source/.github/actions/setup-pnpm-store-cache
+        with:
+          package-manager-file: source/package.json
+          lockfile-path: source/pnpm-lock.yaml
+          node-version: 24.22.1
+          cache-mode: off
+      - name: Install exact candidate source dependencies
+        working-directory: source
+        run: |
+          set -euo pipefail
+          mkdir -p ../artifacts
+          test "$(git rev-parse HEAD)" = "$PRODUCT_HEAD"
+          test -z "$(git status --porcelain --untracked-files=no)"
+          /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/source-install.wall.txt pnpm install --frozen-lockfile 2>&1 | tee ../artifacts/source-install.log
+      - name: Same-prefix stable installation and candidate package upgrade
+        working-directory: source
+        run: |
+          set -euo pipefail
+          # The driver calls the canonical pack owner, which owns its single full build.
+          # No prior pnpm openclaw cold runtime build or separate build command is needed.
+          /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/upgrade.wall.txt node --import ./scripts/tsx.mjs ../controller/proof/nov10-iec-upgrade.template.mjs . ../artifacts 2>&1 | tee ../artifacts/upgrade.log
+      - name: Record candidate source identity and tracked cleanliness
+        if: always()
+        working-directory: source
+        run: |
+          set -euo pipefail
+          mkdir -p ../artifacts
+          git rev-parse HEAD > ../artifacts/source-head.txt
+          git status --porcelain --untracked-files=no > ../artifacts/source-status.txt
+          test "$(git rev-parse HEAD)" = "$PRODUCT_HEAD"
+          test ! -s ../artifacts/source-status.txt
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: nov10-iec-upgrade-${{ github.run_id }}
+          path: artifacts
+          if-no-files-found: error
+          retention-days: 14
