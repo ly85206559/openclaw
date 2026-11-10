@@ -158,6 +158,7 @@ export default defineControlUiPlugin({
   },
 });
 `,
+    "src/styles.d.ts": `declare module "*.css";\n`,
     "src/control-ui.css": `.feature-draft-page, .feature-draft-composer { display: grid; gap: 16px; padding: 24px; color: var(--text); }
 .feature-draft-page textarea, .feature-draft-composer textarea { min-height: 140px; padding: 12px; color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: 8px; font: inherit; }
 .feature-draft-page button, .feature-draft-composer button { justify-self: start; padding: 8px 14px; border-radius: 6px; color: var(--accent-foreground, var(--text)); background: var(--accent); border: 0; font: inherit; }

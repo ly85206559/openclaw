@@ -68,3 +68,17 @@ run("npm", ["test"], projectDir);
 assertCleanInspectorReport(readInspectorReport());
 
 console.log(`Generated provider scaffold passed ClawHub validation: ${projectDir}`);
+
+const featureProjectDir = path.join(artifactRoot, "plugin-init-feature-test");
+fs.rmSync(featureProjectDir, { force: true, recursive: true });
+await runPluginsInitCommand("plugin-init-feature-test", {
+  directory: featureProjectDir,
+  name: "Plugin Init Feature Test",
+  type: "feature",
+});
+
+run("npm", ["install", "--no-audit", "--fund=false"], featureProjectDir);
+run("npm", ["run", "build"], featureProjectDir);
+run("npm", ["run", "validate"], featureProjectDir);
+
+console.log(`Generated feature scaffold passed build and validation: ${featureProjectDir}`);
