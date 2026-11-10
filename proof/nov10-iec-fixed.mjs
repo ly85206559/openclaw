@@ -7,10 +7,11 @@ import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { pathToFileURL } from 'node:url';
 
-const PINNED_HEAD = '40c3b508ba130cb9244f077015321b4fa4e91965';
+const BASE_HEAD = '40c3b508ba130cb9244f077015321b4fa4e91965';
+const PINNED_HEAD = '097e41e68deaf51e11c3a57b4df811d8d3b7acd1';
 const [sourceArg, artifactsArg, requestedHead] = process.argv.slice(2);
-assert(sourceArg && artifactsArg, 'Usage: nov10-iec-baseline.mjs <source> <artifacts> <head>');
-assert.equal(requestedHead, PINNED_HEAD, 'This baseline controller is frozen to its reviewed source');
+assert(sourceArg && artifactsArg, 'Usage: nov10-iec-fixed.mjs <source> <artifacts> <head>');
+assert.equal(requestedHead, PINNED_HEAD, 'This fixed controller is frozen to its reviewed source');
 const source = path.resolve(sourceArg);
 const artifacts = path.resolve(artifactsArg);
 const artifactsRelative = path.relative(source, artifacts);
@@ -29,15 +30,16 @@ const { isSupportedOpenClawNodeVersion } = await import(
 );
 assert(isSupportedOpenClawNodeVersion(process.versions.node));
 await fs.mkdir(artifacts, { recursive: true });
-const scratch = await fs.mkdtemp(path.join(os.tmpdir(), 'openclaw-iec-baseline-'));
+const scratch = await fs.mkdtemp(path.join(os.tmpdir(), 'openclaw-iec-fixed-'));
 const fixtures = [];
 const commands = [];
 const receipt = {
+  base: BASE_HEAD,
   head: PINNED_HEAD,
   nodeVersion: process.versions.node,
   complete: false,
   cleanup: false,
-  claim: 'diagnostic IEC feature absence at current main; not repaired product green',
+  claim: 'actual CLI IEC acceptance and independent owner byte values; not packaged-artifact or live cleanup proof',
   cliBoundary: 'actual pnpm openclaw config validate --json, isolated authored config',
   runtimePreparation: 'canonical pnpm openclaw source runner; cold runtime preparation belongs to run-node.mts',
   ownerBoundary: 'separate source-owner resolution using canonical scripts/tsx.mjs; not CLI or packaged-artifact proof',
@@ -143,29 +145,14 @@ try {
     receipt.sourceFiles[file] = createHash('sha256')
       .update(await fs.readFile(path.join(source, file))).digest('hex');
   }
-  const legacy = await fixture('legacy-control', '1mb', '512kb');
-  // The canonical source runner prepares missing dist on this first real CLI invocation.
-  const control = await run('cli-legacy-control', 'pnpm',
-    ['--silent', 'openclaw', 'config', 'validate', '--json'], legacy, 0, 20 * 60 * 1000);
-  assert.equal(control.valid, true);
-  assert.equal(control.path, legacy.configPath);
-
-  const iec = await fixture('iec-baseline', '1MiB', '512KiB');
-  const baseline = await run('cli-iec-baseline', 'pnpm',
-    ['--silent', 'openclaw', 'config', 'validate', '--json'], iec, 1);
-  assert.equal(baseline.valid, false);
-  assert.equal(baseline.path, iec.configPath);
-  assert(Array.isArray(baseline.issues), 'IEC rejection must expose schema issues');
-  for (const field of ['maxDiskBytes', 'highWaterBytes']) {
-    const issue = baseline.issues.find((entry) =>
-      (Array.isArray(entry.path) ? entry.path.join('.') : entry.path) === `session.maintenance.${field}`);
-    assert(issue, `IEC rejection must name ${field}`);
-    assert.match(issue.message, /invalid size.*(?:kb|mb)/i,
-      'Failure must be the unit validation boundary, not a transport or startup error');
-  }
-  receipt.legacyCliValid = true;
-  receipt.iecCliFeatureAbsent = true;
-
+  receipt.changedPaths = git('diff', '--name-only', BASE_HEAD, PINNED_HEAD).trim().split('\n').sort();
+  assert.deepEqual(receipt.changedPaths, [
+    'config/test-lines-allocations/iec-byte-size-aliases.txt',
+    'docs/gateway/config-agents/sessions.md',
+    'src/cli/parse-bytes.ts',
+    'src/config/byte-size.test.ts',
+    'src/config/zod-schema.session-config.ts',
+  ].sort(), 'The reviewed IEC proposal must own this complete source delta');
   const ownerScript = [
     "import fs from 'node:fs';",
     "import { resolveMaintenanceConfigFromInput } from './src/config/sessions/store-maintenance.ts';",
@@ -173,10 +160,40 @@ try {
     'const result = resolveMaintenanceConfigFromInput(config.session.maintenance);',
     'console.log(JSON.stringify({maxDiskBytes: result.maxDiskBytes, highWaterBytes: result.highWaterBytes}));',
   ].join('\n');
-  const resolved = await run('source-owner-legacy-control', process.execPath,
-    ['--import', './scripts/tsx.mjs', '--input-type=module', '--eval', ownerScript], legacy, 0);
-  assert.deepEqual(resolved, { maxDiskBytes: 1048576, highWaterBytes: 524288 });
-  receipt.legacyOwnerBytes = resolved;
+  receipt.operationalValues = [];
+  const cases = [
+    { name: 'legacy-control', max: '1mb', high: '512kb', bytes: { maxDiskBytes: 1048576, highWaterBytes: 524288 } },
+    { name: 'iec-small', max: '1MiB', high: '512KiB', bytes: { maxDiskBytes: 1048576, highWaterBytes: 524288 } },
+    { name: 'iec-large', max: '1TiB', high: '2GiB', bytes: { maxDiskBytes: 1099511627776, highWaterBytes: 2147483648 } },
+  ];
+  for (const [index, sample] of cases.entries()) {
+    const input = await fixture(sample.name, sample.max, sample.high);
+    // The first real CLI call owns cold canonical runtime preparation, included in its wall time.
+    const validated = await run(`cli-${sample.name}`, 'pnpm',
+      ['--silent', 'openclaw', 'config', 'validate', '--json'], input, 0,
+      index === 0 ? 20 * 60 * 1000 : 180000);
+    assert.equal(validated.valid, true);
+    assert.equal(validated.path, input.configPath);
+    const resolved = await run(`source-owner-${sample.name}`, process.execPath,
+      ['--import', './scripts/tsx.mjs', '--input-type=module', '--eval', ownerScript], input, 0);
+    assert.deepEqual(resolved, sample.bytes);
+    receipt.operationalValues.push({ name: sample.name, observed: resolved });
+    if (index === 0) receipt.legacyOwnerBytes = resolved;
+  }
+  receipt.legacyCliValid = true;
+  receipt.iecCliValid = true;
+
+  const overflow = await fixture('iec-overflow', '8192TiB', '512KiB');
+  const rejected = await run('cli-iec-overflow', 'pnpm',
+    ['--silent', 'openclaw', 'config', 'validate', '--json'], overflow, 1);
+  assert.equal(rejected.valid, false);
+  assert.equal(rejected.path, overflow.configPath);
+  assert(Array.isArray(rejected.issues));
+  const overflowIssue = rejected.issues.find((entry) =>
+    (Array.isArray(entry.path) ? entry.path.join('.') : entry.path) === 'session.maintenance.maxDiskBytes');
+  assert(overflowIssue, 'Unsafe IEC input must fail at its actual size-setting boundary');
+  assert.match(overflowIssue.message, /invalid size/i);
+  receipt.unsafeIecRejected = true;
 } catch (error) {
   failure = error;
   unjoined ||= hasUnjoinedWork(error);
@@ -211,11 +228,11 @@ try {
   await fs.writeFile(path.join(artifacts, 'receipt.json'), JSON.stringify(receipt, null, 2) + '\n');
 }
 if (failure) throw failure;
-assert(receipt.complete, 'IEC baseline proof did not complete');
+assert(receipt.complete, 'IEC fixed proof did not complete');
 console.log(JSON.stringify({
   head: receipt.head, claim: receipt.claim,
-  legacyCliValid: receipt.legacyCliValid, iecCliFeatureAbsent: receipt.iecCliFeatureAbsent,
-  legacyOwnerBytes: receipt.legacyOwnerBytes,
+  legacyCliValid: receipt.legacyCliValid, iecCliValid: receipt.iecCliValid, unsafeIecRejected: receipt.unsafeIecRejected,
+  operationalValues: receipt.operationalValues,
   allChildrenJoined: receipt.allChildrenJoined,
   configsUnchanged: receipt.configsUnchanged, sourceClean: receipt.sourceClean,
   cleanup: receipt.cleanup, complete: receipt.complete,

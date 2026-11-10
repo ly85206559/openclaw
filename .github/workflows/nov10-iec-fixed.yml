@@ -1,0 +1,192 @@
+name: November 10 IEC fixed proof and expected RED regression
+
+on:
+  push:
+    branches: [codex/discovery-proof-20261110]
+    paths:
+      - .github/workflows/nov10-iec-fixed.yml
+      - proof/nov10-iec-fixed.mjs
+      - proof/nov10-iec-regression.mjs
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  SOURCE_BASE: 40c3b508ba130cb9244f077015321b4fa4e91965
+  PRODUCT_HEAD: 097e41e68deaf51e11c3a57b4df811d8d3b7acd1
+
+jobs:
+  expected-red-regression:
+    if: github.repository == 'ly85206559/openclaw' && github.event.repository.fork == true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: controller
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ly85206559/openclaw
+          ref: 40c3b508ba130cb9244f077015321b4fa4e91965
+          fetch-depth: 1
+          path: source
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: 24.22.1
+      - uses: ./source/.github/actions/setup-pnpm-store-cache
+        with:
+          package-manager-file: source/package.json
+          lockfile-path: source/pnpm-lock.yaml
+          node-version: 24.22.1
+          cache-mode: off
+      - name: Fetch committed regression and install exact base
+        working-directory: source
+        run: |
+          set -euo pipefail
+          mkdir -p ../artifacts
+          git fetch --no-tags --depth=1 origin "$PRODUCT_HEAD"
+          /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/install.wall.txt pnpm install --frozen-lockfile 2>&1 | tee ../artifacts/install.log
+      - name: Expected RED committed test on unchanged base production
+        working-directory: source
+        run: |
+          set -euo pipefail
+          /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/red-regression.wall.txt node --import ./scripts/tsx.mjs ../controller/proof/nov10-iec-regression.mjs . ../artifacts 2>&1 | tee ../artifacts/red-regression.log
+      - name: Verify four IEC assertion failures and no errors
+        run: |
+          python3 - <<'PY'
+          import json
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+          root = ET.parse('artifacts/red-regression.xml').getroot()
+          cases = list(root.iter('testcase'))
+          failed = [case for case in cases if case.find('failure') is not None]
+          assert len(cases) == 11, f'Expected 11 committed cases, got {len(cases)}'
+          assert len(failed) == 4, f'Expected four IEC assertion failures, got {len(failed)}'
+          assert not list(root.iter('error')), 'Collection/runtime errors cannot prove RED'
+          assert not list(root.iter('skipped')), 'Skipped cases cannot prove RED'
+          for unit in ('1KiB', '1.5MiB', '2GiB', '1TiB'):
+              matches = [case for case in failed if unit in case.get('name', '')]
+              assert len(matches) == 1, f'Missing exact IEC regression for {unit}'
+              assert 'expected null' in ''.join(matches[0].find('failure').itertext()).lower()
+          receipt = {'claim': 'expected RED regression, not product green', 'tests': len(cases), 'failures': len(failed), 'errors': 0}
+          Path('artifacts/red-junit-verification.json').write_text(json.dumps(receipt, indent=2) + '\n')
+          print(json.dumps(receipt))
+          PY
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: nov10-iec-expected-red-${{ github.run_id }}
+          path: artifacts
+          if-no-files-found: error
+          retention-days: 14
+
+  fixed:
+    if: github.repository == 'ly85206559/openclaw' && github.event.repository.fork == true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: controller
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ly85206559/openclaw
+          ref: 097e41e68deaf51e11c3a57b4df811d8d3b7acd1
+          fetch-depth: 1
+          path: source
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: 24.22.1
+      - uses: ./source/.github/actions/setup-pnpm-store-cache
+        with:
+          package-manager-file: source/package.json
+          lockfile-path: source/pnpm-lock.yaml
+          node-version: 24.22.1
+          cache-mode: off
+      - name: Install exact product source and comparison base
+        working-directory: source
+        run: |
+          set -euo pipefail
+          mkdir -p ../artifacts
+          test "$(git rev-parse HEAD)" = "$PRODUCT_HEAD"
+          git fetch --no-tags --depth=1 origin "$SOURCE_BASE"
+          git diff --check "$SOURCE_BASE" "$PRODUCT_HEAD"
+          /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/install.wall.txt pnpm install --frozen-lockfile 2>&1 | tee ../artifacts/install.log
+      - name: Actual IEC CLI acceptance and operational owner values
+        working-directory: source
+        run: |
+          set -euo pipefail
+          /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/runtime.wall.txt node --import ./scripts/tsx.mjs ../controller/proof/nov10-iec-fixed.mjs . ../artifacts "$PRODUCT_HEAD" 2>&1 | tee ../artifacts/runtime.log
+      - name: Committed owner regression GREEN and measured file cost
+        working-directory: source
+        run: |
+          set -euo pipefail
+          /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/owner-tests.wall.txt pnpm test src/config/byte-size.test.ts --maxWorkers=1 --reporter=default --reporter=junit --outputFile.junit="$GITHUB_WORKSPACE/artifacts/green-regression.xml" 2>&1 | tee ../artifacts/owner-tests.log
+      - name: Verify committed GREEN cases without errors or skips
+        run: |
+          python3 - <<'PY'
+          import json
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+          root = ET.parse('artifacts/green-regression.xml').getroot()
+          cases = list(root.iter('testcase'))
+          assert len(cases) == 11, f'Expected 11 committed cases, got {len(cases)}'
+          assert not list(root.iter('failure'))
+          assert not list(root.iter('error'))
+          assert not list(root.iter('skipped'))
+          report = {'tests': len(cases), 'failures': 0, 'errors': 0, 'suiteSeconds': sum(float(suite.get('time', '0')) for suite in root.iter('testsuite'))}
+          Path('artifacts/green-junit-verification.json').write_text(json.dumps(report, indent=2) + '\n')
+          print(json.dumps(report))
+          PY
+      - name: Owning production core types
+        working-directory: source
+        run: |
+          set -euo pipefail
+          /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/core-types.wall.txt pnpm tsgo:core 2>&1 | tee ../artifacts/core-types.log
+      - name: Existing config CLI test type project
+        working-directory: source
+        run: |
+          set -euo pipefail
+          /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/test-types.wall.txt node scripts/run-tsgo.mjs -p test/tsconfig/tsconfig.core.test.config-cli.json --incremental 2>&1 | tee ../artifacts/test-types.log
+      - name: Touched typed lint and format
+        working-directory: source
+        run: |
+          set -euo pipefail
+          /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/lint.wall.txt node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.core.json src/cli/parse-bytes.ts src/config/zod-schema.session-config.ts src/config/byte-size.test.ts 2>&1 | tee ../artifacts/lint.log
+          /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/format.wall.txt pnpm format:check -- src/cli/parse-bytes.ts src/config/zod-schema.session-config.ts src/config/byte-size.test.ts docs/gateway/config-agents/sessions.md 2>&1 | tee ../artifacts/format.log
+      - name: Ordinary test line ratchet against the exact baseline
+        working-directory: source
+        run: |
+          set -euo pipefail
+          /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/test-lines.wall.txt pnpm check:test-lines-ratchet --base "$SOURCE_BASE" --no-merge-base 2>&1 | tee ../artifacts/test-lines.log
+      - name: Touched documentation syntax sanity
+        working-directory: source
+        run: |
+          set -euo pipefail
+          /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/docs-mdx.wall.txt node scripts/check-docs-mdx.mjs docs/gateway/config-agents/sessions.md 2>&1 | tee ../artifacts/docs-mdx.log
+      - name: Record exact source and tracked cleanliness
+        if: always()
+        working-directory: source
+        run: |
+          set -euo pipefail
+          mkdir -p ../artifacts
+          git rev-parse HEAD > ../artifacts/source-head.txt
+          git status --porcelain --untracked-files=no > ../artifacts/source-status.txt
+          test "$(git rev-parse HEAD)" = "$PRODUCT_HEAD"
+          test ! -s ../artifacts/source-status.txt
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: nov10-iec-fixed-${{ github.run_id }}
+          path: artifacts
+          if-no-files-found: error
+          retention-days: 14

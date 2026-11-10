@@ -1,8 +1,11 @@
-name: Nov 10 image cancellation baseline
+name: Nov 10 feature scaffold CSS baseline
 
 on:
   push:
     branches: [codex/discovery-proof-20261110]
+    paths:
+      - .github/workflows/nov10-feature-css-baseline.yml
+      - proof/nov10-feature-css-baseline.mjs
   workflow_dispatch:
 
 permissions:
@@ -37,23 +40,23 @@ jobs:
           lockfile-path: source/pnpm-lock.yaml
           node-version: 24.22.1
           cache-mode: off
-      - name: Frozen install
+      - name: Frozen source dependencies
         working-directory: source
         run: |
           mkdir -p ../artifacts
           /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/install.wall.txt pnpm install --frozen-lockfile 2>&1 | tee ../artifacts/install.log
-      - name: Prepare through the canonical CLI owner
+      - name: Prepare the canonical CLI
         working-directory: source
         run: |
           /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/cli-prepare.wall.txt pnpm --silent openclaw --version 2>&1 | tee ../artifacts/cli-prepare.log
-      - name: Real provider HTTP and shipped CLI baseline
+      - name: Actual generated project first build
         working-directory: source
         run: |
-          /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/baseline.wall.txt node --import ./scripts/tsx.mjs ../controller/proof/nov10-image-cancel-baseline.mjs . ../artifacts 2>&1 | tee ../artifacts/baseline.log
+          /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/baseline.wall.txt node --import ./scripts/tsx.mjs ../controller/proof/nov10-feature-css-baseline.mjs . ../artifacts 2>&1 | tee ../artifacts/baseline.log
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: always()
         with:
-          name: nov10-image-cancel-baseline
+          name: nov10-feature-css-baseline
           path: artifacts
           if-no-files-found: error
           retention-days: 14

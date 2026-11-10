@@ -11,7 +11,7 @@ import { pathToFileURL } from 'node:url';
 // Source-only preparation. Run remotely only after the lead reviews this file.
 const source = path.resolve(process.argv[2]);
 const artifacts = path.resolve(process.argv[3]);
-const head = '40c3b508ba130cb9244f077015321b4fa4e91965';
+const head = '17a59bfc0922e68a628948ead8e6d06b8f0a65f3';
 const git = (...args) => execFileSync('git', args, {
   cwd: source, encoding: 'utf8', timeout: 10000,
   env: { ...process.env, GIT_NO_LAZY_FETCH: '1' },
@@ -22,7 +22,7 @@ const { runManagedCommand, hasUnjoinedWork } = await import(
   pathToFileURL(path.join(source, 'scripts/lib/managed-child-process.mts')).href
 );
 await fs.mkdir(artifacts, { recursive: true });
-const scratch = await fs.mkdtemp(path.join(os.tmpdir(), 'nov10-markdown-baseline-'));
+const scratch = await fs.mkdtemp(path.join(os.tmpdir(), 'nov10-markdown-fixed-'));
 const configPath = path.join(scratch, 'openclaw.json');
 const token = 'synthetic-markdown-baseline-token';
 const cases = [
@@ -36,7 +36,7 @@ const cases = [
 ];
 const commands = [];
 const receipt = {
-  head, stage: 'baseline', diagnosticOnly: true, complete: false, cleanup: false,
+  head, stage: 'fixed', diagnosticOnly: false, complete: false, cleanup: false,
   boundary: 'built CLI -> authenticated loopback Gateway -> sessions.create/chat.inject -> sessions.list(includeLastMessage)/chat.history',
   limitation: 'Synthetic operator-injected assistant messages; no model turn, UI rendering, external provider or channel delivery claim.',
   cases: [],
@@ -162,7 +162,7 @@ try {
   }
   assert(ready, 'Gateway did not complete startup within 240 seconds');
   receipt.gatewayReady = true;
-  const created = await rpc('create-session', 'sessions.create', { label: 'nov10-markdown-baseline' });
+  const created = await rpc('create-session', 'sessions.create', { label: 'nov10-markdown-fixed' });
   assert.equal(created.ok, true);
   assert.equal(typeof created.key, 'string');
   assert.equal(created.runStarted, false, 'Session creation unexpectedly started a model turn');
@@ -170,6 +170,7 @@ try {
   const sessionKey = created.key;
   receipt.sessionKey = sessionKey;
   for (const fixture of cases) {
+    const expectedFixed = fixture.desired ?? fixture.baseline;
     const injected = await rpc(`${fixture.name}-inject`, 'chat.inject', { sessionKey, message: fixture.input });
     assert.equal(injected.ok, true);
     assert.equal(typeof injected.messageId, 'string');
@@ -185,18 +186,18 @@ try {
     assert(last, 'Injected assistant message absent from chat.history');
     const raw = messageText(last);
     const observation = {
-      name: fixture.name, input: fixture.input, expectedBaseline: fixture.baseline,
+      name: fixture.name, input: fixture.input, expectedBaseline: fixture.baseline, expectedFixed,
       expectedDesired: fixture.desired ?? fixture.baseline, actualPreview: row.lastMessagePreview,
-      historyText: raw, baselineMatches: row.lastMessagePreview === fixture.baseline,
+      historyText: raw, fixedMatches: row.lastMessagePreview === expectedFixed,
       historyPreserved: raw === fixture.input, defect: fixture.defect ?? false,
     };
     receipt.cases.push(observation);
     console.log(JSON.stringify(observation));
     assert.equal(raw, fixture.input, `${fixture.name}: stored history changed`);
-    assert.equal(row.lastMessagePreview, fixture.baseline, `${fixture.name}: unexpected baseline result`);
-    if (fixture.defect) assert.notEqual(row.lastMessagePreview, fixture.desired, `${fixture.name}: defect absent`);
+    assert.equal(row.lastMessagePreview, expectedFixed, `${fixture.name}: fixed preview mismatch`);
+    if (fixture.defect) assert.notEqual(row.lastMessagePreview, fixture.baseline, `${fixture.name}: baseline defect remains`);
   }
-  assert.equal(receipt.cases.filter((entry) => entry.defect && entry.baselineMatches && entry.historyPreserved).length, 2);
+  assert.equal(receipt.cases.filter((entry) => entry.defect && entry.fixedMatches && entry.historyPreserved).length, 2);
   receipt.behaviorObserved = true;
 } catch (error) {
   failure = error;
@@ -231,4 +232,4 @@ try {
   await fs.writeFile(path.join(artifacts, 'receipt.json'), JSON.stringify(receipt, null, 2) + '\n');
 }
 if (failure) throw failure;
-assert(receipt.complete, 'Baseline did not complete');
+assert(receipt.complete, 'Fixed proof did not complete');

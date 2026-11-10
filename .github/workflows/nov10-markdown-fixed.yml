@@ -1,0 +1,208 @@
+name: Nov 10 Markdown preview fixed proof
+
+on:
+  push:
+    branches: [codex/discovery-proof-20261110]
+    paths:
+      - .github/workflows/nov10-markdown-fixed.yml
+      - proof/nov10-markdown-fixed.mjs
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  regression-red:
+    if: github.repository == 'ly85206559/openclaw' && github.event.repository.fork == true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: openclaw/openclaw
+          ref: 40c3b508ba130cb9244f077015321b4fa4e91965
+          fetch-depth: 1
+          path: source
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ly85206559/openclaw
+          ref: 17a59bfc0922e68a628948ead8e6d06b8f0a65f3
+          fetch-depth: 1
+          path: candidate
+          sparse-checkout: packages/normalization-core/src/markdown-plain-text.test.ts
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: 24.22.1
+      - uses: ./source/.github/actions/setup-pnpm-store-cache
+        with:
+          package-manager-file: source/package.json
+          lockfile-path: source/pnpm-lock.yaml
+          node-version: 24.22.1
+          cache-mode: off
+      - name: Install unchanged baseline source
+        working-directory: source
+        run: |
+          mkdir -p ../artifacts
+          /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/install.wall.txt pnpm install --frozen-lockfile 2>&1 | tee ../artifacts/install.log
+      - name: Overlay only the committed regression test
+        working-directory: source
+        run: |
+          test "$(git rev-parse HEAD)" = 40c3b508ba130cb9244f077015321b4fa4e91965
+          test "$(git -C ../candidate rev-parse HEAD)" = 17a59bfc0922e68a628948ead8e6d06b8f0a65f3
+          test -z "$(git status --porcelain --untracked-files=no)"
+          cp ../candidate/packages/normalization-core/src/markdown-plain-text.test.ts packages/normalization-core/src/markdown-plain-text.test.ts
+          test "$(git diff --name-only)" = packages/normalization-core/src/markdown-plain-text.test.ts
+          git diff --exit-code -- packages/normalization-core/src/markdown-plain-text.ts
+          git diff --check
+          sha256sum packages/normalization-core/src/markdown-plain-text.test.ts ../candidate/packages/normalization-core/src/markdown-plain-text.test.ts > ../artifacts/overlaid-test.sha256.txt
+          cmp packages/normalization-core/src/markdown-plain-text.test.ts ../candidate/packages/normalization-core/src/markdown-plain-text.test.ts
+      - name: Require precisely the two new regressions to fail on baseline
+        working-directory: source
+        run: |
+          set +e
+          /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/regression-red.wall.txt pnpm test packages/normalization-core/src/markdown-plain-text.test.ts --maxWorkers=1 --reporter=junit --outputFile=../artifacts/regression-red.junit.xml 2>&1 | tee ../artifacts/regression-red.log
+          test_status=${PIPESTATUS[0]}
+          set -e
+          printf '%s\n' "$test_status" > ../artifacts/regression-red.exit.txt
+          test "$test_status" -eq 1
+          python3 - <<'PY'
+          import json
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+          root = ET.parse('../artifacts/regression-red.junit.xml').getroot()
+          cases = list(root.iter('testcase'))
+          failed = {case.get('name'): case.find('failure') for case in cases if case.find('failure') is not None}
+          expected = {
+              'flattenMarkdownToPlainText > flattens double-backtick code': 'Keep a*b* and [x](y).',
+              'flattenMarkdownToPlainText > flattens literal runs of other widths': 'Keep a`*b* and c``*d*.',
+          }
+          assert len(cases) > 2 and set(failed) == set(expected)
+          assert len(list(root.iter('failure'))) == 2
+          assert not list(root.iter('error')) and not list(root.iter('skipped'))
+          mismatches = []
+          for name, desired in expected.items():
+              failure = failed[name]
+              message = failure.get('message', '')
+              assert failure.get('type') == 'AssertionError', f'{name}: runtime exception is not a regression'
+              assert desired in message and 'to be' in message, f'{name}: expected value comparison missing'
+              if name.endswith('double-backtick code'):
+                  assert 'Keep ab and x.' in message, 'Baseline literal-loss mismatch changed'
+              mismatches.append({'name': name, 'type': failure.get('type'), 'message': message, 'desired': desired})
+          receipt = {'baseHead': '40c3b508ba130cb9244f077015321b4fa4e91965', 'testHead': '17a59bfc0922e68a628948ead8e6d06b8f0a65f3',
+                     'claim': 'expected assertion regressions, not repaired product green', 'productionUnchanged': True,
+                     'onlyCommittedTestOverlaid': True, 'tests': len(cases), 'failures': 2, 'errors': 0, 'skipped': 0,
+                     'mismatches': mismatches, 'expectedTestExit': 1, 'complete': True}
+          Path('../artifacts/regression-red.receipt.json').write_text(json.dumps(receipt, indent=2) + '\n')
+          print(json.dumps(receipt))
+          PY
+      - name: Recheck unchanged baseline production and exact overlay
+        if: always()
+        working-directory: source
+        run: |
+          mkdir -p ../artifacts
+          git rev-parse HEAD > ../artifacts/source-head.txt
+          git status --porcelain --untracked-files=no > ../artifacts/source-status.txt
+          test "$(git rev-parse HEAD)" = 40c3b508ba130cb9244f077015321b4fa4e91965
+          test "$(git diff --name-only)" = packages/normalization-core/src/markdown-plain-text.test.ts
+          git diff --exit-code -- packages/normalization-core/src/markdown-plain-text.ts
+          cmp packages/normalization-core/src/markdown-plain-text.test.ts ../candidate/packages/normalization-core/src/markdown-plain-text.test.ts
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: nov10-markdown-regression-red-40c3b508
+          path: artifacts
+          if-no-files-found: error
+          retention-days: 14
+
+  fixed:
+    if: github.repository == 'ly85206559/openclaw' && github.event.repository.fork == true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: controller
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ly85206559/openclaw
+          ref: 17a59bfc0922e68a628948ead8e6d06b8f0a65f3
+          fetch-depth: 1
+          path: source
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: 24.22.1
+      - uses: ./source/.github/actions/setup-pnpm-store-cache
+        with:
+          package-manager-file: source/package.json
+          lockfile-path: source/pnpm-lock.yaml
+          node-version: 24.22.1
+          cache-mode: off
+      - name: Install pinned source
+        working-directory: source
+        run: |
+          mkdir -p ../artifacts
+          /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/install.wall.txt pnpm install --frozen-lockfile 2>&1 | tee ../artifacts/install.log
+      - name: Canonical CLI preparation
+        working-directory: source
+        run: |
+          /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/prepare.wall.txt pnpm --silent openclaw --version 2>&1 | tee ../artifacts/prepare.log
+      - name: Real Gateway preview fixed proof
+        working-directory: source
+        run: |
+          /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/runtime.wall.txt node --import ./scripts/tsx.mjs ../controller/proof/nov10-markdown-fixed.mjs . ../artifacts 2>&1 | tee ../artifacts/runtime.log
+      - name: Touched normalizer tests and measured file cost
+        working-directory: source
+        run: |
+          /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/normalizer-tests.wall.txt pnpm test packages/normalization-core/src/markdown-plain-text.test.ts --maxWorkers=1 2>&1 | tee ../artifacts/normalizer-tests.log
+      - name: Session preview and exported link-stripper sibling tests
+        working-directory: source
+        run: |
+          /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/preview-tests.wall.txt pnpm test src/gateway/session-display-projection.test.ts src/agents/tools/web-fetch-utils.test.ts --maxWorkers=1 2>&1 | tee ../artifacts/preview-tests.log
+      - name: Normalization package production types
+        working-directory: source
+        run: |
+          /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/package-types.wall.txt node scripts/run-tsgo.mjs -p packages/normalization-core/tsconfig.json --noEmit 2>&1 | tee ../artifacts/package-types.log
+      - name: Owning test type graph selected by changed path
+        working-directory: source
+        run: |
+          /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/test-types.wall.txt node scripts/run-tsgo-core-test-shards.mjs --changed-paths-json '["packages/normalization-core/src/markdown-plain-text.test.ts"]' 2>&1 | tee ../artifacts/test-types.log
+      - name: Touched file typed lint
+        working-directory: source
+        run: |
+          /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/lint.wall.txt node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.core.json packages/normalization-core/src/markdown-plain-text.ts packages/normalization-core/src/markdown-plain-text.test.ts 2>&1 | tee ../artifacts/lint.log
+      - name: Touched file format
+        working-directory: source
+        run: |
+          /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/format.wall.txt pnpm format:check -- packages/normalization-core/src/markdown-plain-text.ts packages/normalization-core/src/markdown-plain-text.test.ts 2>&1 | tee ../artifacts/format.log
+      - name: Exact comparison and ordinary test line ratchet
+        working-directory: source
+        run: |
+          git fetch --no-tags --depth=1 origin 40c3b508ba130cb9244f077015321b4fa4e91965
+          git cat-file -e 40c3b508ba130cb9244f077015321b4fa4e91965^{commit}
+          git diff --check 40c3b508ba130cb9244f077015321b4fa4e91965 HEAD
+          /usr/bin/time -f 'wall_seconds=%e' -o ../artifacts/test-lines.wall.txt pnpm check:test-lines-ratchet --base 40c3b508ba130cb9244f077015321b4fa4e91965 --no-merge-base 2>&1 | tee ../artifacts/test-lines.log
+      - name: Record exact source and tracked cleanliness
+        if: always()
+        working-directory: source
+        run: |
+          mkdir -p ../artifacts
+          git rev-parse HEAD > ../artifacts/source-head.txt
+          git status --porcelain --untracked-files=no > ../artifacts/source-status.txt
+          test "$(git rev-parse HEAD)" = 17a59bfc0922e68a628948ead8e6d06b8f0a65f3
+          test ! -s ../artifacts/source-status.txt
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: nov10-markdown-fixed
+          path: artifacts
+          if-no-files-found: error
+          retention-days: 14
