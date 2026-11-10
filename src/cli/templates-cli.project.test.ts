@@ -42,6 +42,7 @@ const devPlan = (index: number) => (payloads()[index] as { plan: TemplateAddPlan
 
 describe("Template project CLI", () => {
   beforeEach(() => vi.clearAllMocks());
+  afterEach(() => vi.unstubAllEnvs());
 
   it("creates isolated private proposals without starting from the Control UI", async () => {
     const workspace = tempDirs.make("openclaw-chat-template-draft-");
@@ -71,22 +72,26 @@ describe("Template project CLI", () => {
     expect(runtime.log).toHaveBeenCalledWith("Blocked actions: 0");
   });
 
-  it("runs create, validate, build, and offline dev against the built artifact", async () => {
-    const root = join(tempDirs.make("openclaw-template-author-"), "author-flow");
-    const artifact = join(tempDirs.make("openclaw-template-author-output-"), "author-flow.tgz");
+  it.for([false, true])("runs local authoring with home paths: %s", async (homePaths) => {
+    const home = tempDirs.make("openclaw-template-author-");
+    vi.stubEnv("OPENCLAW_HOME", home);
+    const root = join(home, "author-flow");
+    const artifact = join(home, "author-flow.tgz");
+    const projectInput = homePaths ? "~/author-flow" : root;
+    const artifactOutput = homePaths ? "~/author-flow.tgz" : artifact;
     await runTemplatesCreateCommand(root, { json: true });
-    await runTemplatesValidateCommand(root, { json: true });
-    await runTemplatesBuildCommand(root, { out: artifact, json: true });
+    await runTemplatesValidateCommand(projectInput, { json: true });
+    await runTemplatesBuildCommand(projectInput, { out: artifactOutput, json: true });
     const options = {
       agentId: "author-flow-preview",
       workspace: join(root, "preview-workspace"),
       json: true,
     };
-    await runTemplatesDevCommand(root, options);
+    await runTemplatesDevCommand(projectInput, options);
     expect(payloads()).toMatchObject([
       { schemaVersion: "openclaw.templateProject.v1" },
-      { schemaVersion: "openclaw.templateProject.v1", excludedPaths: [] },
-      { schemaVersion: "openclaw.templateBuild.v1", excludedPaths: [] },
+      { schemaVersion: "openclaw.templateProject.v1", root, excludedPaths: [] },
+      { schemaVersion: "openclaw.templateBuild.v1", artifact, excludedPaths: [] },
       { schemaVersion: "openclaw.templateDev.v1", mutationAllowed: false, offline: true },
     ]);
     const { integrity } = payloads()[2] as { integrity: string };
@@ -100,11 +105,11 @@ describe("Template project CLI", () => {
       },
     });
     const first = devPlan(3);
-    await runTemplatesDevCommand(root, options);
+    await runTemplatesDevCommand(projectInput, options);
     expect(first).toEqual(devPlan(4));
     expect(JSON.stringify(first)).not.toContain("openclaw-template-artifact-");
     expect(first.template.packageRoot).toMatch(/^template-artifact:sha256:/u);
-    await expect(runTemplatesDevCommand(root, { ...options, agentId: "" })).rejects.toThrow(
+    await expect(runTemplatesDevCommand(projectInput, { ...options, agentId: "" })).rejects.toThrow(
       "__exit__:1",
     );
     expect(devPlan(5)).toMatchObject({

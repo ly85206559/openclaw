@@ -99,6 +99,10 @@ starting an agent turn, enabling automations, or changing OpenClaw state.
 Requirements needing online preflight appear as blockers. `build` creates a
 deterministic `.tgz` and refuses to overwrite an existing file.
 
+Local authoring paths support a leading `~` for your OpenClaw home, including
+quoted paths such as `"~/incident-triage"` and `build --out "~/incident-triage.tgz"`.
+This applies to `draft`, `create`, `validate`, `build`, and `dev`.
+
 `validate` and `build` accept a project-directory symlink and resolve the
 canonical project root. Manifest confinement and managed source-file checks
 remain unchanged.

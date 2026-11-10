@@ -1,0 +1,2 @@
+# Template project CLI home-path authoring regression.
+5

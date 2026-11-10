@@ -2,6 +2,7 @@ import { tempWorkspace } from "@openclaw/fs-safe/temp";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { listAgentIds, resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import { readConfigFileSnapshot } from "../config/config.js";
+import { expandHomePrefix } from "../infra/home-dir.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { defaultRuntime as runtime, writeRuntimeJson } from "../runtime.js";
 import { createTemplateDraft } from "../templates/draft.js";
@@ -60,7 +61,7 @@ export async function runTemplatesCreateCommand(
   opts: TemplatesCreateOptions,
 ): Promise<void> {
   try {
-    const result = await createTemplateProject(projectPath, {
+    const result = await createTemplateProject(expandHomePrefix(projectPath), {
       name: opts.name,
       agentId: opts.agentId,
     });
@@ -92,7 +93,7 @@ export async function runTemplatesDraftCommand(
   opts: TemplatesDraftOptions,
 ): Promise<void> {
   try {
-    const draft = await createTemplateDraft(workspaceDir);
+    const draft = await createTemplateDraft(expandHomePrefix(workspaceDir));
     if (opts.json) {
       writeRuntimeJson(runtime, {
         schemaVersion: TEMPLATE_DRAFT_RESULT_SCHEMA_VERSION,
@@ -117,7 +118,7 @@ export async function runTemplatesValidateCommand(
   projectPath: string,
   opts: TemplatesValidateOptions,
 ): Promise<void> {
-  const result = await validateTemplateProject(projectPath);
+  const result = await validateTemplateProject(expandHomePrefix(projectPath));
   if (!result.ok) {
     emitTemplateFailure(opts.json, formatTemplateDiagnostics(result.diagnostics), {
       schemaVersion: TEMPLATE_PROJECT_RESULT_SCHEMA_VERSION,
@@ -158,7 +159,7 @@ export async function runTemplatesBuildCommand(
   opts: TemplatesBuildOptions,
 ): Promise<void> {
   try {
-    const result = await buildTemplateProject(projectPath, opts.out);
+    const result = await buildTemplateProject(expandHomePrefix(projectPath), expandHomePrefix(opts.out));
     if (opts.json) {
       writeRuntimeJson(runtime, { ...result, stability: TEMPLATE_OUTPUT_STABILITY, ok: true });
       return;
@@ -190,7 +191,7 @@ export async function runTemplatesDevCommand(
       rootDir: resolvePreferredOpenClawTmpDir(),
       prefix: "openclaw-template-dev-",
     });
-    build = await buildTemplateProject(projectPath, workspace.path("template.tgz"));
+    build = await buildTemplateProject(expandHomePrefix(projectPath), workspace.path("template.tgz"));
     await using extracted = await extractBuiltTemplateArtifact(build.artifact);
     const result = await readTemplateManifestFile(extracted.packageRoot);
     if (!result.ok) {
