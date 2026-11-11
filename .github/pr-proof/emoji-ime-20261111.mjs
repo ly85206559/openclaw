@@ -19,10 +19,10 @@ await fs.writeFile(config, JSON.stringify({
   gateway: {
     mode: 'local',
     auth: { mode: 'none' },
-    controlUi: { dangerouslyDisableDeviceAuth: true },
+    controlUi: { enabled: true },
   },
-  agents: { list: [{ id: 'main', default: true, name: 'Emoji IME Proof', workspace,
-    identity: { name: 'Emoji IME Proof', emoji: '🦞' } }] },
+  agents: { entries: { main: { name: 'Emoji IME Proof', workspace,
+    identity: { name: 'Emoji IME Proof', emoji: '🦞' } } } },
 }));
 const log = await fs.open(path.join(artifacts, 'gateway.log'), 'w');
 const gateway = spawn('pnpm', ['--silent', 'openclaw', 'gateway', 'run',
