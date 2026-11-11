@@ -35,6 +35,8 @@ const gateway = spawn('pnpm', ['--silent', 'openclaw', 'gateway', 'run',
 });
 const exited = new Promise((resolve) => gateway.once('exit', (code, signal) => resolve({ code, signal })));
 let browser;
+let context;
+let tracing = false;
 const receipt = { source: process.env.SOURCE_SHA, node: process.version, scenes: [], errors: [] };
 try {
   const base = `http://127.0.0.1:${port}`;
@@ -49,8 +51,9 @@ try {
   }
   assert(ready, 'Gateway did not serve the built UI; setup failure, not product RED');
   browser = await chromium.launch({ headless: true });
-  const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
   await context.tracing.start({ screenshots: true, snapshots: true });
+  tracing = true;
   const page = await context.newPage();
   page.on('pageerror', (e) => receipt.errors.push(e.message));
   await page.goto(`${base}/agents`);
@@ -92,6 +95,21 @@ try {
   receipt.scenes.push(await snapshot('plain-enter'));
   assert.equal(receipt.scenes.at(-1).open, false);
   assert.equal(receipt.scenes.at(-1).field, '🍌');
+  // Negative control: a trusted Enter during composition must not select or close.
+  await open('rock');
+  await cdp.send('Input.imeSetComposition', { text: 'et', selectionStart: 2, selectionEnd: 2 });
+  await cdp.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'Enter', code: 'Enter',
+    windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 });
+  const activeComposition = await snapshot('active-composition-control');
+  receipt.scenes.push(activeComposition);
+  assert(activeComposition.events.some((event) => event.type === 'keydown' &&
+    event.trusted && event.key === 'Enter' && event.composing === true),
+    'Active composition control was not reached; setup failure, not product RED');
+  assert.equal(activeComposition.open, true);
+  assert.equal(activeComposition.field, '🍌');
+  await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter',
+    windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 });
+  await cdp.send('Input.insertText', { text: 'et' });
   // Native browser event; record flags rather than assume it reaches the fallback.
   await open('rock');
   await cdp.send('Input.imeSetComposition', { text: 'et', selectionStart: 2, selectionEnd: 2 });
@@ -128,7 +146,6 @@ try {
   receipt.fallbackCommit = fallbackCommit;
   receipt.reproduced = (fallback229 && !receipt.native229.open) ||
     (fallbackCommit && !receipt.nativeCommit.open);
-  await context.tracing.stop({ path: path.join(artifacts, 'trace.zip') });
   assert(receipt.reproduced, 'No native fallback defect reproduced; do not accept candidate');
   receipt.status = 'REPRODUCED';
 } catch (error) {
@@ -136,6 +153,13 @@ try {
   receipt.failure = error.stack;
   throw error;
 } finally {
+  if (tracing) {
+    try {
+      await context.tracing.stop({ path: path.join(artifacts, 'trace.zip') });
+    } catch (error) {
+      receipt.errors.push(`Trace export failed: ${error.message}`);
+    }
+  }
   await fs.writeFile(path.join(artifacts, 'receipt.json'), JSON.stringify(receipt, null, 2));
   await browser?.close();
   if (gateway.exitCode === null && gateway.signalCode === null) process.kill(-gateway.pid, 'SIGTERM');
