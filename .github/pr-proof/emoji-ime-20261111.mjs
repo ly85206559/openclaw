@@ -56,7 +56,8 @@ try {
   tracing = true;
   const page = await context.newPage();
   page.on('pageerror', (e) => receipt.errors.push(e.message));
-  await page.goto(`${base}/agents`);
+  await page.goto(`${base}/settings/agents/main/overview`);
+  receipt.url = page.url();
   const trigger = page.locator('.agent-emoji-picker__trigger').first();
   await trigger.waitFor({ state: 'visible', timeout: 60000 });
   assert(await trigger.isEnabled(), 'Actual agent emoji picker is unavailable; setup failure');

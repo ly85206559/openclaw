@@ -50,7 +50,6 @@ jobs:
         run: |
           set -euo pipefail
           pnpm build:runtime > ../artifacts/build-runtime.log 2>&1
-          pnpm ui:build > ../artifacts/build-ui.log 2>&1
       - name: Probe native IME input through the actual agent emoji picker
         run: node controller/.github/pr-proof/emoji-ime-20261111.mjs source artifacts
       - name: Verify tracked source remains unchanged
